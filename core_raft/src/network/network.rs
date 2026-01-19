@@ -58,7 +58,11 @@ impl RaftNetworkV2<TypeConfig> for TcpNetwork {
         rpc: AppendEntriesRequest<TypeConfig>,
         option: RPCOption,
     ) -> Result<AppendEntriesResponse<TypeConfig>, RPCError<TypeConfig>> {
-        todo!();
+        let a = rpc.vote.leader_id.node_id;
+        let b = rpc.vote.leader_id.term;
+        let c = rpc.vote.committed;
+        let vec = rpc.entries;
+        todo!()
     }
 
     async fn vote(
@@ -68,7 +72,7 @@ impl RaftNetworkV2<TypeConfig> for TcpNetwork {
     ) -> Result<VoteResponse<TypeConfig>, RPCError<TypeConfig>> {
         todo!()
     }
-
+    // 只是一个标识，并不真正进行快照
     async fn full_snapshot(
         &mut self,
         vote: VoteOf<TypeConfig>,

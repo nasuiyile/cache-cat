@@ -155,6 +155,8 @@ mod impl_log_store {
     use std::io;
     use std::ops::RangeBounds;
 
+    use crate::network::raft::TypeConfig;
+    use crate::store::log::LogStore;
     use openraft::LogState;
     use openraft::RaftLogReader;
     use openraft::RaftTypeConfig;
@@ -162,8 +164,6 @@ mod impl_log_store {
     use openraft::alias::VoteOf;
     use openraft::storage::IOFlushed;
     use openraft::storage::RaftLogStorage;
-
-    use crate::store::log::LogStore;
 
     impl<C: RaftTypeConfig> RaftLogReader<C> for LogStore<C>
     where
@@ -183,35 +183,43 @@ mod impl_log_store {
         }
     }
 
-    impl<C: RaftTypeConfig> RaftLogStorage<C> for LogStore<C>
-    where
-        C::Entry: Clone,
-    {
+    impl RaftLogStorage<TypeConfig> for LogStore<TypeConfig> {
         type LogReader = Self;
 
-        async fn get_log_state(&mut self) -> Result<LogState<C>, io::Error> {
+        async fn get_log_state(&mut self) -> Result<LogState<TypeConfig>, io::Error> {
             let mut inner = self.inner.lock().await;
             inner.get_log_state().await
         }
 
-        async fn save_committed(&mut self, committed: Option<LogIdOf<C>>) -> Result<(), io::Error> {
-            let mut inner = self.inner.lock().await;
-            inner.save_committed(committed).await
+        async fn get_log_reader(&mut self) -> Self::LogReader {
+            self.clone()
         }
 
-        async fn read_committed(&mut self) -> Result<Option<LogIdOf<C>>, io::Error> {
-            let mut inner = self.inner.lock().await;
-            inner.read_committed().await
-        }
-
-        async fn save_vote(&mut self, vote: &VoteOf<C>) -> Result<(), io::Error> {
+        async fn save_vote(&mut self, vote: &VoteOf<TypeConfig>) -> Result<(), io::Error> {
             let mut inner = self.inner.lock().await;
             inner.save_vote(vote).await
         }
 
-        async fn append<I>(&mut self, entries: I, callback: IOFlushed<C>) -> Result<(), io::Error>
+        async fn save_committed(
+            &mut self,
+            committed: Option<LogIdOf<TypeConfig>>,
+        ) -> Result<(), io::Error> {
+            let mut inner = self.inner.lock().await;
+            inner.save_committed(committed).await
+        }
+
+        async fn read_committed(&mut self) -> Result<Option<LogIdOf<TypeConfig>>, io::Error> {
+            let mut inner = self.inner.lock().await;
+            inner.read_committed().await
+        }
+
+        async fn append<I>(
+            &mut self,
+            entries: I,
+            callback: IOFlushed<TypeConfig>,
+        ) -> Result<(), io::Error>
         where
-            I: IntoIterator<Item = C::Entry>,
+            I: IntoIterator<Item = <TypeConfig as RaftTypeConfig>::Entry>,
         {
             let mut inner = self.inner.lock().await;
             inner.append(entries, callback).await
@@ -219,19 +227,15 @@ mod impl_log_store {
 
         async fn truncate_after(
             &mut self,
-            last_log_id: Option<LogIdOf<C>>,
+            last_log_id: Option<LogIdOf<TypeConfig>>,
         ) -> Result<(), io::Error> {
             let mut inner = self.inner.lock().await;
             inner.truncate_after(last_log_id).await
         }
 
-        async fn purge(&mut self, log_id: LogIdOf<C>) -> Result<(), io::Error> {
+        async fn purge(&mut self, log_id: LogIdOf<TypeConfig>) -> Result<(), io::Error> {
             let mut inner = self.inner.lock().await;
             inner.purge(log_id).await
-        }
-
-        async fn get_log_reader(&mut self) -> Self::LogReader {
-            self.clone()
         }
     }
 }

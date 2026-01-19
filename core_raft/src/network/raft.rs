@@ -8,6 +8,7 @@ openraft::declare_raft_types!(
     pub TypeConfig:
         D = Request,
         R = Response,
+        Entry = openraft::Entry<TypeConfig>,
 );
 pub type LogStore = crate::store::log::LogStore<TypeConfig>;
 pub type StateMachineStore = crate::store::state_machine::StateMachineStore<TypeConfig>;
