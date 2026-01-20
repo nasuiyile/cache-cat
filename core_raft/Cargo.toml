@@ -5,7 +5,7 @@ edition = "2024"
 
 [dependencies]
 #openraft = { version = "0.9.21", features = ["type-alias"] }
-openraft = { git = "https://github.com/databendlabs/openraft", tag = "v0.10.0-alpha.13", features = ["type-alias"] }
+openraft = { git = "https://github.com/databendlabs/openraft", tag = "v0.10.0-alpha.13", features = ["type-alias","serde"] }
 futures = "0.3.31"
 tracing = "0.1.44"
 serde = "1.0.149"

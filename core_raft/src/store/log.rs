@@ -9,9 +9,9 @@ use std::sync::Arc;
 
 use crate::network::raft::TypeConfig;
 use futures::lock::Mutex;
-use openraft::LogState;
+use openraft::{Entry, LogState};
 use openraft::RaftTypeConfig;
-use openraft::alias::LogIdOf;
+use openraft::alias::{EntryOf, LogIdOf};
 use openraft::alias::VoteOf;
 use openraft::entry::RaftEntry;
 use openraft::storage::IOFlushed;
@@ -104,7 +104,7 @@ impl LogStoreInner {
         callback: IOFlushed<TypeConfig>,
     ) -> Result<(), io::Error>
     where
-        I: IntoIterator<Item = <TypeConfig as RaftTypeConfig>::Entry>,
+        I: IntoIterator<Item = Entry<TypeConfig>>+Send,
     {
         // Simple implementation that calls the flush-before-return `append_to_log`.
         for entry in entries {
@@ -165,7 +165,7 @@ mod impl_log_store {
 
     use crate::network::raft::TypeConfig;
     use crate::store::log::LogStore;
-    use openraft::LogState;
+    use openraft::{Entry, LogState};
     use openraft::RaftLogReader;
     use openraft::RaftTypeConfig;
     use openraft::alias::LogIdOf;
@@ -224,7 +224,7 @@ mod impl_log_store {
             callback: IOFlushed<TypeConfig>,
         ) -> Result<(), io::Error>
         where
-            I: IntoIterator<Item = <TypeConfig as RaftTypeConfig>::Entry>,
+            I: IntoIterator<Item = Entry<TypeConfig>> + Send,
         {
             let mut inner = self.inner.lock().await;
             inner.append(entries, callback).await

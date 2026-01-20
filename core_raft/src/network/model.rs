@@ -1,7 +1,8 @@
 use std::fmt;
+use serde::{Deserialize, Serialize};
 
 /// A request to the KV store.
-#[derive(Debug,Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum Request {
     Set { key: String, value: String },
 }
@@ -23,6 +24,7 @@ impl fmt::Display for Request {
 }
 
 /// A response from the KV store.
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Response {
     pub value: Option<String>,
 }
