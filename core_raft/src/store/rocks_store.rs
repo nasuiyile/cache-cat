@@ -5,6 +5,7 @@ use std::path::Path;
 use std::sync::Arc;
 
 use crate::network::model::{Request, Response};
+use crate::network::raft_rocksdb::TypeConfig;
 use crate::server::handler::model::SetRes;
 use crate::store::rocks_log_store::RocksLogStore;
 use futures::Stream;
@@ -21,7 +22,6 @@ use rocksdb::DB;
 use rocksdb::Options;
 use serde::Deserialize;
 use serde::Serialize;
-use crate::network::raft_rocksdb::TypeConfig;
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct StoredSnapshot {
@@ -178,6 +178,7 @@ impl RaftStateMachine<TypeConfig> for StateMachineStore {
                     Request::Set(set_req) => {
                         // 使用结构体的字段名来访问成员
                         let mut st = self.data.kvs.lock().await;
+                        println!("set {} = {}", set_req.key,String::from_utf8(set_req.value.clone()).unwrap());
                         st.insert(
                             set_req.key.clone(),
                             String::try_from(set_req.value.clone()).unwrap(),

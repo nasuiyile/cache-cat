@@ -22,22 +22,6 @@ openraft::declare_raft_types!(
 pub type LogStore = crate::store::rocks_log_store::RocksLogStore<TypeConfig>;
 pub type StateMachineStore = crate::store::rocks_store::StateMachineStore;
 pub type Raft = openraft::Raft<TypeConfig>;
-static MAP: LazyLock<HashMap<u64, Vec<String>>> = LazyLock::new(|| {
-    let mut map: HashMap<u64, Vec<String>> = HashMap::new();
-    map.insert(
-        1,
-        vec!["127.0.0.1:3002".to_string(), "127.0.0.1:3003".to_string()],
-    );
-    map.insert(
-        2,
-        vec!["127.0.0.1:3001".to_string(), "127.0.0.1:3003".to_string()],
-    );
-    map.insert(
-        3,
-        vec!["127.0.0.1:3001".to_string(), "127.0.0.1:3002".to_string()],
-    );
-    return map;
-});
 pub async fn start_raft_app<P>(node_id: u64, dir: P, addr: String) -> std::io::Result<()>
 where
     P: AsRef<Path>,
