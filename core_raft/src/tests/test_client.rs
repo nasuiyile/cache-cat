@@ -1,16 +1,26 @@
-use std::time::Instant;
+use std::thread;
+use std::time::{Duration, Instant};
 use openraft::raft::ClientWriteResponse;
 use crate::network::model::Request;
 use crate::network::raft_rocksdb::TypeConfig;
 use crate::server::client::client::RpcClient;
-use crate::server::handler::model::SetReq;
+use crate::server::handler::model::{PrintTestReq, PrintTestRes, SetReq};
 
 #[tokio::test]
 async fn test_add() {
     let mut client = RpcClient::connect("127.0.0.1:3003").await.unwrap();
 
-    let mut total_elapsed = std::time::Duration::new(0, 0);
-    let iterations = 100;
+    let mut total_elapsed = Duration::new(0, 0);
+    let iterations = 10;
+
+
+    for i in 0..iterations {
+        let start = Instant::now();
+        let res: PrintTestRes = client.call(1, PrintTestReq { message: String::from("xxx") }).await.expect("call failed");
+        let elapsed = start.elapsed();
+        println!("第{}次 - 微秒: {}", i + 1, elapsed.as_micros())
+    }
+
 
     for i in 0..iterations {
         let start = Instant::now();
@@ -33,7 +43,7 @@ async fn test_add() {
     }
 
     let avg_elapsed = total_elapsed / iterations;
-    println!("写入操作平均耗时: {} 毫秒", avg_elapsed.as_millis());
+    println!("写入操作平均耗时: {} 微秒", avg_elapsed.as_micros());
 
     // 验证读取操作
     let start = Instant::now();
@@ -43,5 +53,5 @@ async fn test_add() {
         .expect("call failed");
     println!("读取结果: {:?}", res.expect("res is none"));
     let elapsed = start.elapsed();
-    println!("读取耗时: {} 毫秒", elapsed.as_millis());
+    println!("读取耗时: {} 微秒", elapsed.as_micros());
 }

@@ -4,7 +4,7 @@ use std::io;
 use std::marker::PhantomData;
 use std::ops::RangeBounds;
 use std::sync::Arc;
-
+use std::time::Instant;
 use byteorder::BigEndian;
 use byteorder::ReadBytesExt;
 use byteorder::WriteBytesExt;
@@ -63,16 +63,16 @@ where C: RaftTypeConfig
             return Ok(None);
         };
 
-        let t = serde_json::from_slice(&bytes).map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
+        let t = bincode2::deserialize(&bytes).map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
 
         Ok(Some(t))
     }
 
     /// Save a store metadata.
     fn put_meta<M: StoreMeta<C>>(&self, value: &M::Value) -> Result<(), io::Error> {
-        let json_value = serde_json::to_vec(value).map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
+        let bin_value = bincode2::serialize(value).map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
 
-        self.db.put_cf(self.cf_meta(), M::KEY, json_value).map_err(|e| io::Error::other(e.to_string()))?;
+        self.db.put_cf(self.cf_meta(), M::KEY, bin_value).map_err(|e| io::Error::other(e.to_string()))?;
 
         Ok(())
     }
@@ -102,7 +102,7 @@ where C: RaftTypeConfig
                 break;
             }
 
-            let entry: EntryOf<C> = serde_json::from_slice(&val).map_err(read_logs_err)?;
+            let entry: EntryOf<C> = bincode2::deserialize(&val).map_err(read_logs_err)?;
 
             assert_eq!(id, entry.index());
 
@@ -128,7 +128,7 @@ where C: RaftTypeConfig
             None => None,
             Some(res) => {
                 let (_log_index, entry_bytes) = res.map_err(read_logs_err)?;
-                let ent = serde_json::from_slice::<EntryOf<C>>(&entry_bytes).map_err(read_logs_err)?;
+                let ent = bincode2::deserialize::<EntryOf<C>>(&entry_bytes).map_err(read_logs_err)?;
                 Some(ent.log_id())
             }
         };
@@ -160,15 +160,18 @@ where C: RaftTypeConfig
         Ok(())
     }
 
+    //心跳不会走到这里
     async fn append<I>(&mut self, entries: I, callback: IOFlushed<C>) -> Result<(), io::Error>
     where I: IntoIterator<Item = EntryOf<C>> + Send {
+        let start = Instant::now();
+
         for entry in entries {
             let id = id_to_bin(entry.index());
             self.db
                 .put_cf(
                     self.cf_logs(),
                     id,
-                    serde_json::to_vec(&entry).map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?,
+                    bincode2::serialize(&entry).map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?,
                 )
                 .map_err(|e| io::Error::other(e.to_string()))?;
         }
@@ -182,6 +185,8 @@ where C: RaftTypeConfig
             let res = db.flush_wal(true).map_err(io::Error::other);
             callback.io_completed(res);
         });
+        let elapsed = start.elapsed();
+        println!("append elapsed: {:?}", elapsed);
 
         // Return now, and the callback will be invoked later when IO is done.
         Ok(())

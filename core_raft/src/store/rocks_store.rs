@@ -62,7 +62,7 @@ impl RaftSnapshotBuilder<TypeConfig> for StateMachineStore {
 
         let kv_json = {
             let kvs = self.data.kvs.lock().await;
-            serde_json::to_vec(&*kvs).map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?
+            bincode2::serialize(&*kvs).map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?
         };
 
         let snapshot_id = if let Some(last) = last_applied_log {
@@ -117,7 +117,7 @@ impl StateMachineStore {
     }
 
     async fn update_state_machine_(&mut self, snapshot: StoredSnapshot) -> Result<(), io::Error> {
-        let kvs: BTreeMap<String, String> = serde_json::from_slice(&snapshot.data)
+        let kvs: BTreeMap<String, String> = bincode2::deserialize(&snapshot.data)
             .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
 
         self.data.last_applied_log_id = snapshot.meta.last_log_id;
@@ -133,7 +133,7 @@ impl StateMachineStore {
             .db
             .get_cf(self.store(), b"snapshot")
             .map_err(io::Error::other)?
-            .and_then(|v| serde_json::from_slice(&v).ok()))
+            .and_then(|v| bincode2::deserialize::<StoredSnapshot>(&v).ok()))
     }
 
     fn set_current_snapshot_(&self, snap: StoredSnapshot) -> Result<(), io::Error> {
@@ -141,7 +141,7 @@ impl StateMachineStore {
             .put_cf(
                 self.store(),
                 b"snapshot",
-                serde_json::to_vec(&snap).unwrap().as_slice(),
+                bincode2::serialize(&snap).unwrap().as_slice(),
             )
             .map_err(io::Error::other)?;
         self.db.flush_wal(true).map_err(io::Error::other)?;
@@ -169,37 +169,48 @@ impl RaftStateMachine<TypeConfig> for StateMachineStore {
     where
         Strm: Stream<Item = Result<EntryResponder<TypeConfig>, io::Error>> + Unpin + OptionalSend,
     {
-        while let Some((entry, responder)) = entries.try_next().await? {
-            self.data.last_applied_log_id = Some(entry.log_id);
+        use std::time::Instant;
 
-            let response = match &entry.payload {
-                EntryPayload::Blank => Response::none(),
-                EntryPayload::Normal(req) => match req {
-                    Request::Set(set_req) => {
-                        // 使用结构体的字段名来访问成员
-                        let mut st = self.data.kvs.lock().await;
-                        println!("set {} = {}", set_req.key,String::from_utf8(set_req.value.clone()).unwrap());
-                        st.insert(
-                            set_req.key.clone(),
-                            String::try_from(set_req.value.clone()).unwrap(),
-                        );
-                        // 注意：原代码返回的是 value.clone()，现在根据你的业务需求可能需要调整
-                        Response::Set(SetRes {})
+        let start_time = Instant::now();
+        let result = async {
+            while let Some((entry, responder)) = entries.try_next().await? {
+                self.data.last_applied_log_id = Some(entry.log_id);
+
+                let response = match &entry.payload {
+                    EntryPayload::Blank => Response::none(),
+                    EntryPayload::Normal(req) => match req {
+                        Request::Set(set_req) => {
+                            // 使用结构体的字段名来访问成员
+                            let mut st = self.data.kvs.lock().await;
+                            // println!("set {} = {}", set_req.key,String::from_utf8(set_req.value.clone()).unwrap());
+                            st.insert(
+                                set_req.key.clone(),
+                                String::try_from(set_req.value.clone()).unwrap(),
+                            );
+                            // 注意：原代码返回的是 value.clone()，现在根据你的业务需求可能需要调整
+                            Response::Set(SetRes {})
+                        }
+                    },
+                    EntryPayload::Membership(mem) => {
+                        self.data.last_membership =
+                            StoredMembership::new(Some(entry.log_id.clone()), mem.clone());
+                        Response::none()
                     }
-                },
-                EntryPayload::Membership(mem) => {
-                    self.data.last_membership =
-                        StoredMembership::new(Some(entry.log_id.clone()), mem.clone());
-                    Response::none()
-                }
-            };
+                };
 
-            if let Some(responder) = responder {
-                responder.send(response);
+                if let Some(responder) = responder {
+                    responder.send(response);
+                }
             }
-        }
-        Ok(())
+            Ok(())
+        }.await;
+
+        let elapsed = start_time.elapsed();
+        println!("完成执行 apply 操作，耗时: {:?} 毫秒", elapsed.as_micros());
+
+        result
     }
+
 
     async fn get_snapshot_builder(&mut self) -> Self::SnapshotBuilder {
         self.snapshot_idx += 1;

@@ -18,6 +18,7 @@ pub struct RpcClient {
 impl RpcClient {
     pub async fn connect(addr: &str) -> Result<Self, Box<dyn std::error::Error>> {
         let stream = TcpStream::connect(addr).await?;
+        stream.set_nodelay(true)?;
         Ok(Self {
             stream,
             next_request_id: 1,

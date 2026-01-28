@@ -1,3 +1,4 @@
+use std::time::Instant;
 use crate::server::client::client::RpcClient;
 use crate::server::handler::model::{InstallFullSnapshotReq, PrintTestReq, PrintTestRes};
 use openraft::alias::VoteOf;
@@ -56,7 +57,9 @@ impl RaftNetworkV2<TypeConfig> for TcpNetwork {
         rpc: AppendEntriesRequest<TypeConfig>,
         _option: RPCOption,
     ) -> Result<AppendEntriesResponse<TypeConfig>, RPCError<TypeConfig>> {
+        let start = Instant::now();
         let res: AppendEntriesResponse<TypeConfig> = self.client.call(7, rpc).await.unwrap();
+        println!("append_entries: {} 微秒", start.elapsed().as_micros());
         Ok(res)
     }
 
@@ -82,7 +85,7 @@ impl RaftNetworkV2<TypeConfig> for TcpNetwork {
         &mut self,
         vote: VoteOf<TypeConfig>,
         mut snapshot: Snapshot<TypeConfig>,
-        cancel: impl Future<Output = ReplicationClosed> + OptionalSend + 'static,
+        cancel: impl Future<Output=ReplicationClosed> + OptionalSend + 'static,
         option: RPCOption,
     ) -> Result<SnapshotResponse<TypeConfig>, StreamingError<TypeConfig>> {
         let data = snapshot.snapshot.into_inner();

@@ -1,11 +1,12 @@
 use crate::network::raft_rocksdb::CacheCatApp;
 use crate::server::core::config::{get_config, init_config};
-use crate::server::handler::request_handler::hand;
-use bytes::{Buf, Bytes, BytesMut};
+use bytes::{Buf, BufMut, Bytes, BytesMut};
 use std::sync::{Arc, LazyLock};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpListener;
 use tokio::sync::mpsc;
+use tokio::sync::mpsc::UnboundedSender;
+use crate::server::handler::external_handler::HANDLER_TABLE;
 
 pub async fn start_server(app: Arc<CacheCatApp>) -> std::io::Result<()> {
     let _ = init_config("./server/config.yml");
@@ -18,6 +19,7 @@ pub async fn start_server(app: Arc<CacheCatApp>) -> std::io::Result<()> {
             eprintln!("接受连接失败");
             continue;
         };
+        socket.set_nodelay(true).ok(); // 关闭 Nagle
         println!("接收到来自 {} 的新连接", addr);
 
         let (reader, writer) = socket.into_split();
@@ -72,4 +74,34 @@ pub async fn start_server(app: Arc<CacheCatApp>) -> std::io::Result<()> {
             }
         });
     }
+}
+pub async fn hand(
+    app: Arc<CacheCatApp>,
+    tx: UnboundedSender<Bytes>,
+    mut package: Bytes,
+) -> Result<(), ()> {
+    // 读取 request_id(4) + func_id(4)
+    let request_id = u32::from_be_bytes(package[0..4].try_into().unwrap());
+    let func_id = u32::from_be_bytes(package[4..8].try_into().unwrap());
+    package.advance(8);
+    // 选择对应的方法并调用
+    let handler = HANDLER_TABLE
+        .iter()
+        .find(|(id, _)| *id == func_id)
+        .map(|(_, ctor)| ctor())
+        .ok_or(())?;
+    let response_data = handler.call(app, package).await;
+    let mut response_length = response_data.len() as u32;
+    // 协议中 response body 前还有 4 bytes 的 request_id
+    response_length = response_length + 4;
+    // BytesMut 避免重复分配内存
+    let mut response_header = BytesMut::with_capacity(8 + response_data.len());
+    response_header.put_u32(response_length);
+    response_header.put_u32(request_id);
+    response_header.put(response_data);
+    let result = tx.send(response_header.freeze());
+    if result.is_err() {
+        return Err(());
+    }
+    Ok(())
 }
