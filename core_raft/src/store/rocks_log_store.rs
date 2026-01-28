@@ -209,11 +209,12 @@ where
         // Because when the function returns, it requires the log entries can be read.
         let db = self.db.clone();
         std::thread::spawn(move || {
+
             let res = db.flush_wal(true).map_err(io::Error::other);
             callback.io_completed(res);
+            let elapsed = start.elapsed();
+            tracing::warn!("rocksdb append elapsed: {:?}", elapsed);
         });
-        let elapsed = start.elapsed();
-        tracing::info!("rocksdb append elapsed: {:?}", elapsed);
 
         // Return now, and the callback will be invoked later when IO is done.
         Ok(())

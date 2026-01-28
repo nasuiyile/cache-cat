@@ -11,7 +11,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>>{
     let mut client = RpcClient::connect("127.0.0.1:3003").await.unwrap();
 
     let mut total_elapsed = Duration::new(0, 0);
-    let iterations = 1000;
+    let iterations = 100;
 
     for i in 0..iterations {
         let start = Instant::now();
