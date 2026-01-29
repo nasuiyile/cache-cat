@@ -203,17 +203,16 @@ where
                 .map_err(|e| io::Error::other(e.to_string()))?;
         }
 
-        // Make sure the logs are persisted to disk before invoking the callback.
+        // 在调用回调函数之前，确保日志已经持久化到磁盘。
         //
-        // But the above `pub_cf()` must be called in this function, not in another task.
-        // Because when the function returns, it requires the log entries can be read.
+        // 但上面的 `pub_cf()` 必须在这个函数中调用，而不能放到另一个任务里。
+        // 因为当函数返回时，需要能够读取到这些日志条目。
         let db = self.db.clone();
         std::thread::spawn(move || {
-
             let res = db.flush_wal(true).map_err(io::Error::other);
             callback.io_completed(res);
             let elapsed = start.elapsed();
-            tracing::warn!("rocksdb append elapsed: {:?}", elapsed);
+            tracing::info!("rocksdb append elapsed: {:?}", elapsed);
         });
 
         // Return now, and the callback will be invoked later when IO is done.
