@@ -30,7 +30,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .with_level(true)
         .with_ansi(false)
         .with_env_filter(EnvFilter::from_default_env())
-        .with_max_level(tracing::Level::WARN)
+        // .with_max_level(tracing::Level::WARN)
         .init();
     let _h1 = thread::spawn(move || {
         let mut rt = AsyncRuntimeOf::<TypeConfig>::new(1);
