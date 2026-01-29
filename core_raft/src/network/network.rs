@@ -1,5 +1,5 @@
 use crate::network::raft_rocksdb::TypeConfig;
-use crate::server::client::client::RpcClient;
+use crate::server::client::client::RpcMultiClient;
 use crate::server::handler::model::{InstallFullSnapshotReq, PrintTestReq, PrintTestRes};
 use openraft::alias::VoteOf;
 use openraft::error::{RPCError, ReplicationClosed, StreamingError};
@@ -19,7 +19,9 @@ impl RaftNetworkFactory<TypeConfig> for NetworkFactory {
     type Network = TcpNetwork;
     #[tracing::instrument(level = "debug", skip_all)]
     async fn new_client(&mut self, target: u64, node: &BasicNode) -> Self::Network {
-        let client = RpcClient::connect(&*node.addr.clone()).await.unwrap();
+        let client = RpcMultiClient::connect(&*node.addr.clone(), 10)
+            .await
+            .unwrap();
         TcpNetwork {
             addr: node.addr.clone(),
             client,
@@ -30,7 +32,7 @@ impl RaftNetworkFactory<TypeConfig> for NetworkFactory {
 
 pub struct TcpNetwork {
     addr: String,
-    client: RpcClient,
+    client: RpcMultiClient,
     target: u64, //nodeid
 }
 impl TcpNetwork {

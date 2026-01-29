@@ -5,6 +5,7 @@ use futures::{SinkExt, StreamExt};
 use serde::Serialize;
 use serde::de::DeserializeOwned;
 use std::error::Error;
+use std::sync::atomic::AtomicI32;
 use std::sync::{
     Arc,
     atomic::{AtomicU32, Ordering},
@@ -14,14 +15,41 @@ use tokio::net::TcpStream;
 use tokio::sync::{mpsc, oneshot};
 use tokio_util::codec::{Framed, LengthDelimitedCodec};
 
-/// 发送队列中传递的消息（帧的 payload，不含 length header）
-struct WriteRequest {
-    data: BytesMut,
+pub struct RpcMultiClient {
+    clients: Vec<RpcClient>,
+    next_client: AtomicI32,
+}
+impl RpcMultiClient {
+    pub async fn connect(addr: &str, count: u32) -> Result<Self, Box<dyn Error + Send + Sync>> {
+        let mut clients = Vec::new();
+        for i in 0..count {
+            let client = RpcClient::connect(addr).await?;
+            clients.push(client);
+        }
+        Ok(Self {
+            clients,
+            next_client: AtomicI32::new(0),
+        })
+    }
+    pub async fn call<Req, Res>(
+        &self,
+        func_id: u32,
+        req: Req,
+    ) -> Result<Res, Box<dyn std::error::Error + Send + Sync>>
+    where
+        Req: Serialize,
+        Res: DeserializeOwned,
+    {
+        //每次迭代下一个client进行发送
+        let client = &self.clients
+            [self.next_client.fetch_add(1, Ordering::Relaxed) as usize % self.clients.len()];
+        client.call(func_id, req).await
+    }
 }
 
 /// 异步高并发 RPC 客户端（基于 LengthDelimitedCodec）
-pub struct RpcClient {
-    tx_writer: mpsc::Sender<WriteRequest>,
+ struct RpcClient {
+    tx_writer: mpsc::Sender<BytesMut>,
     pending: Arc<DashMap<u32, oneshot::Sender<bytes::Bytes>>>,
     next_request_id: Arc<AtomicU32>,
 }
@@ -40,13 +68,13 @@ impl RpcClient {
         let pending_reader = pending.clone();
 
         // 发送队列（带背压），将 WriteRequest 发给写任务，由写任务把帧发出
-        let (tx_writer, mut rx_writer) = mpsc::channel::<WriteRequest>(1024);
+        let (tx_writer, mut rx_writer) = mpsc::channel::<BytesMut>(1024);
 
         // 写任务：从 mpsc 接收 payload (BytesMut)，通过 sink 发送（LengthDelimitedCodec 会添加 length）
         tokio::spawn(async move {
             while let Some(req) = rx_writer.recv().await {
                 // sink expects BytesMut (LengthDelimitedCodec::Encoder::Item = BytesMut)
-                if let Err(e) = sink.send(req.data.into()).await {
+                if let Err(e) = sink.send(req.into()).await {
                     eprintln!("RPC writer: 发送帧失败: {}", e);
                     break;
                 }
@@ -133,7 +161,7 @@ impl RpcClient {
         self.pending.insert(request_id, tx);
 
         // 发送给写任务（通过 mpsc）
-        let write_req = WriteRequest { data: buf };
+        let write_req = buf;
         if let Err(e) = self.tx_writer.send(write_req).await {
             // 发送失败，可能写任务已退出
             let _ = self.pending.remove(&request_id);

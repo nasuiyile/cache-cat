@@ -1,6 +1,6 @@
 use crate::network::model::Request;
 use crate::network::raft_rocksdb::TypeConfig;
-use crate::server::client::client::RpcClient;
+use crate::server::client::client::RpcMultiClient;
 use crate::server::handler::model::{PrintTestReq, PrintTestRes, SetReq};
 use openraft::raft::ClientWriteResponse;
 use std::time::{Duration, Instant};
@@ -8,7 +8,7 @@ use tokio::time;
 
 #[tokio::test]
 async fn test_add() {
-    let mut client = RpcClient::connect("127.0.0.1:3003").await.unwrap();
+    let mut client = RpcMultiClient::connect("127.0.0.1:3003", 10).await.unwrap();
 
     let mut total_elapsed = Duration::new(0, 0);
     let iterations = 100;
