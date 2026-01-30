@@ -1,11 +1,11 @@
 use core_raft::network;
 use core_raft::network::raft_rocksdb::TypeConfig;
+use mimalloc::MiMalloc;
 use openraft::AsyncRuntime;
 use openraft::alias::AsyncRuntimeOf;
 use std::time::Duration;
 use std::{fs, thread};
-use mimalloc::MiMalloc;
-use tempfile::TempDir;
+use tempfile::{Builder, TempDir};
 use tracing_subscriber::EnvFilter;
 
 #[global_allocator]
@@ -14,7 +14,8 @@ static GLOBAL: MiMalloc = MiMalloc;
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // let base = r"E:\tmp\raft\rocks";
-    let base_dir = tempfile::tempdir()?;
+    let base_dir = Builder::new().prefix("myapp_").tempdir_in("D:\\")?; // Windows
+
     let base = base_dir.path();
     // 确保临时目录存在
     fs::create_dir_all(base)?;
