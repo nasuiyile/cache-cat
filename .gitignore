@@ -12,14 +12,14 @@ Cargo.lock
 *.exe
 *.pdb
 *.dSYM/
-
 # 移除这些文件，因为它们来自构建工具
 .deploy/
 .vscode/
 .idea/
 *.swp
 *.swo
-
+*.bat
+.gitignore
 # 移除这些文件，因为它们是从构建工具自动生成的
 **/*.rs.bk
 
