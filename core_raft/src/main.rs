@@ -1,10 +1,10 @@
 use core_raft::network;
 use core_raft::network::raft_rocksdb::TypeConfig;
+use mimalloc::MiMalloc;
 use openraft::AsyncRuntime;
 use openraft::alias::AsyncRuntimeOf;
 use std::time::Duration;
 use std::{fs, thread};
-use mimalloc::MiMalloc;
 use tempfile::TempDir;
 use tracing_subscriber::EnvFilter;
 
@@ -32,8 +32,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .with_env_filter(EnvFilter::from_default_env())
         // .with_max_level(tracing::Level::WARN)
         .init();
+    let num_cpus = std::thread::available_parallelism()?.get();
     let _h1 = thread::spawn(move || {
-        let mut rt = AsyncRuntimeOf::<TypeConfig>::new(1);
+        let mut rt = AsyncRuntimeOf::<TypeConfig>::new(num_cpus);
         let x = rt.block_on(network::raft_rocksdb::start_raft_app(
             1,
             d1.path(),
@@ -41,7 +42,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         ));
     });
     let _h2 = thread::spawn(move || {
-        let mut rt = AsyncRuntimeOf::<TypeConfig>::new(1);
+        let mut rt = AsyncRuntimeOf::<TypeConfig>::new(num_cpus);
         let x = rt.block_on(network::raft_rocksdb::start_raft_app(
             2,
             d2.path(),
@@ -49,7 +50,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         ));
     });
     let _h3 = thread::spawn(move || {
-        let mut rt = AsyncRuntimeOf::<TypeConfig>::new(1);
+        let mut rt = AsyncRuntimeOf::<TypeConfig>::new(num_cpus);
         let x = rt.block_on(network::raft_rocksdb::start_raft_app(
             3,
             d3.path(),
