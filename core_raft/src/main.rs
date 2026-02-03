@@ -57,7 +57,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             String::from("127.0.0.1:3003"),
         ));
     });
-    thread::sleep(Duration::from_secs(2));
 
     thread::sleep(Duration::from_secs(20000));
     Ok(())

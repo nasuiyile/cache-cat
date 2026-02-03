@@ -24,10 +24,13 @@ use std::marker::PhantomData;
 use std::ops::RangeBounds;
 use std::sync::Arc;
 use std::time::Instant;
+use indexmap::IndexMap;
+use tokio::sync::Mutex;
 
 #[derive(Debug, Clone)]
 pub struct RocksLogStore {
     db: Arc<DB>,
+    cache: Arc<Mutex<IndexMap<u64, EntryOf<TypeConfig>>>>,
     _p: PhantomData<TypeConfig>,
 }
 
@@ -40,9 +43,77 @@ impl RocksLogStore {
 
         Self {
             db,
+            cache: Default::default(),
             _p: Default::default(),
         }
     }
+
+
+    /// Insert entry into cache and evict oldest until capacity 100.
+    async fn cache_insert(&mut self, entry: EntryOf<TypeConfig>) {
+        let idx = entry.index();
+        let mut cache =self.cache.lock().await;
+        // If the key already exists, replace the value (keep order).
+        cache.insert(idx, entry);
+        // Evict oldest while size > 100
+        while cache.len() > 100 {
+            // remove first inserted (oldest)
+            cache.shift_remove_index(0);
+        }
+    }
+
+    /// Try to satisfy the given range from cache.
+    ///
+    /// Returns Some(vec) if fully hit in cache; None if any element missing or end unbounded.
+    async fn try_get_from_cache<RB: RangeBounds<u64> + Clone + Debug>(
+        &self,
+        range: RB,
+    ) -> Option<Vec<EntryOf<TypeConfig>>> {
+        // compute start index
+        use std::ops::Bound;
+        let start: u64 = match range.start_bound() {
+            Bound::Included(x) => *x,
+            Bound::Excluded(x) => x.saturating_add(1),
+            Bound::Unbounded => 0,
+        };
+        // compute end index; if unbounded -> cannot satisfy from cache reliably
+        let end_opt: Option<u64> = match range.end_bound() {
+            Bound::Included(x) => Some(*x),
+            Bound::Excluded(x) => {
+                if *x == 0 {
+                    return Some(Vec::new()); // empty range
+                } else {
+                    Some(x.saturating_sub(1))
+                }
+            }
+            Bound::Unbounded => None,
+        };
+
+        let end = match end_opt {
+            None => return None, // unbounded end -> fall back to rocksdb
+            Some(e) => e,
+        };
+
+        if start > end {
+            return Some(Vec::new()); // empty range
+        }
+
+        // quick check: if requested length is larger than cache capacity -> miss
+        let len_needed = end.saturating_sub(start).saturating_add(1);
+        if len_needed as usize > 100 {
+            return None;
+        }
+
+        let mut out = Vec::with_capacity(len_needed as usize);
+        for idx in start..=end {
+            match self.cache.lock().await.get(&idx) {
+                Some(ent) => out.push(ent.clone()),
+                None => return None,
+            }
+        }
+        Some(out)
+    }
+
 
     fn cf_meta(&self) -> &ColumnFamily {
         self.db.cf_handle("meta").unwrap()
@@ -87,6 +158,11 @@ impl RaftLogReader<TypeConfig> for RocksLogStore {
         &mut self,
         range: RB,
     ) -> Result<Vec<<TypeConfig as RaftTypeConfig>::Entry>, io::Error> {
+        if let Some(cached) = self.try_get_from_cache(range.clone()).await {
+            tracing::debug!("cache hit for range");
+            return Ok(cached);
+        }
+        tracing::warn!("start={:?},end ={:?}",range.start_bound(),range.end_bound());
         let start = match range.start_bound() {
             std::ops::Bound::Included(x) => id_to_bin(*x),
             std::ops::Bound::Excluded(x) => id_to_bin(*x + 1),
@@ -159,7 +235,7 @@ impl RaftLogStorage<TypeConfig> for RocksLogStore {
             db.flush_wal(true)
                 .map_err(|e| io::Error::other(e.to_string()))
         })
-        .await??;
+            .await??;
         Ok(())
     }
 
@@ -183,6 +259,7 @@ impl RaftLogStorage<TypeConfig> for RocksLogStore {
                         .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?,
                 )
                 .map_err(|e| io::Error::other(e.to_string()))?;
+            self.cache_insert(entry);
         }
         // 在调用回调函数之前，确保日志已经持久化到磁盘。
         //
