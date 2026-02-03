@@ -10,7 +10,6 @@ use crate::server::handler::model::SetRes;
 use crate::store::rocks_log_store::RocksLogStore;
 use futures::Stream;
 use futures::TryStreamExt;
-use futures::lock::Mutex;
 use openraft::storage::EntryResponder;
 use openraft::storage::RaftStateMachine;
 use openraft::{EntryPayload, LogId, SnapshotMeta};
@@ -22,6 +21,7 @@ use rocksdb::DB;
 use rocksdb::Options;
 use serde::Deserialize;
 use serde::Serialize;
+use tokio::sync::Mutex;
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct StoredSnapshot {

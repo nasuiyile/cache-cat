@@ -22,15 +22,15 @@ use std::fmt::Debug;
 use std::io;
 use std::marker::PhantomData;
 use std::ops::RangeBounds;
-use std::sync::Arc;
+use std::sync::{Arc};
 use std::time::Instant;
 use indexmap::IndexMap;
-use tokio::sync::Mutex;
+use tokio::sync::RwLock;
 
 #[derive(Debug, Clone)]
 pub struct RocksLogStore {
     db: Arc<DB>,
-    cache: Arc<Mutex<IndexMap<u64, EntryOf<TypeConfig>>>>,
+    cache: Arc<RwLock<IndexMap<u64, EntryOf<TypeConfig>>>>,
     _p: PhantomData<TypeConfig>,
 }
 
@@ -52,7 +52,7 @@ impl RocksLogStore {
     /// Insert entry into cache and evict oldest until capacity 100.
     async fn cache_insert(&mut self, entry: EntryOf<TypeConfig>) {
         let idx = entry.index();
-        let mut cache =self.cache.lock().await;
+        let mut cache =self.cache.write().await;
         // If the key already exists, replace the value (keep order).
         cache.insert(idx, entry);
         // Evict oldest while size > 100
@@ -105,8 +105,9 @@ impl RocksLogStore {
         }
 
         let mut out = Vec::with_capacity(len_needed as usize);
+        let cache = self.cache.read().await;
         for idx in start..=end {
-            match self.cache.lock().await.get(&idx) {
+            match cache.get(&idx) {
                 Some(ent) => out.push(ent.clone()),
                 None => return None,
             }

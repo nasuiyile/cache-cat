@@ -3,12 +3,12 @@ use crate::network::network::NetworkFactory;
 use crate::server::handler::model::SetReq;
 use crate::server::handler::rpc;
 use crate::store::rocks_store::new_storage;
-use futures::lock::Mutex;
 use openraft::{BasicNode, Config};
 use std::collections::{BTreeMap, HashMap};
 use std::io::Cursor;
 use std::path::Path;
 use std::sync::{Arc, LazyLock};
+use tokio::sync::Mutex;
 
 openraft::declare_raft_types!(
     /// Declare the type configuration for example K/V store.
