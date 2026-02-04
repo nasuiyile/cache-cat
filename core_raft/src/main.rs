@@ -13,9 +13,9 @@ static GLOBAL: MiMalloc = MiMalloc;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let base = r"E:\tmp\raft\rocks";
-    // let base_dir = tempfile::tempdir()?;
-    // let base = base_dir.path();
+    // let base = r"E:\tmp\raft\rocks";
+    let base_dir = tempfile::tempdir()?;
+    let base = base_dir.path();
     // 确保临时目录存在
     fs::create_dir_all(base)?;
 
