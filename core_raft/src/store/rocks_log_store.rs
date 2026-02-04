@@ -250,13 +250,17 @@ impl RaftLogStorage<TypeConfig> for RocksLogStore {
         I: IntoIterator<Item = EntryOf<TypeConfig>> + Send,
     {
         let start = Instant::now();
-        let mut batch = rocksdb::WriteBatch::default();
         let mut cache = self.cache.lock().await;
         for entry in entries {
             let id = id_to_bin(entry.index());
-            let val = bincode2::serialize(&entry)
-                .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
-            batch.put_cf(self.cf_logs(), id, val);
+            self.db
+                .put_cf(
+                    self.cf_logs(),
+                    id,
+                    bincode2::serialize(&entry)
+                        .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?,
+                )
+                .map_err(|e| io::Error::other(e.to_string()))?;
             cache.put(entry.index(), entry);
         }
         //提前释放
@@ -267,8 +271,7 @@ impl RaftLogStorage<TypeConfig> for RocksLogStore {
         // 因为当函数返回时，需要能够读取到这些日志条目。
         let db = self.db.clone();
         std::thread::spawn(move || {
-            let res = db.write(batch).and_then(|_| db.flush_wal(true))
-                .map_err(io::Error::other);
+            let res = db.flush_wal(true).map_err(io::Error::other);
             callback.io_completed(res);
             let elapsed = start.elapsed();
             tracing::info!("rocksdb append elapsed: {:?}", elapsed);
