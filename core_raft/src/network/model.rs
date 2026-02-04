@@ -4,12 +4,12 @@ use std::fmt;
 
 /// A request to the KV store.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub enum Request {
+pub enum WriteReq {
     Set(SetReq),
 }
-impl Request {
+impl WriteReq {
     pub fn set(key: impl Into<String>, value: impl Into<String>) -> Self {
-        Request::Set(SetReq {
+        WriteReq::Set(SetReq {
             key: key.into(),
             value: Vec::from(value.into()),
             ex_time: 100000,
@@ -17,23 +17,25 @@ impl Request {
     }
 }
 
-impl fmt::Display for Request {
+impl fmt::Display for WriteReq {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Request::Set(req) => write!(f, "Set: {}", req),
+            WriteReq::Set(req) => write!(f, "Set: {}", req),
         }
     }
 }
 
+pub type WriteRes = openraft::raft::ClientWriteResponse<crate::network::raft_rocksdb::TypeConfig>;
+
 /// A response from the KV store.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub enum Response {
+pub enum WriteResRaft {
     Set(SetRes),
     Null,
 }
 
-impl Response {
+impl WriteResRaft {
     pub fn none() -> Self {
-        Response::Null
+        WriteResRaft::Null
     }
 }

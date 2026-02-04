@@ -4,7 +4,7 @@ use std::io::Cursor;
 use std::path::Path;
 use std::sync::Arc;
 
-use crate::network::model::{Request, Response};
+use crate::network::model::{WriteReq, WriteResRaft};
 use crate::network::raft_rocksdb::TypeConfig;
 use crate::server::handler::model::SetRes;
 use crate::store::rocks_log_store::RocksLogStore;
@@ -176,9 +176,9 @@ impl RaftStateMachine<TypeConfig> for StateMachineStore {
                 self.data.last_applied_log_id = Some(entry.log_id);
 
                 let response = match &entry.payload {
-                    EntryPayload::Blank => Response::none(),
+                    EntryPayload::Blank => WriteResRaft::none(),
                     EntryPayload::Normal(req) => match req {
-                        Request::Set(set_req) => {
+                        WriteReq::Set(set_req) => {
                             // 使用结构体的字段名来访问成员
                             let mut st = self.data.kvs.lock().await;
                             // println!("set {} = {}", set_req.key,String::from_utf8(set_req.value.clone()).unwrap());
@@ -187,13 +187,13 @@ impl RaftStateMachine<TypeConfig> for StateMachineStore {
                                 String::try_from(set_req.value.clone()).unwrap(),
                             );
                             // 注意：原代码返回的是 value.clone()，现在根据你的业务需求可能需要调整
-                            Response::Set(SetRes {})
+                            WriteResRaft::Set(SetRes {})
                         }
                     },
                     EntryPayload::Membership(mem) => {
                         self.data.last_membership =
                             StoredMembership::new(Some(entry.log_id.clone()), mem.clone());
-                        Response::none()
+                        WriteResRaft::none()
                     }
                 };
 

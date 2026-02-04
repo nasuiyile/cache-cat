@@ -1,4 +1,4 @@
-use crate::network::model::{Request, Response};
+use crate::network::model::{WriteReq, WriteResRaft};
 use crate::network::network::NetworkFactory;
 use crate::server::handler::model::SetReq;
 use crate::server::handler::rpc;
@@ -13,8 +13,8 @@ use tokio::sync::Mutex;
 openraft::declare_raft_types!(
     /// Declare the type configuration for example K/V store.
     pub TypeConfig:
-        D = Request,
-        R = Response,
+        D = WriteReq,
+        R = WriteResRaft,
         Entry = openraft::Entry<TypeConfig>,
         SnapshotData = Cursor<Vec<u8>>,
         

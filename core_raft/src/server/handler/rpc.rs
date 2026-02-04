@@ -6,7 +6,7 @@ use std::time::Instant;
 use tokio::net::TcpListener;
 use tokio::sync::mpsc;
 use tokio::sync::mpsc::UnboundedSender;
-use crate::server::handler::external_handler::HANDLER_TABLE;
+use crate::server::handler::prelude::*;
 use futures::{SinkExt, StreamExt};
 use tokio_util::codec::{Framed, LengthDelimitedCodec};
 
@@ -94,11 +94,11 @@ pub async fn hand(
     app: Arc<CacheCatApp>,
     tx: UnboundedSender<Bytes>,
     mut package: Bytes,
-) -> Result<(), ()> {
+) -> Result<(), BoxStdError> {
     // 安全解析：至少需要 8 bytes (request_id + func_id)
     if package.len() < 8 {
         eprintln!("包长度不足：{}", package.len());
-        return Err(());
+        return Err("".into());
     }
 
     // 读取 request_id 和 func_id（网络字节序 big-endian）
@@ -116,12 +116,14 @@ pub async fn hand(
     package.advance(8);
 
     // 查找 handler 并调用
+    /*
     let handler = HANDLER_TABLE
         .iter()
         .find(|(id, _)| *id == func_id)
         .map(|(_, ctor)| ctor())
         .ok_or(())?;
-
+    */
+    let handler = get_handler(func_id.try_into()?).ok_or("")?;
     let response_data = handler.call(app, package).await;
 
     // 构造要发送给客户端的 payload：request_id(4) + response_data
@@ -132,7 +134,7 @@ pub async fn hand(
     // 发给写任务（注意：这里发送的是不含长度头的 payload，LengthDelimitedCodec 会自动在实际 socket 上写入长度头）
     if tx.send(payload.freeze()).is_err() {
         // 写任务可能已结束或连接已关闭
-        return Err(());
+        return Err("".into());
     }
     Ok(())
 }

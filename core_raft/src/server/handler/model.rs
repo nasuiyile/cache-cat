@@ -74,3 +74,31 @@ pub struct InstallFullSnapshotReq {
     pub snapshot_meta: SnapshotMeta<TypeConfig>,
     pub snapshot: Vec<u8>,
 }
+
+#[derive(Serialize, Deserialize, Debug, PartialEq)]
+pub struct InstallFullSnapshotRes {
+}
+
+#[derive(Serialize, Deserialize, Debug, PartialEq)]
+pub struct AppendEntriesReq {
+}
+
+#[derive(Serialize, Deserialize, Debug, PartialEq)]
+pub struct AppendEntriesRes {
+}
+
+#[derive(Serialize, Deserialize, Debug, PartialEq)]
+pub struct VoteReq {
+}
+
+#[derive(Serialize, Deserialize, Debug, PartialEq)]
+pub struct VoteRes {
+}
+
+#[derive(Serialize, Deserialize, Debug, PartialEq)]
+pub struct ReadReq {
+}
+
+#[derive(Serialize, Deserialize, Debug, PartialEq)]
+pub struct ReadRes {
+}
