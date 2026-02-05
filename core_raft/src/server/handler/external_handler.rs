@@ -17,6 +17,7 @@ use serde::de::DeserializeOwned;
 use std::io::Cursor;
 use std::sync::Arc;
 use std::time::Instant;
+use std::marker::PhantomData;
 use std::sync::LazyLock;
 
 pub type BoxStdError = Box<dyn std::error::Error>;
@@ -24,12 +25,25 @@ pub type BoxStdError = Box<dyn std::error::Error>;
 macro_rules! static_handler_table {
 	( $(#[$attr:meta])* $vis:vis $enum_name:ident -> <$value_type:ty, $error_type:ty> { $( $variant:ident => $variant_value:expr ),* $(,)? } ) => {
 		macro_rules! __impl {
+			($variant2:ident, $variant_value2:expr, EnumVariantValueCheck) => {
+				paste::paste! {
+					struct [<$variant2 ValueCheck>];
+
+					impl [<$variant2 ValueCheck>] {
+						const TYPE_CHECKER_VALUE: $value_type = [<$variant2 ValueCheck>]::type_checker($variant_value2);
+						
+						const fn type_checker<T: num_traits::Unsigned>(v: T) -> T {
+							v
+						}
+					}
+				}
+		    };
 			($variant2:ident, $variant_value2:expr, EnumVariant) => {
 		        $(#[$attr])*
 		        $vis struct $variant2;
 
 		        impl $variant2 {
-		            $vis const VALUE: $value_type = $variant_value2;
+					$vis const VALUE: $value_type = $variant_value2;
 		        }
 
 		        paste::paste! {
@@ -77,7 +91,7 @@ macro_rules! static_handler_table {
 				}
 			}
 		
-			$vis trait [<$enum_name Typed>] {
+			$vis trait [<$enum_name Typed>]: Send + Sync {
 				type Request: serde::Serialize;
 				type Response: serde::de::DeserializeOwned;
 				
@@ -87,6 +101,10 @@ macro_rules! static_handler_table {
 			$vis mod [<$enum_name:snake _typed>] {
 				use super::*;
 				
+				$(
+			    	__impl!($variant, $variant_value, EnumVariantValueCheck);
+				)?
+
 				$(
 			    	__impl!($variant, $variant_value, EnumVariant);
 				)+
@@ -104,12 +122,21 @@ macro_rules! static_handler_table {
         type BoxRpcHandler = Box<dyn RpcHandler>;
 		type OptionBoxRpcHandler = Option<BoxRpcHandler>;
 		static HANDLER_TABLE: LazyLock<[OptionBoxRpcHandler; HANDLER_TABLE_LEN]> = LazyLock::new(|| {
-			let mut handlers: [OptionBoxRpcHandler; HANDLER_TABLE_LEN] = std::array::from_fn(|_| None);
-			$(
-				paste::paste! {
-					handlers[$variant_value] = Some(Box::new(RpcMethod { func: [<$variant:snake>] }));
+			let handlers = std::array::from_fn(|i| {
+				match i {
+					$(
+						$variant_value => {
+							paste::paste! {
+								Some(Box::new(RpcMethod {
+									func: [<$variant:snake>],
+									_phantom: PhantomData::<[<$enum_name:snake _typed>]::$variant>,
+								}) as BoxRpcHandler)
+							}
+						},
+					)+
+					_ => None,
 				}
-			)+
+			});
 			handlers
 		});
 		
@@ -160,25 +187,28 @@ pub trait RpcHandler: Send + Sync {
 
 // 修改函数指针定义，使其支持异步返回 Future
 // 这里使用泛型 F 来适配异步函数
-pub struct RpcMethod<Req, Res, Fut>
+pub struct RpcMethod<T, Fut>
 where
-    Fut: Future<Output = Res> + Send,
+	T: FuncIdTyped,
+    Fut: Future<Output = T::Response> + Send,
 {
     // 注意：Rust 的纯函数指针 fn 不能直接是 async 的
     // 我们这里让 func 返回一个 Future
-    func: fn(Arc<CacheCatApp>, Req) -> Fut,
+    func: fn(Arc<CacheCatApp>, T::Request) -> Fut,
+	_phantom: PhantomData<T>,
 }
 
 #[async_trait]
-impl<Req, Res, Fut> RpcHandler for RpcMethod<Req, Res, Fut>
+impl<T, Fut> RpcHandler for RpcMethod<T, Fut>
 where
-    Req: Send + 'static + DeserializeOwned,
-    Res: Send + 'static + Serialize,
-    Fut: Future<Output = Res> + Send + 'static,
+	T: FuncIdTyped,
+    T::Request: Send + DeserializeOwned + 'static,
+    T::Response: Send + Serialize + 'static,
+    Fut: Future<Output = T::Response> + Send + 'static,
 {
     async fn call(&self, app: Arc<CacheCatApp>, data: Bytes) -> Bytes {
         // 反序列化
-        let req: Req = bincode2::deserialize(data.as_ref()).expect("Failed to deserialize");
+        let req: T::Request = bincode2::deserialize(data.as_ref()).expect("Failed to deserialize");
         // 执行异步业务函数
         let res = (self.func)(app, req).await;
         // 序列化
@@ -193,52 +223,53 @@ async fn print_test(_app: Arc<CacheCatApp>, d: PrintTestReq) -> PrintTestRes {
     PrintTestRes { message: d.message }
 }
 
-async fn write(app: Arc<CacheCatApp>, req: WriteReq) -> ClientWriteResponse<TypeConfig> {
-    let res: ClientWriteResponse<TypeConfig> =
-        app.raft.client_write(req).await.expect("Raft write failed");
-    return res;
+async fn write(app: Arc<CacheCatApp>, req: WriteReq) -> WriteRes {
+    let res = app.raft.client_write(req).await.expect("Raft write failed");
+    res
 }
-async fn read(app: Arc<CacheCatApp>, req: String) -> Option<String> {
+async fn read(app: Arc<CacheCatApp>, req: ReadReq) -> ReadRes {
     let kvs = app.key_values.lock().await;
-    let value = kvs.get(&req);
-    value.map(|v| v.to_string())
+    let value = kvs.get(&req.data);
+    ReadRes { value: value.map(|v| v.to_string()) }
 }
 
-async fn vote(app: Arc<CacheCatApp>, req: VoteRequest<TypeConfig>) -> VoteResponse<TypeConfig> {
+async fn vote(app: Arc<CacheCatApp>, req: VoteReq) -> VoteRes {
     // openraft 的 vote 是异步的
-    app.raft.vote(req).await.expect("Raft vote failed")
+    VoteRes { value: app.raft.vote(req.data).await.expect("Raft vote failed") }
 }
 
 //理论上只有从节点会被调用这个方法
 async fn append_entries(
     app: Arc<CacheCatApp>,
-    req: AppendEntriesRequest<TypeConfig>,
-) -> AppendEntriesResponse<TypeConfig> {
+    req: AppendEntriesReq,
+) -> AppendEntriesRes {
     let start = Instant::now();
-    let e = req.entries.is_empty();
+    let e = req.data.entries.is_empty();
     let res = app
         .raft
-        .append_entries(req)
+        .append_entries(req.data)
         .await
         .expect("Raft append_entries failed");
     let elapsed = start.elapsed();
     if !e {
         tracing::info!("append 从节点内部处理: {:?} 节点：{:?}", elapsed, app.id);
     }
-    res
+    AppendEntriesRes { value: res }
 }
 
 //InstallFullSnapshotReq 把openraft自带的俩个参数包裹在一起了
 async fn install_full_snapshot(
     app: Arc<CacheCatApp>,
     req: InstallFullSnapshotReq,
-) -> SnapshotResponse<TypeConfig> {
+) -> InstallFullSnapshotRes {
     let snapshot = Snapshot {
         meta: req.snapshot_meta,
         snapshot: req.snapshot.clone(),
     };
-    app.raft
-        .install_full_snapshot(req.vote, snapshot)
-        .await
-        .expect("Raft install_snapshot failed")
+    InstallFullSnapshotRes {
+		value: app.raft
+        	.install_full_snapshot(req.vote, snapshot)
+        	.await
+        	.expect("Raft install_snapshot failed")
+		}
 }

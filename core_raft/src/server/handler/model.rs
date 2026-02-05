@@ -1,5 +1,8 @@
 use openraft::alias::VoteOf;
-use openraft::{Snapshot, SnapshotMeta};
+use openraft::{Snapshot, SnapshotMeta, raft::{
+    AppendEntriesRequest, AppendEntriesResponse, ClientWriteResponse, InstallSnapshotRequest,
+    InstallSnapshotResponse, SnapshotResponse, VoteRequest, VoteResponse,
+}};
 use serde::{Deserialize, Serialize};
 use std::fmt;
 use std::io::Cursor;
@@ -78,28 +81,35 @@ pub struct InstallFullSnapshotReq {
 
 #[derive(Serialize, Deserialize, Debug, PartialEq)]
 pub struct InstallFullSnapshotRes {
+    pub value: SnapshotResponse<TypeConfig>,
 }
 
-#[derive(Serialize, Deserialize, Debug, PartialEq)]
+#[derive(Serialize, Deserialize, Debug/*, PartialEq*/)]
 pub struct AppendEntriesReq {
+    pub data: AppendEntriesRequest<TypeConfig>,
 }
 
 #[derive(Serialize, Deserialize, Debug, PartialEq)]
 pub struct AppendEntriesRes {
+    pub value: AppendEntriesResponse<TypeConfig>,
 }
 
 #[derive(Serialize, Deserialize, Debug, PartialEq)]
 pub struct VoteReq {
+    pub data: VoteRequest<TypeConfig>,
 }
 
 #[derive(Serialize, Deserialize, Debug, PartialEq)]
 pub struct VoteRes {
+    pub value: VoteResponse<TypeConfig>,
 }
 
 #[derive(Serialize, Deserialize, Debug, PartialEq)]
 pub struct ReadReq {
+    pub data: String,
 }
 
 #[derive(Serialize, Deserialize, Debug, PartialEq)]
 pub struct ReadRes {
+    pub value: Option<String>,
 }
