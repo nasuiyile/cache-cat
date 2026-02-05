@@ -12,7 +12,7 @@ serde = "1.0.149"
 tokio = { version = "1.49.0", features = ["rt", "rt-multi-thread", "macros"] }
 tokio-util = { version = "0.7.18", features = ["codec"] }
 bincode2 = "2.0.1"
-bytes = "1.11.0"
+bytes = { version = "1.11.1", features = ["serde"] }
 serde_yaml = "0.9.34+deprecated"
 moka = { version = "0.12.12", features = ["sync"] }
 async-trait = "0.1.89"
@@ -29,3 +29,5 @@ crossbeam-utils = "0.8.21"
 parking_lot = "0.12.5"
 indexmap = "2.13.0"
 lru = "0.16.3"
+paste = "1.0.15"
+num-traits = "0.2.19"

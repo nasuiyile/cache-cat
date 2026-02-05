@@ -1,4 +1,4 @@
-use crate::network::model::Request;
+use crate::network::model::WriteReq;
 use crate::network::raft_rocksdb::TypeConfig;
 use crate::server::client::client::RpcMultiClient;
 use crate::server::handler::model::{PrintTestReq, PrintTestRes, SetReq};
@@ -18,7 +18,7 @@ async fn test_add() {
         let res: ClientWriteResponse<TypeConfig> = client
             .call(
                 2,
-                Request::Set(SetReq {
+                WriteReq::Set(SetReq {
                     key: format!("test_{}", i), // 使用不同键避免覆盖
                     value: Vec::from(format!("test_value_{}", i)),
                     ex_time: 0,

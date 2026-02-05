@@ -1,4 +1,4 @@
-use crate::network::model::{Request, Response};
+use crate::network::model::{WriteReq, WriteResRaft};
 use crate::network::network::NetworkFactory;
 use crate::server::handler::model::SetReq;
 use crate::server::handler::rpc;
@@ -9,21 +9,22 @@ use std::io::Cursor;
 use std::path::Path;
 use std::sync::{Arc, LazyLock};
 use tokio::sync::Mutex;
+use bytes::Bytes;
 
 openraft::declare_raft_types!(
     /// Declare the type configuration for example K/V store.
     pub TypeConfig:
-        D = Request,
-        R = Response,
+        D = WriteReq,
+        R = WriteResRaft,
         Entry = openraft::Entry<TypeConfig>,
-        SnapshotData = Cursor<Vec<u8>>,
+        SnapshotData = Bytes,
         
 );
 //实现是纯内存的暂时
 pub type LogStore = crate::store::rocks_log_store::RocksLogStore;
 pub type StateMachineStore = crate::store::rocks_store::StateMachineStore;
 pub type Raft = openraft::Raft<TypeConfig>;
-pub async fn start_raft_app<P>(node_id: u64, dir: P, addr: String) -> std::io::Result<()>
+pub async fn start_raft_app<P>(node_id: u64, dir: P, addr: String, tx: tokio::sync::oneshot::Sender<()>) -> std::io::Result<()>
 where
     P: AsRef<Path>,
 {
@@ -90,6 +91,7 @@ where
     // });
     // app.raft.client_write(request).await.unwrap();
 
+    let _ = tx.send(());
     rpc::start_server(Arc::new(app)).await
 }
 pub struct CacheCatApp {

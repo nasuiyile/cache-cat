@@ -96,7 +96,7 @@ impl RaftNetworkV2<TypeConfig> for TcpNetwork {
         cancel: impl Future<Output = ReplicationClosed> + OptionalSend + 'static,
         option: RPCOption,
     ) -> Result<SnapshotResponse<TypeConfig>, StreamingError<TypeConfig>> {
-        let data = snapshot.snapshot.into_inner();
+        let data = snapshot.snapshot.clone();
         let req = InstallFullSnapshotReq {
             vote,
             snapshot_meta: snapshot.meta,

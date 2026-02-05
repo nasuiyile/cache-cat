@@ -98,11 +98,14 @@ impl RocksLogStore {
         }
 
         let mut out = Vec::with_capacity(len_needed as usize);
-        let mut cache: MutexGuard<LruCache<u64, Entry<TypeConfig>>> = self.cache.lock().await;
-        for idx in start..=end {
-            match cache.get(&idx) {
-                Some(ent) => out.push(ent.clone()),
-                None => return None,
+
+        {
+            let mut cache = self.cache.lock().await;
+            for idx in start..=end {
+                match cache.get(&idx) {
+                    Some(ent) => out.push(ent.clone()),
+                    None => return None,
+                }
             }
         }
         Some(out)
@@ -250,31 +253,33 @@ impl RaftLogStorage<TypeConfig> for RocksLogStore {
         I: IntoIterator<Item = EntryOf<TypeConfig>> + Send,
     {
         let start = Instant::now();
-        let mut cache = self.cache.lock().await;
-        for entry in entries {
-            let id = id_to_bin(entry.index());
-            self.db
-                .put_cf(
-                    self.cf_logs(),
-                    id,
-                    bincode2::serialize(&entry)
-                        .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?,
-                )
-                .map_err(|e| io::Error::other(e.to_string()))?;
-            cache.put(entry.index(), entry);
+        let mut batch = rocksdb::WriteBatch::default();
+
+        {
+            let mut cache = self.cache.lock().await;
+            for entry in entries {
+                let id = id_to_bin(entry.index());
+                let val = bincode2::serialize(&entry).map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
+                //self.db.put_cf(self.cf_logs(), id, val).map_err(|e| io::Error::other(e.to_string()))?;
+                batch.put_cf(self.cf_logs(), id, val);
+                cache.put(entry.index(), entry);
+            }
+
+            //提前释放
+            //drop(cache);
         }
-        //提前释放
-        drop(cache);
+
         // 在调用回调函数之前，确保日志已经持久化到磁盘。
         //
         // 但上面的 `pub_cf()` 必须在这个函数中调用，而不能放到另一个任务里。
         // 因为当函数返回时，需要能够读取到这些日志条目。
         let db = self.db.clone();
-        std::thread::spawn(move || {
-            let res = db.flush_wal(true).map_err(io::Error::other);
+        tokio::task::spawn_blocking(move || {
+            //let res = db.flush_wal(true).map_err(io::Error::other);
+            let res = db.write(batch).and_then(|_| db.flush_wal(true)).map_err(io::Error::other);
             callback.io_completed(res);
             let elapsed = start.elapsed();
-            tracing::info!("rocksdb append elapsed: {:?}", elapsed);
+            //tracing::info!("rocksdb append elapsed: {:?}", elapsed);
         });
         // Return now, and the callback will be invoked later when IO is done.
         Ok(())
@@ -364,14 +369,23 @@ mod meta {
 
 /// converts an id to a byte vector for storing in the database.
 /// Note that we're using big endian encoding to ensure correct sorting of keys
+/*
 fn id_to_bin(id: u64) -> Vec<u8> {
     let mut buf = Vec::with_capacity(8);
     buf.write_u64::<BigEndian>(id).unwrap();
     buf
 }
+*/
 
+#[inline]
+fn id_to_bin(id: u64) -> [u8; 8] {
+    id.to_be_bytes()
+}
+
+#[inline]
 fn bin_to_id(buf: &[u8]) -> u64 {
-    (&buf[0..8]).read_u64::<BigEndian>().unwrap()
+    //(&buf[0..8]).read_u64::<BigEndian>().unwrap()
+    u64::from_be_bytes([buf[0], buf[1], buf[2], buf[3], buf[4], buf[5], buf[6], buf[7]])
 }
 
 fn read_logs_err(e: impl Error + 'static) -> io::Error {

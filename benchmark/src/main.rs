@@ -1,8 +1,8 @@
 use clap::Parser;
-use core_raft::network::model::Request;
+use core_raft::network::model::WriteReq;
 use core_raft::network::raft_rocksdb::TypeConfig;
 use core_raft::server::client::client::RpcMultiClient;
-use core_raft::server::handler::model::{PrintTestReq, PrintTestRes, SetReq};
+use core_raft::server::handler::{prelude::*, model::{PrintTestReq, PrintTestRes, SetReq}};
 use openraft::raft::ClientWriteResponse;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicI64, Ordering};
@@ -115,21 +115,28 @@ async fn run_engine(client_num: usize, total_tasks: usize, endpoints: String, op
 
                 for i in 0..tasks_per_client {
                     let start = Instant::now();
-                    let success;
-
-                    if op == "write" {
+                    let success = if op == "write" {
+                        /*
                         let res: Result<ClientWriteResponse<TypeConfig>, _> = client
                             .call(
                                 2,
-                                Request::Set(SetReq {
+                                WriteReq::Set(SetReq {
                                     key: "xxx".into(),
                                     value: Vec::from("xxx"),
                                     ex_time: 0,
                                 }),
                             )
                             .await;
-                        success = res.is_ok();
+                        */
+                        let res = client.call_t::<func_id_typed::Write>(WriteReq::Set(SetReq {
+							key: "xxx".into(),
+							value: Vec::from("xxx"),
+							ex_time: 0,
+						})).await;
+
+                        res.is_ok()
                     } else {
+                        /*
                         let res: Result<PrintTestRes, _> = client
                             .call(
                                 1,
@@ -138,8 +145,11 @@ async fn run_engine(client_num: usize, total_tasks: usize, endpoints: String, op
                                 },
                             )
                             .await;
-                        success = res.is_ok();
-                    }
+                        */
+                        let res = client.call_t::<func_id_typed::PrintTest>(PrintTestReq { message: String::from("xxx")}).await;
+
+                        res.is_ok()
+                    };
 
                     if success {
                         let duration = start.elapsed();

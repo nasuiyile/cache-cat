@@ -1,10 +1,14 @@
 use openraft::alias::VoteOf;
-use openraft::{Snapshot, SnapshotMeta};
+use openraft::{Snapshot, SnapshotMeta, raft::{
+    AppendEntriesRequest, AppendEntriesResponse, ClientWriteResponse, InstallSnapshotRequest,
+    InstallSnapshotResponse, SnapshotResponse, VoteRequest, VoteResponse,
+}};
 use serde::{Deserialize, Serialize};
 use std::fmt;
 use std::io::Cursor;
 use std::sync::Arc;
 use crate::network::raft_rocksdb::TypeConfig;
+use bytes::Bytes;
 
 #[derive(Serialize, Deserialize, Debug, PartialEq)]
 pub struct PrintTestReq {
@@ -72,5 +76,40 @@ pub struct ExistsRes {
 pub struct InstallFullSnapshotReq {
     pub vote: VoteOf<TypeConfig>,
     pub snapshot_meta: SnapshotMeta<TypeConfig>,
-    pub snapshot: Vec<u8>,
+    pub snapshot: Bytes,
+}
+
+#[derive(Serialize, Deserialize, Debug, PartialEq)]
+pub struct InstallFullSnapshotRes {
+    pub value: SnapshotResponse<TypeConfig>,
+}
+
+#[derive(Serialize, Deserialize, Debug/*, PartialEq*/)]
+pub struct AppendEntriesReq {
+    pub data: AppendEntriesRequest<TypeConfig>,
+}
+
+#[derive(Serialize, Deserialize, Debug, PartialEq)]
+pub struct AppendEntriesRes {
+    pub value: AppendEntriesResponse<TypeConfig>,
+}
+
+#[derive(Serialize, Deserialize, Debug, PartialEq)]
+pub struct VoteReq {
+    pub data: VoteRequest<TypeConfig>,
+}
+
+#[derive(Serialize, Deserialize, Debug, PartialEq)]
+pub struct VoteRes {
+    pub value: VoteResponse<TypeConfig>,
+}
+
+#[derive(Serialize, Deserialize, Debug, PartialEq)]
+pub struct ReadReq {
+    pub data: String,
+}
+
+#[derive(Serialize, Deserialize, Debug, PartialEq)]
+pub struct ReadRes {
+    pub value: Option<String>,
 }
