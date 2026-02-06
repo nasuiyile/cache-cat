@@ -1,3 +1,4 @@
+use crate::error::CoreRaftResult;
 use crate::network::raft_rocksdb::TypeConfig;
 use crate::server::client::client::RpcMultiClient;
 use crate::server::handler::model::{InstallFullSnapshotReq, PrintTestReq, PrintTestRes};
@@ -17,6 +18,7 @@ use std::time::Instant;
 pub struct NetworkFactory {}
 impl RaftNetworkFactory<TypeConfig> for NetworkFactory {
     type Network = TcpNetwork;
+
     #[tracing::instrument(level = "debug", skip_all)]
     async fn new_client(&mut self, target: u64, node: &BasicNode) -> Self::Network {
         let client = RpcMultiClient::connect(&*node.addr.clone(), 5)
@@ -29,26 +31,20 @@ impl RaftNetworkFactory<TypeConfig> for NetworkFactory {
         }
     }
 }
-
 pub struct TcpNetwork {
     addr: String,
     client: RpcMultiClient,
     target: u64, //nodeid
 }
 impl TcpNetwork {
-    async fn request<Req, Resp, Err>(
-        &mut self,
-        func_id: u32,
-        req: Req,
-    ) -> Result<Result<Resp, Err>, RPCError<TypeConfig>>
+    async fn request<Req, Resp>(&mut self, func_id: u32, req: Req) -> CoreRaftResult<Resp>
     where
-        Req: Serialize + 'static,
-        Resp: Serialize + DeserializeOwned,
-        Err: std::error::Error + Serialize + DeserializeOwned,
+        Req: Serialize,
+        Resp: DeserializeOwned,
+        //Err: std::error::Error + Serialize + DeserializeOwned,
     {
-        let res: Result<Result<Resp, Err>, RPCError<TypeConfig>> =
-            self.client.call(func_id, req).await.unwrap();
-        res
+        let res = self.client.call(func_id, req).await.unwrap();
+        Ok(res)
     }
 }
 

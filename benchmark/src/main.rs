@@ -1,8 +1,12 @@
 use clap::Parser;
+use core_raft::error::{CoreRaftError, CoreRaftResult};
 use core_raft::network::model::WriteReq;
 use core_raft::network::raft_rocksdb::TypeConfig;
 use core_raft::server::client::client::RpcMultiClient;
-use core_raft::server::handler::{prelude::*, model::{PrintTestReq, PrintTestRes, SetReq}};
+use core_raft::server::handler::{
+    model::{PrintTestReq, PrintTestRes, SetReq},
+    prelude::*,
+};
 use openraft::raft::ClientWriteResponse;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicI64, Ordering};
@@ -36,7 +40,7 @@ struct Args {
 }
 
 #[tokio::main]
-async fn main() -> Result<(), Box<dyn std::error::Error>> {
+async fn main() -> CoreRaftResult<()> {
     let args = Args::parse();
 
     if args.mode == "latency" {
@@ -61,7 +65,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
-async fn run_engine(client_num: usize, total_tasks: usize, endpoints: String, op_type: String) {
+async fn run_engine(
+    client_num: usize,
+    total_tasks: usize,
+    endpoints: String,
+    op_type: String,
+) -> CoreRaftResult<()> {
     let latencies = Arc::new(Mutex::new(Vec::with_capacity(total_tasks)));
     let ops = Arc::new(AtomicI64::new(0));
     let start_time = Instant::now();
@@ -117,7 +126,7 @@ async fn run_engine(client_num: usize, total_tasks: usize, endpoints: String, op
                     let start = Instant::now();
                     let success = if op == "write" {
                         /*
-                        let res: Result<ClientWriteResponse<TypeConfig>, _> = client
+                        let res: CoreRaftResult<ClientWriteResponse<TypeConfig>, _> = client
                             .call(
                                 2,
                                 WriteReq::Set(SetReq {
@@ -128,16 +137,22 @@ async fn run_engine(client_num: usize, total_tasks: usize, endpoints: String, op
                             )
                             .await;
                         */
-                        let res = client.call_t::<func_id_typed::Write>(WriteReq::Set(SetReq {
-							key: "xxx".into(),
-							value: Vec::from("xxx"),
-							ex_time: 0,
-						})).await;
+                        let func_id: FuncId = 3.try_into()?;
+                        let res = client
+                            .call_t_by_id::<func_id_typed::Write>(
+                                FuncId::Write,
+                                WriteReq::Set(SetReq {
+                                    key: "xxx".into(),
+                                    value: Vec::from("xxx"),
+                                    ex_time: 0,
+                                }),
+                            )
+                            .await;
 
                         res.is_ok()
                     } else {
                         /*
-                        let res: Result<PrintTestRes, _> = client
+                        let res: CoreRaftResult<PrintTestRes, _> = client
                             .call(
                                 1,
                                 PrintTestReq {
@@ -146,7 +161,14 @@ async fn run_engine(client_num: usize, total_tasks: usize, endpoints: String, op
                             )
                             .await;
                         */
-                        let res = client.call_t::<func_id_typed::PrintTest>(PrintTestReq { message: String::from("xxx")}).await;
+                        let res = client
+                            .call_t_by_typed_id(
+                                func_id_typed::PrintTest,
+                                PrintTestReq {
+                                    message: String::from("xxx"),
+                                },
+                            )
+                            .await;
 
                         res.is_ok()
                     };
@@ -172,6 +194,8 @@ async fn run_engine(client_num: usize, total_tasks: usize, endpoints: String, op
             } else {
                 eprintln!("客户端连接失败: {}", eps);
             }
+
+            Ok::<_, CoreRaftError>(())
         });
         handles.push(handle);
     }
@@ -184,6 +208,8 @@ async fn run_engine(client_num: usize, total_tasks: usize, endpoints: String, op
     print!("\r"); // 清理进度条行
     let final_latencies = latencies.lock().await;
     print_stats(&final_latencies, elapsed, total_tasks);
+
+    Ok(())
 }
 
 fn print_stats(d: &[Duration], elapsed: Duration, total_req: usize) {

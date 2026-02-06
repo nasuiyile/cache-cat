@@ -68,7 +68,7 @@ pub struct RpcMultiClient {
 }
 
 impl RpcMultiClient {
-    pub async fn connect(addr: &str, count: u32) -> Result<Self, Box<dyn Error + Send + Sync>> {
+    pub async fn connect(addr: &str, count: u32) -> CoreRaftResult<Self>> {
         let mut clients = Vec::new();
         for _ in 0..count {
             let client = RpcClient::connect(addr).await?;
@@ -84,7 +84,7 @@ impl RpcMultiClient {
         &self,
         func_id: u32,
         req: Req,
-    ) -> Result<Res, Box<dyn Error + Send + Sync>>
+    ) -> CoreRaftResult<Res>
     where
         Req: Serialize,
         Res: DeserializeOwned,
@@ -102,7 +102,7 @@ struct RpcClient {
 }
 
 impl RpcClient {
-    pub async fn connect(addr: &str) -> Result<Self, Box<dyn Error + Send + Sync>> {
+    pub async fn connect(addr: &str) -> CoreRaftResult<Self> {
         let stream = TcpStream::connect(addr).await?;
         stream.set_nodelay(true)?; // RPC 必须关闭 Nagle 算法以降低延迟
 
@@ -157,7 +157,7 @@ impl RpcClient {
         &self,
         func_id: u32,
         req: Req,
-    ) -> Result<Res, Box<dyn Error + Send + Sync>>
+    ) -> CoreRaftResult<Res>
     where
         Req: Serialize,
         Res: DeserializeOwned,
@@ -209,7 +209,7 @@ struct ResponseFuture<'a> {
 }
 
 impl<'a> Future for ResponseFuture<'a> {
-    type Output = Result<Bytes, Box<dyn Error + Send + Sync>>;
+    type Output = CoreRaftResult<Bytes>;
 
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         // 注册当前任务以备唤醒
@@ -227,6 +227,7 @@ impl<'a> Future for ResponseFuture<'a> {
 }
 */
 
+use crate::error::{CoreRaftError, CoreRaftResult};
 use crate::server::handler::prelude::*;
 use bincode2;
 use bytes::{BufMut, BytesMut};
@@ -249,8 +250,9 @@ pub struct RpcMultiClient {
     clients: Vec<RpcClient>,
     next_client: AtomicI32,
 }
+
 impl RpcMultiClient {
-    pub async fn connect(addr: &str, count: u32) -> Result<Self, Box<dyn Error + Send + Sync>> {
+    pub async fn connect(addr: &str, count: u32) -> CoreRaftResult<Self> {
         let mut clients = Vec::new();
         for i in 0..count {
             let client = RpcClient::connect(addr).await?;
@@ -261,11 +263,7 @@ impl RpcMultiClient {
             next_client: AtomicI32::new(0),
         })
     }
-    pub async fn call<Req, Res>(
-        &self,
-        func_id: u32,
-        req: Req,
-    ) -> Result<Res, BoxStdError>
+    pub async fn call<Req, Res>(&self, func_id: u32, req: Req) -> CoreRaftResult<Res>
     where
         Req: Serialize,
         Res: DeserializeOwned,
@@ -275,9 +273,29 @@ impl RpcMultiClient {
             [self.next_client.fetch_add(1, Ordering::Relaxed) as usize % self.clients.len()];
         client.call(func_id, req).await
     }
-    
-    pub async fn call_t<T: FuncIdTyped>(&self, req: T::Request) -> Result<T::Response, BoxStdError> {
-        let client = &self.clients[self.next_client.fetch_add(1, Ordering::Relaxed) as usize % self.clients.len()];
+
+    pub async fn call_t_by_id<T: FuncIdTyped<Enum = FuncId>>(
+        &self,
+        func_id: T::Enum,
+        req: T::Request,
+    ) -> CoreRaftResult<T::Response> {
+        self.call_t::<T>(req).await
+    }
+
+    pub async fn call_t_by_typed_id<T: FuncIdTyped<Enum = FuncId>>(
+        &self,
+        func_id_variant: T,
+        req: T::Request,
+    ) -> CoreRaftResult<T::Response> {
+        self.call_t::<T>(req).await
+    }
+
+    pub async fn call_t<T: FuncIdTyped<Enum = FuncId>>(
+        &self,
+        req: T::Request,
+    ) -> CoreRaftResult<T::Response> {
+        let client = &self.clients
+            [self.next_client.fetch_add(1, Ordering::Relaxed) as usize % self.clients.len()];
         client.call_t::<T>(req).await
     }
 }
@@ -291,7 +309,7 @@ struct RpcClient {
 
 impl RpcClient {
     /// 连接并启动读写后台任务
-    pub async fn connect(addr: &str) -> Result<Self, Box<dyn Error + Send + Sync>> {
+    pub async fn connect(addr: &str) -> CoreRaftResult<Self> {
         let stream = TcpStream::connect(addr).await?;
         stream.set_nodelay(true)?; // 关闭 Nagle，低延迟
 
@@ -369,11 +387,7 @@ impl RpcClient {
     }
 
     /// 发起 RPC 调用：func_id + req 序列化为 body，返回反序列化后的 Res
-    pub async fn call<Req, Res>(
-        &self,
-        func_id: u32,
-        req: Req,
-    ) -> Result<Res, BoxStdError>
+    pub async fn call<Req, Res>(&self, func_id: u32, req: Req) -> CoreRaftResult<Res>
     where
         Req: Serialize,
         Res: DeserializeOwned,
@@ -400,17 +414,17 @@ impl RpcClient {
         if let Err(e) = self.tx_writer.send(write_req).await {
             // 发送失败，可能写任务已退出
             let _ = self.pending.remove(&request_id);
-            return Err(format!("RPC connection closed: {}", e).into());
+            return Err(CoreRaftError::RpcConnectionClosed(e));
         }
 
         // 等待响应（调用者可以在外层加超时），这里直接 await
         let start = Instant::now();
         let response_bytes = match rx.await {
             Ok(b) => b,
-            Err(_) => {
+            Err(e) => {
                 // 通常是写/读任务退出或连接断开
                 let _ = self.pending.remove(&request_id);
-                return Err("RPC wait canceled or connection closed".into());
+                return Err(CoreRaftError::RpcWaitedCanceledOrConnectionClosed(e));
             }
         };
         tracing::info!("RPC 往返耗时: {} us", start.elapsed().as_micros());
@@ -419,8 +433,11 @@ impl RpcClient {
         let res: Res = bincode2::deserialize(&response_bytes)?;
         Ok(res)
     }
-    
-    pub async fn call_t<T: FuncIdTyped>(&self, req: T::Request) -> Result<T::Response, BoxStdError> {
+
+    pub async fn call_t<T: FuncIdTyped<Enum = FuncId>>(
+        &self,
+        req: T::Request,
+    ) -> CoreRaftResult<T::Response> {
         self.call(T::value(), req).await
     }
 }

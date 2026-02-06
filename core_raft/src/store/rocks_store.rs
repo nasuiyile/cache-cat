@@ -8,6 +8,7 @@ use crate::network::model::{WriteReq, WriteResRaft};
 use crate::network::raft_rocksdb::TypeConfig;
 use crate::server::handler::model::SetRes;
 use crate::store::rocks_log_store::RocksLogStore;
+use bytes::Bytes;
 use futures::Stream;
 use futures::TryStreamExt;
 use openraft::storage::EntryResponder;
@@ -22,7 +23,6 @@ use rocksdb::Options;
 use serde::Deserialize;
 use serde::Serialize;
 use tokio::sync::Mutex;
-use bytes::Bytes;
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct StoredSnapshot {
@@ -85,7 +85,7 @@ impl RaftSnapshotBuilder<TypeConfig> for StateMachineStore {
 
         let snapshot = StoredSnapshot {
             meta: meta.clone(),
-            data: Bytes::from_owner(kv_json),
+            data: kv_json.into(),
         };
 
         self.set_current_snapshot_(&snapshot)?;
@@ -202,7 +202,7 @@ impl RaftStateMachine<TypeConfig> for StateMachineStore {
                                     String::try_from(set_req.value.clone()).unwrap(),
                                 );
                             }
-                            
+
                             // 注意：原代码返回的是 value.clone()，现在根据你的业务需求可能需要调整
                             WriteResRaft::Set(SetRes {})
                         }

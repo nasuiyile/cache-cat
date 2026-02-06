@@ -1,9 +1,10 @@
+use crate::error::{CoreRaftError, PinBoxFutureStatic};
 use crate::network::model::{WriteReq, WriteRes};
 use crate::network::raft_rocksdb::{CacheCatApp, TypeConfig};
 use crate::server::handler::model::{
-    DelReq, DelRes, ExistsReq, ExistsRes, GetReq, GetRes, InstallFullSnapshotReq, PrintTestReq,
-    PrintTestRes, SetReq, SetRes,
-    InstallFullSnapshotRes, AppendEntriesReq, AppendEntriesRes, VoteReq, VoteRes, ReadReq, ReadRes,
+    AppendEntriesReq, AppendEntriesRes, DelReq, DelRes, ExistsReq, ExistsRes, GetReq, GetRes,
+    InstallFullSnapshotReq, InstallFullSnapshotRes, PrintTestReq, PrintTestRes, ReadReq, ReadRes,
+    SetReq, SetRes, VoteReq, VoteRes,
 };
 use async_trait::async_trait;
 use bytes::Bytes;
@@ -15,15 +16,13 @@ use openraft::raft::{
 use serde::Serialize;
 use serde::de::DeserializeOwned;
 use std::io::Cursor;
-use std::sync::Arc;
-use std::time::Instant;
 use std::marker::PhantomData;
+use std::sync::Arc;
 use std::sync::LazyLock;
-
-pub type BoxStdError = Box<dyn std::error::Error>;
+use std::time::Instant;
 
 macro_rules! static_handler_table {
-	( $(#[$attr:meta])* $vis:vis $enum_name:ident -> <$value_type:ty, $error_type:ty> { $( $variant:ident => $variant_value:expr ),* $(,)? } ) => {
+	( $(#[$attr:meta])* $vis:vis $enum_name:ident -> <$value_type:ty, $error_type:ty> { $( $variant:ident => $variant_value:expr ),* $(,)? }, $try_into_err:path ) => {
 		macro_rules! __impl {
 			($variant2:ident, $variant_value2:expr, EnumVariantValueCheck) => {
 				paste::paste! {
@@ -31,7 +30,7 @@ macro_rules! static_handler_table {
 
 					impl [<$variant2 ValueCheck>] {
 						const TYPE_CHECKER_VALUE: $value_type = [<$variant2 ValueCheck>]::type_checker($variant_value2);
-						
+
 						const fn type_checker<T: num_traits::Unsigned>(v: T) -> T {
 							v
 						}
@@ -48,8 +47,10 @@ macro_rules! static_handler_table {
 
 		        paste::paste! {
 		            impl [<$enum_name Typed>] for $variant2 {
+						type Enum = $enum_name;
 		                type Request = [<$variant2 Req>];
 		                type Response = [<$variant2 Res>];
+						type Fut = PinBoxFutureStatic<Self::Response>;
 
 		                fn value() -> $value_type {
 		                    Self::VALUE
@@ -58,15 +59,15 @@ macro_rules! static_handler_table {
 		        }
 		    };
 		}
-		
+
 		#[allow(non_camel_case_types)]
         $(#[$attr])*
         $vis enum $enum_name {
             $(
-            	$variant = $variant_value,
+            	$variant/* = $variant_value*/,
 	    	)+
         }
-		
+
 		impl $enum_name {
 	        fn value(&self) -> $value_type {
 	            match self {
@@ -76,7 +77,7 @@ macro_rules! static_handler_table {
 	            }
 	        }
 	    }
-		
+
 		paste::paste! {
 			impl TryInto<$enum_name> for $value_type {
 				type Error = $error_type;
@@ -86,21 +87,23 @@ macro_rules! static_handler_table {
 						$(
 							$variant_value => Ok($enum_name::$variant),
 						)*
-						_ => Err(format!("Invalid function ID: {} <{}>", self, stringify!($value_type)).into()),
+						_ => Err($try_into_err(self)),
 					}
 				}
 			}
-		
+
 			$vis trait [<$enum_name Typed>]: Send + Sync {
+				type Enum;
 				type Request: serde::Serialize;
 				type Response: serde::de::DeserializeOwned;
-				
+				type Fut: Future<Output = Self::Response> + Send + 'static;
+
 				fn value() -> $value_type;
 			}
-		
+
 			$vis mod [<$enum_name:snake _typed>] {
 				use super::*;
-				
+
 				$(
 			    	__impl!($variant, $variant_value, EnumVariantValueCheck);
 				)?
@@ -139,7 +142,7 @@ macro_rules! static_handler_table {
 			});
 			handlers
 		});
-		
+
 		#[inline]
 		pub fn get_handler(variant: $enum_name) -> Option<&'static dyn RpcHandler> {
 			HANDLER_TABLE.get(variant.value() as usize)?.as_ref().map(|boxed| boxed.as_ref())
@@ -148,15 +151,15 @@ macro_rules! static_handler_table {
 }
 
 static_handler_table! {
-	#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-	pub FuncId -> <u32, BoxStdError> {
-		PrintTest => 1,
-		Write => 2,
-		Read => 3,
-		Vote => 6,
-		AppendEntries => 7,
-		InstallFullSnapshot => 8,
-	}
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+    pub FuncId -> <u32, CoreRaftError> {
+        PrintTest => 1,
+        Write => 2,
+        Read => 3,
+        Vote => 6,
+        AppendEntries => 7,
+        InstallFullSnapshot => 8,
+    }, CoreRaftError::RpcInvalidFuncId
 }
 
 /*
@@ -189,22 +192,22 @@ pub trait RpcHandler: Send + Sync {
 // 这里使用泛型 F 来适配异步函数
 pub struct RpcMethod<T, Fut>
 where
-	T: FuncIdTyped,
-    Fut: Future<Output = T::Response> + Send,
+    T: FuncIdTyped,
+    Fut: Future<Output = T::Response>,
 {
     // 注意：Rust 的纯函数指针 fn 不能直接是 async 的
     // 我们这里让 func 返回一个 Future
     func: fn(Arc<CacheCatApp>, T::Request) -> Fut,
-	_phantom: PhantomData<T>,
+    _phantom: PhantomData<T>,
 }
 
 #[async_trait]
 impl<T, Fut> RpcHandler for RpcMethod<T, Fut>
 where
-	T: FuncIdTyped,
-    T::Request: Send + DeserializeOwned + 'static,
-    T::Response: Send + Serialize + 'static,
-    Fut: Future<Output = T::Response> + Send + 'static,
+    T: FuncIdTyped,
+    Fut: Future<Output = T::Response> + Send,
+    T::Request: DeserializeOwned,
+    T::Response: Serialize,
 {
     async fn call(&self, app: Arc<CacheCatApp>, data: Bytes) -> Bytes {
         // 反序列化
@@ -230,19 +233,20 @@ async fn write(app: Arc<CacheCatApp>, req: WriteReq) -> WriteRes {
 async fn read(app: Arc<CacheCatApp>, req: ReadReq) -> ReadRes {
     let kvs = app.key_values.lock().await;
     let value = kvs.get(&req.data);
-    ReadRes { value: value.map(|v| v.to_string()) }
+    ReadRes {
+        value: value.map(|v| v.to_string()),
+    }
 }
 
 async fn vote(app: Arc<CacheCatApp>, req: VoteReq) -> VoteRes {
     // openraft 的 vote 是异步的
-    VoteRes { value: app.raft.vote(req.data).await.expect("Raft vote failed") }
+    VoteRes {
+        value: app.raft.vote(req.data).await.expect("Raft vote failed"),
+    }
 }
 
 //理论上只有从节点会被调用这个方法
-async fn append_entries(
-    app: Arc<CacheCatApp>,
-    req: AppendEntriesReq,
-) -> AppendEntriesRes {
+async fn append_entries(app: Arc<CacheCatApp>, req: AppendEntriesReq) -> AppendEntriesRes {
     let start = Instant::now();
     let e = req.data.entries.is_empty();
     let res = app
@@ -267,9 +271,10 @@ async fn install_full_snapshot(
         snapshot: req.snapshot.clone(),
     };
     InstallFullSnapshotRes {
-		value: app.raft
-        	.install_full_snapshot(req.vote, snapshot)
-        	.await
-        	.expect("Raft install_snapshot failed")
-		}
+        value: app
+            .raft
+            .install_full_snapshot(req.vote, snapshot)
+            .await
+            .expect("Raft install_snapshot failed"),
+    }
 }

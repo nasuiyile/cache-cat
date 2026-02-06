@@ -259,7 +259,8 @@ impl RaftLogStorage<TypeConfig> for RocksLogStore {
             let mut cache = self.cache.lock().await;
             for entry in entries {
                 let id = id_to_bin(entry.index());
-                let val = bincode2::serialize(&entry).map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
+                let val = bincode2::serialize(&entry)
+                    .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
                 //self.db.put_cf(self.cf_logs(), id, val).map_err(|e| io::Error::other(e.to_string()))?;
                 batch.put_cf(self.cf_logs(), id, val);
                 cache.put(entry.index(), entry);
@@ -276,7 +277,10 @@ impl RaftLogStorage<TypeConfig> for RocksLogStore {
         let db = self.db.clone();
         tokio::task::spawn_blocking(move || {
             //let res = db.flush_wal(true).map_err(io::Error::other);
-            let res = db.write(batch).and_then(|_| db.flush_wal(true)).map_err(io::Error::other);
+            let res = db
+                .write(batch)
+                .and_then(|_| db.flush_wal(true))
+                .map_err(io::Error::other);
             callback.io_completed(res);
             let elapsed = start.elapsed();
             //tracing::info!("rocksdb append elapsed: {:?}", elapsed);
@@ -385,7 +389,9 @@ fn id_to_bin(id: u64) -> [u8; 8] {
 #[inline]
 fn bin_to_id(buf: &[u8]) -> u64 {
     //(&buf[0..8]).read_u64::<BigEndian>().unwrap()
-    u64::from_be_bytes([buf[0], buf[1], buf[2], buf[3], buf[4], buf[5], buf[6], buf[7]])
+    u64::from_be_bytes([
+        buf[0], buf[1], buf[2], buf[3], buf[4], buf[5], buf[6], buf[7],
+    ])
 }
 
 fn read_logs_err(e: impl Error + 'static) -> io::Error {

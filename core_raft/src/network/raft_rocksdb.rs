@@ -1,15 +1,16 @@
+use crate::error::CoreRaftResult;
 use crate::network::model::{WriteReq, WriteResRaft};
 use crate::network::network::NetworkFactory;
 use crate::server::handler::model::SetReq;
 use crate::server::handler::rpc;
 use crate::store::rocks_store::new_storage;
+use bytes::Bytes;
 use openraft::{BasicNode, Config};
 use std::collections::{BTreeMap, HashMap};
 use std::io::Cursor;
 use std::path::Path;
 use std::sync::{Arc, LazyLock};
 use tokio::sync::Mutex;
-use bytes::Bytes;
 
 openraft::declare_raft_types!(
     /// Declare the type configuration for example K/V store.
@@ -18,13 +19,18 @@ openraft::declare_raft_types!(
         R = WriteResRaft,
         Entry = openraft::Entry<TypeConfig>,
         SnapshotData = Bytes,
-        
+
 );
 //实现是纯内存的暂时
 pub type LogStore = crate::store::rocks_log_store::RocksLogStore;
 pub type StateMachineStore = crate::store::rocks_store::StateMachineStore;
 pub type Raft = openraft::Raft<TypeConfig>;
-pub async fn start_raft_app<P>(node_id: u64, dir: P, addr: String, tx: tokio::sync::oneshot::Sender<()>) -> std::io::Result<()>
+pub async fn start_raft_app<P>(
+    node_id: u64,
+    dir: P,
+    addr: String,
+    tx: tokio::sync::oneshot::Sender<()>,
+) -> CoreRaftResult<()>
 where
     P: AsRef<Path>,
 {

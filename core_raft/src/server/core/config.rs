@@ -2,6 +2,8 @@ use serde::{Deserialize, Serialize};
 use std::fs;
 use std::sync::OnceLock;
 
+use crate::error::CoreRaftResult;
+
 #[derive(Debug, Deserialize, Serialize)]
 pub struct ServerConfig {
     pub port: u16,
@@ -9,7 +11,7 @@ pub struct ServerConfig {
 }
 
 impl ServerConfig {
-    pub fn from_file(path: &str) -> Result<Self, Box<dyn std::error::Error>> {
+    pub fn from_file(path: &str) -> CoreRaftResult<Self> {
         let content = fs::read_to_string(path)?;
         let config: ServerConfig = serde_yaml::from_str(&content)?;
         Ok(config)
@@ -19,11 +21,11 @@ impl ServerConfig {
 pub static CONFIG: OnceLock<ServerConfig> = OnceLock::new();
 
 // 初始化函数
-pub fn init_config(path: &str) -> Result<(), Box<dyn std::error::Error>> {
+pub fn init_config(path: &str) -> CoreRaftResult<()> {
     let config = ServerConfig::from_file(path)?;
     CONFIG
         .set(config)
-        .map_err(|_| "Config already initialized".into())
+        .map_err(|_| crate::error::CoreRaftError::ConfigAlreadyInitialized)
 }
 
 // 获取配置的辅助函数

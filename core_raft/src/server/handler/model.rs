@@ -1,14 +1,17 @@
+use crate::network::raft_rocksdb::TypeConfig;
+use bytes::Bytes;
 use openraft::alias::VoteOf;
-use openraft::{Snapshot, SnapshotMeta, raft::{
-    AppendEntriesRequest, AppendEntriesResponse, ClientWriteResponse, InstallSnapshotRequest,
-    InstallSnapshotResponse, SnapshotResponse, VoteRequest, VoteResponse,
-}};
+use openraft::{
+    Snapshot, SnapshotMeta,
+    raft::{
+        AppendEntriesRequest, AppendEntriesResponse, ClientWriteResponse, InstallSnapshotRequest,
+        InstallSnapshotResponse, SnapshotResponse, VoteRequest, VoteResponse,
+    },
+};
 use serde::{Deserialize, Serialize};
 use std::fmt;
 use std::io::Cursor;
 use std::sync::Arc;
-use crate::network::raft_rocksdb::TypeConfig;
-use bytes::Bytes;
 
 #[derive(Serialize, Deserialize, Debug, PartialEq)]
 pub struct PrintTestReq {
@@ -84,7 +87,7 @@ pub struct InstallFullSnapshotRes {
     pub value: SnapshotResponse<TypeConfig>,
 }
 
-#[derive(Serialize, Deserialize, Debug/*, PartialEq*/)]
+#[derive(Serialize, Deserialize, Debug /*, PartialEq*/)]
 pub struct AppendEntriesReq {
     pub data: AppendEntriesRequest<TypeConfig>,
 }

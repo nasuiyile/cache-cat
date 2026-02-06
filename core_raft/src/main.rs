@@ -1,3 +1,4 @@
+use core_raft::error::CoreRaftResult;
 use core_raft::network;
 use core_raft::network::raft_rocksdb::TypeConfig;
 use mimalloc::MiMalloc;
@@ -6,14 +7,14 @@ use openraft::alias::AsyncRuntimeOf;
 use std::time::Duration;
 use std::{fs, thread};
 use tempfile::TempDir;
-use tracing_subscriber::EnvFilter;
 use tokio::sync::oneshot;
+use tracing_subscriber::EnvFilter;
 
 #[global_allocator]
 static GLOBAL: MiMalloc = MiMalloc;
 
 #[tokio::main]
-async fn main() -> Result<(), Box<dyn std::error::Error>> {
+async fn main() -> CoreRaftResult<()> {
     // let base = r"E:\tmp\raft\rocks";
     let base_dir = tempfile::tempdir()?;
     let base = base_dir.path();
@@ -36,7 +37,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .init();
 
     let num_cpus = std::thread::available_parallelism()?.get();
-    let ((tx1, rx1), (tx2, rx2), (tx3, rx3)) = (oneshot::channel::<()>(), oneshot::channel::<()>(), oneshot::channel::<()>());
+    let ((tx1, rx1), (tx2, rx2), (tx3, rx3)) = (
+        oneshot::channel::<()>(),
+        oneshot::channel::<()>(),
+        oneshot::channel::<()>(),
+    );
     let h1 = thread::spawn(move || {
         let mut rt = AsyncRuntimeOf::<TypeConfig>::new(num_cpus);
         let _ = rt.block_on(async move {
@@ -45,7 +50,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 d1.path(),
                 String::from("127.0.0.1:3001"),
                 tx1,
-            ).await.unwrap();
+            )
+            .await
+            .unwrap();
         });
     });
     let h2 = thread::spawn(move || {
@@ -57,7 +64,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 d2.path(),
                 String::from("127.0.0.1:3002"),
                 tx2,
-            ).await.unwrap();
+            )
+            .await
+            .unwrap();
         });
     });
     let h3 = thread::spawn(move || {
@@ -69,7 +78,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 d3.path(),
                 String::from("127.0.0.1:3003"),
                 tx3,
-            ).await.unwrap();
+            )
+            .await
+            .unwrap();
         });
     });
 
