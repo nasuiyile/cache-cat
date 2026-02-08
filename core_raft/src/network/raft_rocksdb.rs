@@ -1,32 +1,15 @@
 use crate::network::model::{Request, Response};
 use crate::network::network::NetworkFactory;
-use crate::network::node::{App, CacheCatApp};
-use crate::server::handler::model::SetReq;
+use crate::network::node::{App, CacheCatApp, NodeId, create_node};
 use crate::server::handler::rpc;
 use crate::store::rocks_store::new_storage;
 use openraft::{BasicNode, Config};
-use std::collections::{BTreeMap, HashMap};
-use std::io::Cursor;
+use std::collections::BTreeMap;
+
+use crate::network::router::Router;
 use std::path::Path;
-use std::sync::{Arc, LazyLock};
-use tokio::sync::Mutex;
+use std::sync::Arc;
 
-openraft::declare_raft_types!(
-    /// Declare the type configuration for example K/V store.
-    pub TypeConfig:
-        D = Request,
-        R = Response,
-        Entry = openraft::Entry<TypeConfig>,
-        SnapshotData = Cursor<Vec<u8>>,
-        NodeId=u16,
-);
-pub type GroupId = u16;
-pub type NodeId = u16;
-
-//实现是纯内存的暂时
-pub type LogStore = crate::store::rocks_log_store::RocksLogStore;
-pub type StateMachineStore = crate::store::rocks_store::StateMachineStore;
-pub type Raft = openraft::Raft<TypeConfig>;
 pub async fn start_raft_app<P>(node_id: NodeId, dir: P, addr: String) -> std::io::Result<()>
 where
     P: AsRef<Path>,
@@ -84,5 +67,13 @@ where
     }
     // 根据node_id决定完整的集群配置
 
-    rpc::start_server(App::new(vec![app]), addr).await
+    rpc::start_server(App::new(vec![Box::new(app)]), addr).await
+}
+pub async fn start_multi_raft_app<P>(node_id: NodeId, dir: P, addr: String) -> std::io::Result<()>
+where
+    P: AsRef<Path>,
+{
+    let node = create_node(&addr, node_id, dir).await;
+    let apps: Vec<Box<CacheCatApp>> = node.groups.into_values().map(Box::new).collect();
+    rpc::start_server(App::new(apps), addr).await
 }

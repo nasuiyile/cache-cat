@@ -1,4 +1,3 @@
-use crate::network::raft_rocksdb::{GroupId, NodeId, TypeConfig};
 use crate::network::router::Router;
 use crate::server::client::client::RpcMultiClient;
 use crate::server::handler::model::{
@@ -17,6 +16,7 @@ use openraft_multi::{GroupNetworkAdapter, GroupNetworkFactory};
 use serde::Serialize;
 use serde::de::DeserializeOwned;
 use std::time::Instant;
+use crate::network::node::{NodeId, TypeConfig};
 
 pub struct NetworkFactory {}
 impl RaftNetworkFactory<TypeConfig> for NetworkFactory {
@@ -66,7 +66,7 @@ impl RaftNetworkV2<TypeConfig> for TcpNetwork {
         let start = Instant::now();
         let is_heartbeat = rpc.entries.is_empty();
         let req = AppendEntriesReq {
-            append_entries_req: rpc,
+            append_entries: rpc,
             group_id: 0,
         };
         let res: AppendEntriesResponse<TypeConfig> = self.client.call(7, req).await.unwrap();

@@ -5,7 +5,6 @@ use std::path::Path;
 use std::sync::Arc;
 
 use crate::network::model::{Request, Response};
-use crate::network::raft_rocksdb::TypeConfig;
 use crate::server::handler::model::SetRes;
 use crate::store::rocks_log_store::RocksLogStore;
 use futures::Stream;
@@ -22,6 +21,7 @@ use rocksdb::Options;
 use serde::Deserialize;
 use serde::Serialize;
 use tokio::sync::Mutex;
+use crate::network::node::TypeConfig;
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct StoredSnapshot {

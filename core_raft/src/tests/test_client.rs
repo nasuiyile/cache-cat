@@ -1,10 +1,10 @@
 use crate::network::model::Request;
-use crate::network::raft_rocksdb::TypeConfig;
 use crate::server::client::client::RpcMultiClient;
 use crate::server::handler::model::{PrintTestReq, PrintTestRes, SetReq};
 use openraft::raft::ClientWriteResponse;
 use std::time::{Duration, Instant};
 use tokio::time;
+use crate::network::node::TypeConfig;
 
 #[tokio::test]
 async fn test_add() {

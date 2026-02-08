@@ -1,20 +1,17 @@
-use crate::network::network::{NetworkFactory, TcpNetwork};
-use crate::network::raft_rocksdb::{GroupId, NodeId, TypeConfig};
 use crate::server::client::client::RpcMultiClient;
-use crate::server::handler::model::AppendEntriesReq;
-use futures::future::ok;
+use crate::server::handler::model::{AppendEntriesReq, InstallFullSnapshotReq, VoteReq};
 use openraft::alias::VoteOf;
 use openraft::error::{RPCError, ReplicationClosed, StreamingError};
 use openraft::network::RPCOption;
 use openraft::raft::{
     AppendEntriesRequest, AppendEntriesResponse, SnapshotResponse, VoteRequest, VoteResponse,
 };
-use openraft::{OptionalSend, RaftNetworkFactory, RaftNetworkV2, Snapshot};
+use openraft::{OptionalSend, RaftNetworkFactory, Snapshot};
 use openraft_multi::{GroupNetworkAdapter, GroupNetworkFactory, GroupRouter};
 use std::collections::HashMap;
-use std::ops::Deref;
 use std::sync::Arc;
 use tokio::sync::RwLock;
+use crate::network::node::{GroupId, NodeId, TypeConfig};
 
 pub type MultiNetworkFactory = GroupNetworkFactory<Router, GroupId>;
 impl RaftNetworkFactory<TypeConfig> for MultiNetworkFactory {
@@ -57,7 +54,7 @@ impl GroupRouter<TypeConfig, GroupId> for Router {
         option: RPCOption,
     ) -> Result<AppendEntriesResponse<TypeConfig>, RPCError<TypeConfig>> {
         let req = AppendEntriesReq {
-            append_entries_req: rpc,
+            append_entries: rpc,
             group_id,
         };
         let res = self
@@ -79,7 +76,20 @@ impl GroupRouter<TypeConfig, GroupId> for Router {
         rpc: VoteRequest<TypeConfig>,
         option: RPCOption,
     ) -> Result<VoteResponse<TypeConfig>, RPCError<TypeConfig>> {
-        todo!()
+        let req = VoteReq {
+            vote: rpc,
+            group_id,
+        };
+        let res = self
+            .nodes
+            .read()
+            .await
+            .get(&target)
+            .unwrap()
+            .call(6, req)
+            .await
+            .unwrap();
+        Ok(res)
     }
 
     async fn full_snapshot(
@@ -91,6 +101,20 @@ impl GroupRouter<TypeConfig, GroupId> for Router {
         cancel: impl Future<Output = ReplicationClosed> + OptionalSend + 'static,
         option: RPCOption,
     ) -> Result<SnapshotResponse<TypeConfig>, StreamingError<TypeConfig>> {
-        todo!()
+        let data = snapshot.snapshot.into_inner();
+        let req = InstallFullSnapshotReq {
+            vote,
+            snapshot_meta: snapshot.meta,
+            snapshot: data,
+            group_id,
+        };
+        self.nodes
+            .read()
+            .await
+            .get(&target)
+            .unwrap()
+            .call(8, req)
+            .await
+            .unwrap()
     }
 }

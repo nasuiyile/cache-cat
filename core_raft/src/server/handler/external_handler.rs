@@ -1,6 +1,5 @@
 use crate::network::model::Request;
-use crate::network::node::{App, CacheCatApp, get_app, get_group};
-use crate::network::raft_rocksdb::TypeConfig;
+use crate::network::node::{App, CacheCatApp, get_app, get_group, TypeConfig};
 use crate::server::handler::model::*;
 use async_trait::async_trait;
 use bytes::Bytes;
@@ -108,10 +107,10 @@ async fn vote(app: App, req: VoteReq) -> VoteResponse<TypeConfig> {
 //理论上只有从节点会被调用这个方法
 async fn append_entries(app: App, req: AppendEntriesReq) -> AppendEntriesResponse<TypeConfig> {
     let start = Instant::now();
-    let e = req.append_entries_req.entries.is_empty();
+    let e = req.append_entries.entries.is_empty();
     let res = get_app(&app, req.group_id)
         .raft
-        .append_entries(req.append_entries_req)
+        .append_entries(req.append_entries)
         .await
         .expect("Raft append_entries failed");
     let elapsed = start.elapsed();

@@ -1,4 +1,3 @@
-use crate::network::raft_rocksdb::TypeConfig;
 use byteorder::BigEndian;
 use byteorder::ReadBytesExt;
 use byteorder::WriteBytesExt;
@@ -28,6 +27,7 @@ use std::ops::RangeBounds;
 use std::sync::Arc;
 use std::time::Instant;
 use tokio::sync::{Mutex, MutexGuard, RwLock};
+use crate::network::node::TypeConfig;
 
 const MEM_LOG_SIZE: usize = 2000;
 #[derive(Debug, Clone)]

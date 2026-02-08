@@ -1,4 +1,3 @@
-use crate::network::raft_rocksdb::{GroupId, TypeConfig};
 use openraft::alias::VoteOf;
 use openraft::raft::{AppendEntriesRequest, VoteRequest};
 use openraft::{Snapshot, SnapshotMeta};
@@ -7,6 +6,7 @@ use std::fmt;
 use std::hash::{Hash, Hasher};
 use std::io::Cursor;
 use std::sync::Arc;
+use crate::network::node::{GroupId, TypeConfig};
 
 #[derive(Serialize, Deserialize, Debug, PartialEq)]
 pub struct PrintTestReq {
@@ -76,7 +76,7 @@ pub struct ExistsRes {
 }
 #[derive(Serialize, Deserialize, Debug)]
 pub struct AppendEntriesReq {
-    pub append_entries_req: AppendEntriesRequest<TypeConfig>,
+    pub append_entries: AppendEntriesRequest<TypeConfig>,
     pub group_id: GroupId,
 }
 #[derive(Serialize, Deserialize, Debug)]

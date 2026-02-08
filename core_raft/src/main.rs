@@ -1,5 +1,5 @@
 use core_raft::network;
-use core_raft::network::raft_rocksdb::TypeConfig;
+use core_raft::network::node::TypeConfig;
 use mimalloc::MiMalloc;
 use openraft::AsyncRuntime;
 use openraft::alias::AsyncRuntimeOf;
