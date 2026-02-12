@@ -33,6 +33,9 @@ struct Args {
 
     #[arg(short = 'e', long, default_value = "127.0.0.1:3003")]
     endpoints: String,
+
+    #[arg(short = 'h', long, default_value_t = 100000)]
+    warmup: usize,
 }
 
 #[tokio::main]
@@ -46,6 +49,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             ">>> 吞吐量测试 (Throughput) - {}并发/{}请求 <<<",
             args.clients, args.total
         );
+        println!(">>> 预热阶段 - 发送 {} 个请求 <<<", args.warmup);
+        run_engine(
+            400,
+            args.warmup,
+            args.endpoints.clone(),
+            args.op.clone(),
+            true,
+        )
+        .await;
+        println!(">>> 预热完成，正式测试即将开始 <<<");
     }
     println!(
         "====== 性能测试开始 | Target: {} | Mode: {} | Op: {} ======",
@@ -53,15 +66,21 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     );
 
     if args.mode == "latency" {
-        run_engine(1, args.count, args.endpoints, args.op).await;
+        run_engine(1, args.count, args.endpoints, args.op, false).await;
     } else {
-        run_engine(args.clients, args.total, args.endpoints, args.op).await;
+        run_engine(args.clients, args.total, args.endpoints, args.op, false).await;
     }
 
     Ok(())
 }
 
-async fn run_engine(client_num: usize, total_tasks: usize, endpoints: String, op_type: String) {
+async fn run_engine(
+    client_num: usize,
+    total_tasks: usize,
+    endpoints: String,
+    op_type: String,
+    is_warmup: bool,
+) {
     let latencies = Arc::new(Mutex::new(Vec::with_capacity(total_tasks)));
     let ops = Arc::new(AtomicI64::new(0));
     let start_time = Instant::now();
@@ -70,30 +89,31 @@ async fn run_engine(client_num: usize, total_tasks: usize, endpoints: String, op
     // 进度条监控协程
     let ops_clone = Arc::clone(&ops);
     let total_tasks_f = total_tasks as f64;
+    if (!is_warmup) {
+        tokio::spawn(async move {
+            // [修改点] 将定时器设置为 5秒
+            // 这会极大减少 I/O 刷新操作，且 await 期间不消耗 CPU
+            let mut interval = tokio::time::interval(Duration::from_secs(5));
 
-    tokio::spawn(async move {
-        // [修改点] 将定时器设置为 5秒
-        // 这会极大减少 I/O 刷新操作，且 await 期间不消耗 CPU
-        let mut interval = tokio::time::interval(Duration::from_secs(5));
+            loop {
+                interval.tick().await; // 异步等待，不占资源
 
-        loop {
-            interval.tick().await; // 异步等待，不占资源
-
-            let curr = ops_clone.load(Ordering::Relaxed);
-            if curr >= total_tasks as i64 {
-                break;
+                let curr = ops_clone.load(Ordering::Relaxed);
+                if curr >= total_tasks as i64 {
+                    break;
+                }
+                print!(
+                    "\r进度: {}/{} ({:.1}%) | 实时TPS: {:.2}",
+                    curr,
+                    total_tasks,
+                    (curr as f64 / total_tasks_f) * 100.0,
+                    curr as f64 / start_time.elapsed().as_secs_f64()
+                );
+                use std::io::{self, Write};
+                io::stdout().flush().unwrap();
             }
-            print!(
-                "\r进度: {}/{} ({:.1}%) | 实时TPS: {:.2}",
-                curr,
-                total_tasks,
-                (curr as f64 / total_tasks_f) * 100.0,
-                curr as f64 / start_time.elapsed().as_secs_f64()
-            );
-            use std::io::{self, Write};
-            io::stdout().flush().unwrap();
-        }
-    });
+        });
+    }
 
     let tasks_per_client = total_tasks / client_num;
 
@@ -172,7 +192,9 @@ async fn run_engine(client_num: usize, total_tasks: usize, endpoints: String, op
     let elapsed = start_time.elapsed();
     print!("\r"); // 清理进度条行
     let final_latencies = latencies.lock().await;
-    print_stats(&final_latencies, elapsed, total_tasks);
+    if (!is_warmup) {
+        print_stats(&final_latencies, elapsed, total_tasks);
+    }
 }
 
 fn print_stats(d: &[Duration], elapsed: Duration, total_req: usize) {
