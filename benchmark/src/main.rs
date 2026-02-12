@@ -42,22 +42,44 @@ struct Args {
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args = Args::parse();
 
+    // 1. 计算所需的最大连接数
+    // 吞吐量模式需要 max(预热并发, 测试并发)
+    // 延迟模式只需要 1 个连接
+    let max_connections = if args.mode == "latency" {
+        1
+    } else {
+        args.clients
+    };
+
+    println!(">>> 初始化连接池: {} 个连接 <<<", max_connections);
+
+    // 2. 【核心修改】提前初始化客户端，生命周期提升至 main
+    // 使用 Arc 包装，以便在多个协程中共享所有权
+    let client = Arc::new(
+        RpcMultiClient::connect_with_num(&args.endpoints, max_connections)
+            .await
+            .expect("连接失败，请检查端点是否可用"),
+    );
+
     if args.mode == "latency" {
-        println!(">>> 延迟测试 (Latency) - 请求数: {} <<<", args.count);
+        println!(">>> 延迟测试 - 请求数: {} <<<", args.count);
     } else {
         println!(
-            ">>> 吞吐量测试 (Throughput) - {}并发/{}请求 <<<",
+            ">>> 吞吐量测试 - {}并发/{}请求 <<<",
             args.clients, args.total
         );
         println!(">>> 预热阶段 - 发送 {} 个请求 <<<", args.warmup);
+
+        // 3. 预热阶段复用连接
         run_engine(
+            Arc::clone(&client), // 传递 Arc 克隆
             400,
             args.warmup,
-            args.endpoints.clone(),
             args.op.clone(),
             true,
         )
         .await;
+
         println!(">>> 预热完成，正式测试即将开始 <<<");
     }
     println!(
@@ -66,18 +88,26 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     );
 
     if args.mode == "latency" {
-        run_engine(1, args.count, args.endpoints, args.op, false).await;
+        run_engine(Arc::clone(&client), 1, args.count, args.op, false).await;
     } else {
-        run_engine(args.clients, args.total, args.endpoints, args.op, false).await;
+        run_engine(
+            Arc::clone(&client),
+            args.clients,
+            args.total,
+            args.op,
+            false,
+        )
+        .await;
     }
 
     Ok(())
 }
 
+// 修改签名：接收 Arc<RpcMultiClient> 而不是 endpoints 字符串
 async fn run_engine(
+    client: Arc<RpcMultiClient>,
     client_num: usize,
     total_tasks: usize,
-    endpoints: String,
     op_type: String,
     is_warmup: bool,
 ) {
@@ -89,15 +119,11 @@ async fn run_engine(
     // 进度条监控协程
     let ops_clone = Arc::clone(&ops);
     let total_tasks_f = total_tasks as f64;
-    if (!is_warmup) {
+    if !is_warmup {
         tokio::spawn(async move {
-            // [修改点] 将定时器设置为 5秒
-            // 这会极大减少 I/O 刷新操作，且 await 期间不消耗 CPU
             let mut interval = tokio::time::interval(Duration::from_secs(5));
-
             loop {
-                interval.tick().await; // 异步等待，不占资源
-
+                interval.tick().await;
                 let curr = ops_clone.load(Ordering::Relaxed);
                 if curr >= total_tasks as i64 {
                     break;
@@ -119,8 +145,12 @@ async fn run_engine(
 
     for cid in 0..client_num {
         let latencies_c = Arc::clone(&latencies);
-        let ops_c = Arc::clone(&ops);
-        let eps = endpoints.clone();
+        let ops_c: Arc<AtomicI64> = Arc::clone(&ops);
+
+        // 4. 【核心修改】直接克隆 Arc，无需重新建立 TCP 连接
+        // 每个任务持有客户端的一个引用，底层共享同一个连接池
+        let client_c = Arc::clone(&client);
+
         let op = op_type.clone();
         let mode = if client_num == 1 {
             "latency"
@@ -129,57 +159,54 @@ async fn run_engine(
         };
 
         let handle = tokio::spawn(async move {
-            if let Ok(mut client) = RpcMultiClient::connect_with_num(&eps, 1).await {
-                // 预分配本地向量，避免全局锁竞争
-                let mut local_latencies = Vec::with_capacity(tasks_per_client);
-                for i in 0..tasks_per_client {
-                    let start = Instant::now();
-                    let success;
+            // 移除了原来的 connect 逻辑
+            // 预分配本地向量
+            let mut local_latencies = Vec::with_capacity(tasks_per_client);
 
-                    if op == "write" {
-                        let res: Result<ClientWriteResponse<TypeConfig>, _> = client
-                            .call(
-                                2,
-                                Request::Set(SetReq {
-                                    key: (&i.to_string()).into(),
-                                    value: Vec::from("xxx"),
-                                    ex_time: 0,
-                                }),
-                            )
-                            .await;
-                        success = res.is_ok();
-                    } else {
-                        let res: Result<PrintTestRes, _> = client
-                            .call(
-                                1,
-                                PrintTestReq {
-                                    message: String::from("xxx"),
-                                },
-                            )
-                            .await;
-                        success = res.is_ok();
-                    }
+            for i in 0..tasks_per_client {
+                let start = Instant::now();
+                let success;
 
-                    if success {
-                        let duration = start.elapsed();
-                        // 写入本地，无锁
-                        local_latencies.push(duration);
-                        // 原子计数，Relaxed 模式最低开销
-                        ops_c.fetch_add(1, Ordering::Relaxed);
-                    }
-
-                    if mode == "latency" {
-                        sleep(Duration::from_millis(2)).await;
-                    }
+                // 使用已建立的连接发送请求
+                if op == "write" {
+                    let res: Result<ClientWriteResponse<TypeConfig>, _> = client_c
+                        .call(
+                            2,
+                            Request::Set(SetReq {
+                                key: (&i.to_string()).into(),
+                                value: Vec::from("xxx"),
+                                ex_time: 0,
+                            }),
+                        )
+                        .await;
+                    success = res.is_ok();
+                } else {
+                    let res: Result<PrintTestRes, _> = client_c
+                        .call(
+                            1,
+                            PrintTestReq {
+                                message: String::from("xxx"),
+                            },
+                        )
+                        .await;
+                    success = res.is_ok();
                 }
 
-                // 任务完成后，一次性合并数据，大幅降低 Mutex 争用
-                if !local_latencies.is_empty() {
-                    let mut global = latencies_c.lock().await;
-                    global.extend(local_latencies);
+                if success {
+                    let duration = start.elapsed();
+                    local_latencies.push(duration);
+                    ops_c.fetch_add(1, Ordering::Relaxed);
                 }
-            } else {
-                eprintln!("客户端连接失败: {}", eps);
+
+                if mode == "latency" {
+                    sleep(Duration::from_millis(2)).await;
+                }
+            }
+
+            // 合并数据
+            if !local_latencies.is_empty() {
+                let mut global = latencies_c.lock().await;
+                global.extend(local_latencies);
             }
         });
         handles.push(handle);
@@ -190,9 +217,9 @@ async fn run_engine(
     }
 
     let elapsed = start_time.elapsed();
-    print!("\r"); // 清理进度条行
+    print!("\r");
     let final_latencies = latencies.lock().await;
-    if (!is_warmup) {
+    if !is_warmup {
         print_stats(&final_latencies, elapsed, total_tasks);
     }
 }
@@ -216,17 +243,17 @@ fn print_stats(d: &[Duration], elapsed: Duration, total_req: usize) {
         "平均吞吐量:   {:.2} req/s",
         sorted_d.len() as f64 / elapsed.as_secs_f64()
     );
-    println!("\n--- 延迟分布 (Latency) ---");
-    println!("最小值 (Min): {:?}", sorted_d[0]);
-    println!("平均值 (Avg): {:?}", avg);
+    println!("\n--- 延迟分布 ---");
+    println!("最小值: {:?}", sorted_d[0]);
+    println!("平均值: {:?}", avg);
     println!(
-        "中位数 (P50): {:?}",
+        "中位数: {:?}",
         sorted_d[(sorted_d.len() as f64 * 0.5) as usize]
     );
     println!(
-        "九九线 (P99): {:?}",
+        "P99:    {:?}",
         sorted_d[(sorted_d.len() as f64 * 0.99) as usize]
     );
-    println!("最大值 (Max): {:?}", sorted_d[sorted_d.len() - 1]);
+    println!("最大值: {:?}", sorted_d[sorted_d.len() - 1]);
     println!("------------------------------------------");
 }
