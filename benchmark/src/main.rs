@@ -73,7 +73,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         // 3. 预热阶段复用连接
         run_engine(
             Arc::clone(&client), // 传递 Arc 克隆
-            400,
+            args.clients,
             args.warmup,
             args.op.clone(),
             true,
