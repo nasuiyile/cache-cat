@@ -5,7 +5,7 @@ use core_raft::server::client::client::RpcMultiClient;
 use core_raft::server::handler::model::{PrintTestReq, PrintTestRes, SetReq};
 use openraft::raft::ClientWriteResponse;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicI64, Ordering};
+use std::sync::atomic::{AtomicI64, AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 use tokio::sync::Mutex;
 use tokio::time::sleep;
@@ -42,9 +42,6 @@ struct Args {
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args = Args::parse();
 
-    // 1. 计算所需的最大连接数
-    // 吞吐量模式需要 max(预热并发, 测试并发)
-    // 延迟模式只需要 1 个连接
     let max_connections = if args.mode == "latency" {
         1
     } else {
@@ -53,8 +50,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     println!(">>> 初始化连接池: {} 个连接 <<<", max_connections);
 
-    // 2. 【核心修改】提前初始化客户端，生命周期提升至 main
-    // 使用 Arc 包装，以便在多个协程中共享所有权
     let client = Arc::new(
         RpcMultiClient::connect_with_num(&args.endpoints, max_connections)
             .await
@@ -70,9 +65,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         );
         println!(">>> 预热阶段 - 发送 {} 个请求 <<<", args.warmup);
 
-        // 3. 预热阶段复用连接
         run_engine(
-            Arc::clone(&client), // 传递 Arc 克隆
+            Arc::clone(&client),
             args.clients,
             args.warmup,
             args.op.clone(),
@@ -103,7 +97,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
-// 修改签名：接收 Arc<RpcMultiClient> 而不是 endpoints 字符串
 async fn run_engine(
     client: Arc<RpcMultiClient>,
     client_num: usize,
@@ -111,14 +104,22 @@ async fn run_engine(
     op_type: String,
     is_warmup: bool,
 ) {
-    let latencies = Arc::new(Mutex::new(Vec::with_capacity(total_tasks)));
+    // --- 优化点 1: 数据结构变更 ---
+    // 仅用于最终报告的详细数据（为了不影响实时性能，我们只在工作线程内部维护，最后合并）
+    let final_latencies = Arc::new(Mutex::new(Vec::with_capacity(total_tasks)));
+
+    // 实时统计用的原子变量 (无锁，极低开销)
     let ops = Arc::new(AtomicI64::new(0));
+    let total_dur_us = Arc::new(AtomicU64::new(0)); // 存储总微秒数
+
     let start_time = Instant::now();
     let mut handles = vec![];
 
     // 进度条监控协程
     let ops_clone = Arc::clone(&ops);
+    let dur_clone = Arc::clone(&total_dur_us);
     let total_tasks_f = total_tasks as f64;
+
     if !is_warmup {
         tokio::spawn(async move {
             let mut interval = tokio::time::interval(Duration::from_secs(5));
@@ -128,12 +129,23 @@ async fn run_engine(
                 if curr >= total_tasks as i64 {
                     break;
                 }
+
+                let curr_ops = curr as u64;
+                let curr_dur_us = dur_clone.load(Ordering::Relaxed);
+
+                let avg_str = if curr_ops > 0 {
+                    format!("{:?}", Duration::from_micros(curr_dur_us / curr_ops))
+                } else {
+                    "N/A".to_string()
+                };
+
                 print!(
-                    "\r进度: {}/{} ({:.1}%) | 实时TPS: {:.2}",
+                    "\r进度: {}/{} ({:.1}%) | 实时TPS: {:.2} | 平均延迟: {}",
                     curr,
                     total_tasks,
                     (curr as f64 / total_tasks_f) * 100.0,
-                    curr as f64 / start_time.elapsed().as_secs_f64()
+                    curr as f64 / start_time.elapsed().as_secs_f64(),
+                    avg_str
                 );
                 use std::io::{self, Write};
                 io::stdout().flush().unwrap();
@@ -143,12 +155,10 @@ async fn run_engine(
 
     let tasks_per_client = total_tasks / client_num;
 
-    for cid in 0..client_num {
-        let latencies_c = Arc::clone(&latencies);
-        let ops_c: Arc<AtomicI64> = Arc::clone(&ops);
-
-        // 4. 【核心修改】直接克隆 Arc，无需重新建立 TCP 连接
-        // 每个任务持有客户端的一个引用，底层共享同一个连接池
+    for _cid in 0..client_num {
+        let latencies_c = Arc::clone(&final_latencies);
+        let ops_c = Arc::clone(&ops);
+        let dur_c = Arc::clone(&total_dur_us); // 克隆原子变量引用
         let client_c = Arc::clone(&client);
 
         let op = op_type.clone();
@@ -159,15 +169,12 @@ async fn run_engine(
         };
 
         let handle = tokio::spawn(async move {
-            // 移除了原来的 connect 逻辑
-            // 预分配本地向量
             let mut local_latencies = Vec::with_capacity(tasks_per_client);
 
             for i in 0..tasks_per_client {
                 let start = Instant::now();
                 let success;
 
-                // 使用已建立的连接发送请求
                 if op == "write" {
                     let res: Result<ClientWriteResponse<TypeConfig>, _> = client_c
                         .call(
@@ -194,8 +201,19 @@ async fn run_engine(
 
                 if success {
                     let duration = start.elapsed();
-                    local_latencies.push(duration);
+
+                    // --- 优化点 3: 更新原子变量 ---
+                    // 累加微秒数，用于实时平均计算
+                    dur_c.fetch_add(duration.as_micros() as u64, Ordering::Relaxed);
                     ops_c.fetch_add(1, Ordering::Relaxed);
+
+                    // 仍然存入本地数组，用于最终报告的 P99 计算
+                    local_latencies.push(duration);
+
+                    if local_latencies.len() >= 1000 {
+                        let mut global = latencies_c.lock().await;
+                        global.extend(local_latencies.drain(..));
+                    }
                 }
 
                 if mode == "latency" {
@@ -203,7 +221,7 @@ async fn run_engine(
                 }
             }
 
-            // 合并数据
+            // 剩余数据刷入
             if !local_latencies.is_empty() {
                 let mut global = latencies_c.lock().await;
                 global.extend(local_latencies);
@@ -217,10 +235,11 @@ async fn run_engine(
     }
 
     let elapsed = start_time.elapsed();
-    print!("\r");
-    let final_latencies = latencies.lock().await;
+    print!("\r"); // 清除当前行的进度显示
+
     if !is_warmup {
-        print_stats(&final_latencies, elapsed, total_tasks);
+        let final_lats = final_latencies.lock().await;
+        print_stats(&final_lats, elapsed, total_tasks);
     }
 }
 
