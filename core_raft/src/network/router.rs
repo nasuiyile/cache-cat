@@ -1,7 +1,7 @@
 use crate::network::node::{GroupId, NodeId, TypeConfig};
 use crate::server::client::client::RpcMultiClient;
 use crate::server::handler::model::{AppendEntriesReq, InstallFullSnapshotReq, VoteReq};
-use bincode2::config;
+
 use openraft::alias::VoteOf;
 use openraft::error::{RPCError, ReplicationClosed, StreamingError, Unreachable};
 use openraft::network::RPCOption;
@@ -11,8 +11,8 @@ use openraft::raft::{
 use openraft::{OptionalSend, RaftNetworkFactory, Snapshot};
 use openraft_multi::{GroupNetworkAdapter, GroupNetworkFactory, GroupRouter};
 use std::collections::HashMap;
-use std::error::Error;
 use std::sync::Arc;
+use std::time::Instant;
 use tokio::sync::RwLock;
 
 pub type MultiNetworkFactory = GroupNetworkFactory<Router, GroupId>;
@@ -54,6 +54,7 @@ impl Router {
 }
 impl GroupRouter<TypeConfig, GroupId> for Router {
     //只有主节点会调用这个方法
+
     async fn append_entries(
         &self,
         target: NodeId,
@@ -65,6 +66,7 @@ impl GroupRouter<TypeConfig, GroupId> for Router {
             let i = rpc.entries.len();
             tracing::info!("send entries len:{}", i);
         }
+
         let req = AppendEntriesReq {
             append_entries: rpc,
             group_id,
@@ -82,16 +84,31 @@ impl GroupRouter<TypeConfig, GroupId> for Router {
                     target as u64
                 ))))
             }
-            Some(client) => match client.call(7, req).await {
-                Ok(r) => Ok(r),
-                Err(e) => {
-                    tracing::info!("RPC call to node {} failed: {}", target as u64, e);
-                    Err(RPCError::Unreachable(Unreachable::from_string(format!(
-                        "RPC call to node {} failed: {}",
-                        target as u64, e
-                    ))))
+            Some(client) => {
+                // ----------- 统计开始 -----------
+                let start = Instant::now();
+
+                let result = client.call(7, req).await;
+
+                let elapsed = start.elapsed();
+                tracing::info!(
+                    "RPC call slave to node {} took {:?}",
+                    target as u64,
+                    elapsed
+                );
+                // ----------- 统计结束 -----------
+
+                match result {
+                    Ok(r) => Ok(r),
+                    Err(e) => {
+                        tracing::info!("RPC call to node {} failed: {}", target as u64, e);
+                        Err(RPCError::Unreachable(Unreachable::from_string(format!(
+                            "RPC call to node {} failed: {}",
+                            target as u64, e
+                        ))))
+                    }
                 }
-            },
+            }
         }
     }
 

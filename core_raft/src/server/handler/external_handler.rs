@@ -1,5 +1,5 @@
 use crate::network::model::Request;
-use crate::network::node::{App, CacheCatApp, get_app, get_group, TypeConfig};
+use crate::network::node::{App, CacheCatApp, TypeConfig, get_app, get_group};
 use crate::server::handler::model::*;
 use async_trait::async_trait;
 use bytes::Bytes;
@@ -82,7 +82,7 @@ async fn print_test(_app: App, d: PrintTestReq) -> PrintTestRes {
 
 // 主节点才能成功调用这个方法，其他节点会失败
 async fn write(app: App, req: Request) -> ClientWriteResponse<TypeConfig> {
-    // 根据请求判断属于哪个组
+    // 根据请求判断属于哪个组ftokio::spawnz
     let group = get_group(&app, req.hash_code());
     let res: ClientWriteResponse<TypeConfig> = group
         .raft
@@ -92,10 +92,11 @@ async fn write(app: App, req: Request) -> ClientWriteResponse<TypeConfig> {
     res
 }
 async fn read(app: App, req: String) -> Option<String> {
-    let group = get_group(&app, hash_string(&req));
-    let kvs = group.state_machine.data.kvs.lock().await;
-    let value = kvs.get(&req);
-    value.map(|v| v.to_string())
+    // let group = get_group(&app, hash_string(&req));
+    // let kvs = group.state_machine.data.kvs.lock().await;
+    // let value = kvs.get(&req);
+    // value.map(|v| String::from_utf8(v.tostring()))
+    todo!()
 }
 
 async fn vote(app: App, req: VoteReq) -> VoteResponse<TypeConfig> {

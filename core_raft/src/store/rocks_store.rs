@@ -1,8 +1,3 @@
-use std::collections::HashMap;
-use std::io;
-use std::io::Cursor;
-use std::path::Path;
-use std::sync::Arc;
 use crate::network::model::{Request, Response};
 use crate::network::node::{GroupId, TypeConfig};
 use crate::server::handler::model::SetRes;
@@ -19,6 +14,11 @@ use rocksdb::Options;
 use rocksdb::{ColumnFamily, DBWithThreadMode, SingleThreaded};
 use serde::Deserialize;
 use serde::Serialize;
+use std::collections::HashMap;
+use std::io;
+use std::io::Cursor;
+use std::path::Path;
+use std::sync::Arc;
 use tokio::sync::Mutex;
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
@@ -50,7 +50,7 @@ pub struct StateMachineData {
     pub last_membership: openraft::StoredMembership<TypeConfig>,
 
     /// State built from applying the raft logs
-    pub kvs: Arc<Mutex<HashMap<String, String>>>,
+    pub kvs: Arc<Mutex<HashMap<String, Vec<u8>>>>,
 }
 
 impl RaftSnapshotBuilder<TypeConfig> for StateMachineStore {
@@ -116,7 +116,7 @@ impl StateMachineStore {
 
     //
     async fn update_state_machine_(&mut self, snapshot: StoredSnapshot) -> Result<(), io::Error> {
-        let kvs: HashMap<String, String> = bincode2::deserialize(&snapshot.data)
+        let kvs: HashMap<String, Vec<u8>> = bincode2::deserialize(&snapshot.data)
             .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
         self.data.last_applied_log_id = snapshot.meta.last_log_id;
         self.data.last_membership = snapshot.meta.last_membership.clone();
@@ -180,10 +180,7 @@ impl RaftStateMachine<TypeConfig> for StateMachineStore {
                             // 使用结构体的字段名来访问成员
                             let mut st = self.data.kvs.lock().await;
                             // println!("set {} = {}", set_req.key,String::from_utf8(set_req.value.clone()).unwrap());
-                            st.insert(
-                                set_req.key.clone(),
-                                String::try_from(set_req.value.clone()).unwrap(),
-                            );
+                            st.insert(set_req.key.clone(), set_req.value.clone());
                             // 注意：原代码返回的是 value.clone()，现在根据你的业务需求可能需要调整
                             Response::Set(SetRes {})
                         }

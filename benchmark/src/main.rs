@@ -25,16 +25,16 @@ struct Args {
     #[arg(short = 'c', long, default_value_t = 100)]
     count: usize,
 
-    #[arg(short = 'n', long, default_value_t = 100)]
+    #[arg(short = 'n', long, default_value_t = 600)]
     clients: usize,
 
-    #[arg(short = 't', long, default_value_t = 100000)]
+    #[arg(short = 't', long, default_value_t = 10000000)]
     total: usize,
 
     #[arg(short = 'e', long, default_value = "127.0.0.1:3003")]
     endpoints: String,
 
-    #[arg(short = 'h', long, default_value_t = 100000)]
+    #[arg(short = 'p', long, default_value_t = 100000)]
     warmup: usize,
 }
 
@@ -72,7 +72,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             args.op.clone(),
             true,
         )
-            .await;
+        .await;
 
         println!(">>> 预热完成，正式测试即将开始 <<<");
     }
@@ -91,7 +91,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             args.op,
             false,
         )
-            .await;
+        .await;
     }
 
     Ok(())

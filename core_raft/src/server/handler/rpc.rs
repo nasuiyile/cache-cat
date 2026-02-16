@@ -8,6 +8,7 @@ use tokio::net::TcpListener;
 use tokio::sync::mpsc;
 use tokio::sync::mpsc::UnboundedSender;
 use tokio_util::codec::{Framed, LengthDelimitedCodec};
+use tracing::Instrument;
 
 pub async fn start_server(app: App, addr: String) -> std::io::Result<()> {
     // 初始化配置（保留原有逻辑）
@@ -67,7 +68,7 @@ pub async fn start_server(app: App, addr: String) -> std::io::Result<()> {
                                 eprintln!("处理请求失败 {}", peer_addr);
                             }
                             tracing::info!("rpc处理用时: {} 微秒", start.elapsed().as_micros());
-                        });
+                        }.instrument(tracing::info_span!("rpc处理", peer_addr = peer_addr.to_string())));
                     }
                     Err(e) => {
                         eprintln!("读取帧失败 ({}): {}", peer_addr, e);

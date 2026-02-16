@@ -100,9 +100,9 @@ where
     });
     for i in 0..GROUP_NUM {
         let group_id = i as GroupId;
-        // let raft_engine = dir.as_ref().join(format!("raft-engine-{}", group_id));
+        let raft_engine = dir.as_ref().join(format!("raft-engine-{}", group_id));
         // let path = if i == 1 {
-        //     TempDir::new_in(r"C:\zdy\temp\raft-engine").unwrap().into_path()
+        // let path = TempDir::new_in(r"E:\tmp\raft\raft-engine").unwrap().into_path();
         // } else {
         //     TempDir::new_in(r"E:\tmp\raft\raft-engine").unwrap().into_path()
         // };

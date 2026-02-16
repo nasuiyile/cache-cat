@@ -30,6 +30,7 @@ use std::ops::{Bound, RangeBounds};
 use std::sync::Arc;
 use std::time::Instant;
 use tokio::sync::{Mutex, MutexGuard};
+use tracing::Instrument;
 
 const MEM_LOG_SIZE: usize = 2000;
 #[derive(Clone)]
@@ -241,8 +242,6 @@ impl RaftLogStorage<TypeConfig> for RocksLogStore {
     where
         I: IntoIterator<Item = EntryOf<TypeConfig>> + Send,
     {
-
-
         let start = Instant::now();
         let mut batch = LogBatch::with_capacity(256);
         let x: Vec<Entry<TypeConfig>> = entries.into_iter().collect();
@@ -261,12 +260,15 @@ impl RaftLogStorage<TypeConfig> for RocksLogStore {
             .map(|_| ())
             .map_err(io::Error::other);
         let engine = self.engine.clone();
-        tokio::spawn(async move {
-            let res = engine.sync().map(|_| ()).map_err(io::Error::other);
-            callback.io_completed(res);
-            let elapsed = start.elapsed();
-            tracing::info!("raft-engine append elapsed: {:?}", elapsed);
-        });
+        tokio::spawn(
+            async move {
+                let res = engine.sync().map(|_| ()).map_err(io::Error::other);
+                callback.io_completed(res);
+                let elapsed = start.elapsed();
+                tracing::info!("raft-engine append elapsed: {:?}", elapsed);
+            }
+            .instrument(tracing::info_span!("raft-engine-sync")),
+        );
         // Return now, and the callback will be invoked later when IO is done.
         Ok(())
     }
