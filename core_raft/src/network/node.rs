@@ -6,7 +6,7 @@ use crate::store::raft_engine::create_raft_engine;
 use crate::store::rocks_log_store::RocksLogStore;
 use crate::store::rocks_store::{StateMachineData, new_storage};
 use openraft::Config;
-use openraft::SnapshotPolicy::Never;
+use openraft::SnapshotPolicy::{LogsSinceLast, Never};
 use rocksdb::{DB, DBWithThreadMode};
 use serde::de::Unexpected::Option;
 use std::collections::{BTreeMap, HashMap};
@@ -93,7 +93,7 @@ where
         heartbeat_interval: 250,
         election_timeout_min: 299,
         election_timeout_max: 599, // 添加最大选举超时时间
-        snapshot_policy: Never,
+        snapshot_policy: LogsSinceLast(100),
         max_payload_entries: 10000000,
         purge_batch_size: 10000000,
         max_append_entries: Some(10000000),

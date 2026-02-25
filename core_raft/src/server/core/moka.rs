@@ -1,11 +1,11 @@
 use moka::Expiry;
 use moka::sync::Cache;
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use std::mem::size_of;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct MyValue {
     pub data: Arc<Vec<u8>>,
     pub ttl_ms: u64,
@@ -61,7 +61,7 @@ impl Expiry<Arc<Vec<u8>>, MyValue> for MyExpiry {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone)]
 pub struct MyCache {
     // 内部 Cache的Clone成本是低廉的
     cache: Cache<Arc<Vec<u8>>, MyValue>,
@@ -85,5 +85,36 @@ impl MyCache {
     /// 获取值
     pub fn get(&self, key: &Arc<Vec<u8>>) -> Option<MyValue> {
         self.cache.get(key)
+    }
+}
+impl Serialize for MyCache {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        let entries: Vec<(Vec<u8>, MyValue)> = self
+            .cache
+            .iter()
+            .map(|(k, v)| ((**k).clone(), v.clone()))
+            .collect();
+
+        entries.serialize(serializer)
+    }
+}
+
+impl<'de> Deserialize<'de> for MyCache {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let entries: Vec<(Vec<u8>, MyValue)> = Vec::deserialize(deserializer)?;
+
+        let cache = MyCache::new();
+
+        for (k, v) in entries {
+            cache.insert(Arc::new(k), v);
+        }
+
+        Ok(cache)
     }
 }

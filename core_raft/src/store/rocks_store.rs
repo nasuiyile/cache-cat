@@ -42,6 +42,8 @@ pub struct StateMachineStore {
 
     /// State machine stores snapshot in db.
     db: Arc<DB>,
+
+    group_id: GroupId,
 }
 
 #[derive(Debug, Clone)]
@@ -82,11 +84,9 @@ impl RaftSnapshotBuilder<TypeConfig> for StateMachineStore {
             snapshot_id,
         };
 
-
-
         let kv_json = {
-            let kvs = self.data.kvs;
-            bincode2::serialize(&kvs).map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?
+            bincode2::serialize(&self.data.kvs)
+                .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?
         };
 
         let snapshot = StoredSnapshot {
@@ -116,6 +116,7 @@ impl StateMachineStore {
             },
             snapshot_idx: 0,
             db,
+            group_id
         };
 
         let snapshot = sm.get_current_snapshot_()?;
@@ -128,12 +129,11 @@ impl StateMachineStore {
 
     //
     async fn update_state_machine_(&mut self, snapshot: StoredSnapshot) -> Result<(), io::Error> {
-        let kvs: HashMap<String, Vec<u8>> = bincode2::deserialize(&snapshot.data)
+        let kvs: MyCache = bincode2::deserialize(&snapshot.data)
             .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
         self.data.last_applied_log_id = snapshot.meta.last_log_id;
         self.data.last_membership = snapshot.meta.last_membership.clone();
-        let mut x = self.data.kvs;
-        *x = kvs;
+        self.data.kvs = kvs;
         Ok(())
     }
 

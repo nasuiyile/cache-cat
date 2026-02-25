@@ -33,7 +33,7 @@ async fn test_add() {
         // println!("第{}次 - 毫秒: {}", i + 1, elapsed.as_millis());
     }
     let avg_elapsed = total_elapsed / 100;
-    let iterations = 100;
+    let iterations = 150;
     time::sleep(Duration::from_secs(1));
     for i in 0..iterations {
         time::sleep(Duration::from_millis(2));
