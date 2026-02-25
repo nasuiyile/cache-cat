@@ -149,6 +149,7 @@ impl GroupRouter<TypeConfig, GroupId> for Router {
         }
     }
 
+    //主节点给从节点发送快照
     async fn full_snapshot(
         &self,
         target: NodeId,
@@ -165,11 +166,6 @@ impl GroupRouter<TypeConfig, GroupId> for Router {
             snapshot: data,
             group_id,
         };
-        self.nodes
-            .get(&target)
-            .unwrap()
-            .call(8, req)
-            .await
-            .unwrap()
+        self.nodes.get(&target).unwrap().call(8, req).await.unwrap()
     }
 }

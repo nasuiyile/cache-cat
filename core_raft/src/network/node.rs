@@ -93,10 +93,11 @@ where
         heartbeat_interval: 250,
         election_timeout_min: 299,
         election_timeout_max: 599, // 添加最大选举超时时间
-        snapshot_policy: LogsSinceLast(100),
         max_payload_entries: 10000000,
         purge_batch_size: 10000000,
         max_append_entries: Some(10000000),
+        snapshot_policy: LogsSinceLast(100),
+        replication_lag_threshold: 10000000, //需要大于snapshot_policy
         ..Default::default()
     });
     for i in 0..GROUP_NUM {

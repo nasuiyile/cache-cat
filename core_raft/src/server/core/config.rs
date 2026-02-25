@@ -1,11 +1,15 @@
 use serde::{Deserialize, Serialize};
 use std::fs;
+use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
+use tokio::io;
 
 pub const ONE: &str = "127.0.0.1:3001";
 pub const TWO: &str = "127.0.0.1:3002";
 
 pub const THREE: &str = "127.0.0.1:3003";
+
+pub const TEMP_PATH: &str = r"E:\tmp\raft\raft-engine";
 
 pub const GROUP_NUM: i16 = 1;
 pub const TCP_CONNECT_NUM: u32 = 3;
@@ -42,4 +46,10 @@ pub fn get_config() -> &'static ServerConfig {
 // 使用示例
 pub fn get_port() -> u16 {
     get_config().port
+}
+pub fn create_temp_dir() -> io::Result<PathBuf> {
+    let path = Path::new(TEMP_PATH);
+    // create_dir_all 是幂等的：目录存在不会报错
+    fs::create_dir_all(path)?;
+    Ok(path.to_path_buf())
 }
