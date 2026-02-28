@@ -48,7 +48,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 }
 fn multi_raft() -> Result<(), Box<dyn std::error::Error>> {
     let base = "/home/suiyi/cache-cat/tmp";
-    let base = r"E:\tmp\raft\raft-engine";
+    let base = r"E:/tmp/raft/raft-engine";
     // let base_system = r"C:\zdy\temp\raft-engine";
 
     // let base_dir = tempfile::tempdir()?;

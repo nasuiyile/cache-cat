@@ -1,9 +1,11 @@
-use crate::network::node::App;
+use crate::network::node::{App, GroupId, get_app, get_group};
 use crate::server::core::config::init_config;
 use crate::server::handler::external_handler::HANDLER_TABLE;
 use bytes::{Buf, BufMut, Bytes, BytesMut};
 use futures::{SinkExt, StreamExt};
+use std::path::Path;
 use std::time::Instant;
+use tokio::fs;
 use tokio::fs::File;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpListener;
@@ -45,7 +47,13 @@ pub async fn start_server(app: App, addr: String) -> std::io::Result<()> {
             if first[0] == 0 {
                 run_rpc_mode(app, socket, peer_addr).await;
             } else {
-                run_stream_mode(app, socket, peer_addr).await;
+                let result = run_stream_mode(app, socket, peer_addr).await;
+                match result {
+                    Ok(_) => {}
+                    Err(e) => {
+                        eprintln!("处理连接失败: {}", e);
+                    }
+                }
             }
 
             //     // 使用 LengthDelimitedCodec -> 自动处理 4-byte length prefix（frame 中不含 length）
@@ -108,21 +116,29 @@ async fn run_stream_mode(
     mut socket: tokio::net::TcpStream,
     peer_addr: std::net::SocketAddr,
 ) -> std::io::Result<()> {
-    println!("{} 进入 STREAM 模式", peer_addr);
-    // 创建临时文件
-    let filename = format!("/tmp/upload-{}.bin", Uuid::new_v4());
-    let mut file = File::create(&filename).await?;
-    let mut buf = vec![0u8; 64 * 1024];
+    // 读取 group_id
+    let mut buf = [0u8; 4];
+    socket.read_exact(&mut buf).await?; // 用 read_exact 更安全
+    let group_id = u32::from_be_bytes(buf);
 
+    let path = get_app(&app, group_id as GroupId).path.clone();
+
+    let filename = format!("snapshot_from_master_{}_{}.bin", Uuid::new_v4(), group_id);
+    let snapshot_dir = path.join("snapshot");
+    // 确保目录存在
+    fs::create_dir_all(&snapshot_dir).await?;
+    let file_path = snapshot_dir.join(&filename);
+    let mut file = File::create(&file_path).await?;
+    let mut buf = vec![0u8; 64 * 1024];
     loop {
         let n = socket.read(&mut buf).await?;
         if n == 0 {
-            break; // EOF
+            break; // 正常关闭
         }
         file.write_all(&buf[..n]).await?;
     }
     file.flush().await?;
-    println!("{} 文件接收完成 -> {}", peer_addr, filename);
+    tracing::info!("{} 文件接收完成{}", peer_addr, file_path.to_string_lossy());
     Ok(())
 }
 

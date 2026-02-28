@@ -38,6 +38,7 @@ pub struct CacheCatApp {
     pub raft: Raft,
     pub group_id: GroupId,
     pub state_machine: StateMachineStore,
+    pub path: PathBuf,
 }
 pub type App = Arc<Vec<Arc<CacheCatApp>>>;
 pub fn get_app(app: &App, group_id: GroupId) -> &CacheCatApp {
@@ -68,6 +69,7 @@ impl Node {
         group_id: GroupId,
         raft: Raft,
         state_machine: StateMachineStore,
+        path: PathBuf,
     ) {
         let app = CacheCatApp {
             id: self.node_id,
@@ -75,6 +77,7 @@ impl Node {
             raft,
             group_id,
             state_machine,
+            path,
         };
         self.groups.insert(group_id, app);
     }
@@ -122,7 +125,7 @@ where
         )
         .await
         .unwrap();
-        node.add_group(addr, group_id, raft, sm_store)
+        node.add_group(addr, group_id, raft, sm_store, dir.as_ref().join(""))
     }
     node
 }

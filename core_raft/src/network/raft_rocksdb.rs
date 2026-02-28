@@ -49,6 +49,7 @@ where
         raft,
         group_id: 0,
         state_machine: sm_store,
+        path: dir.as_ref().join(""),
     };
 
     // 正确构建集群成员映射
@@ -129,7 +130,7 @@ async fn benchmark_requests(apps: Vec<Arc<CacheCatApp>>) {
         let handle = tokio::spawn(async move {
             for i in 0..num {
                 let request = Request::Set(SetReq {
-                    key:Vec::from(format!("test_{}", i)),
+                    key: Vec::from(format!("test_{}", i)),
                     value: Vec::from(format!("value_{}", i)),
                     ex_time: 0,
                 });
