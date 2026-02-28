@@ -1,5 +1,5 @@
 use crate::network::node::{App, GroupId, get_app, get_group};
-use crate::server::core::config::init_config;
+use crate::server::core::config::{get_snapshot_file_name, init_config};
 use crate::server::handler::external_handler::HANDLER_TABLE;
 use bytes::{Buf, BufMut, Bytes, BytesMut};
 use futures::{SinkExt, StreamExt};
@@ -118,18 +118,26 @@ async fn run_stream_mode(
 ) -> std::io::Result<()> {
     // 读取 group_id
     let mut buf = [0u8; 4];
-    socket.read_exact(&mut buf).await?; // 用 read_exact 更安全
+    socket.read_exact(&mut buf).await?;
     let group_id = u32::from_be_bytes(buf);
 
     let path = get_app(&app, group_id as GroupId).path.clone();
-
-    let filename = format!("snapshot_from_master_{}_{}.bin", Uuid::new_v4(), group_id);
     let snapshot_dir = path.join("snapshot");
+
     // 确保目录存在
     fs::create_dir_all(&snapshot_dir).await?;
-    let file_path = snapshot_dir.join(&filename);
-    let mut file = File::create(&file_path).await?;
+
+    // 临时文件名
+    let temp_filename = format!("snapshot_from_master_{}_{}.tmp", Uuid::new_v4(), group_id);
+    let final_filename = get_snapshot_file_name(group_id as GroupId);
+
+    let temp_path = snapshot_dir.join(&temp_filename);
+    let final_path = snapshot_dir.join(&final_filename);
+
+    // 写入临时文件
+    let mut file = File::create(&temp_path).await?;
     let mut buf = vec![0u8; 64 * 1024];
+
     loop {
         let n = socket.read(&mut buf).await?;
         if n == 0 {
@@ -137,8 +145,19 @@ async fn run_stream_mode(
         }
         file.write_all(&buf[..n]).await?;
     }
+
     file.flush().await?;
-    tracing::info!("{} 文件接收完成{}", peer_addr, file_path.to_string_lossy());
+    // 确保文件完全持久化
+    file.sync_all().await?;
+
+    // 关键：通过rename原子替换目标文件
+    fs::rename(&temp_path, &final_path).await?;
+
+    tracing::info!(
+        "{} 文件接收完成: {}",
+        peer_addr,
+        final_path.to_string_lossy()
+    );
     Ok(())
 }
 

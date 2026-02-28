@@ -1,19 +1,16 @@
 use crate::network::model::{Request, Response};
-use crate::network::network::NetworkFactory;
 use crate::network::router::{MultiNetworkFactory, Router};
 use crate::server::core::config::GROUP_NUM;
 use crate::store::raft_engine::create_raft_engine;
 use crate::store::rocks_log_store::RocksLogStore;
-use crate::store::rocks_store::{StateMachineData, new_storage};
+use crate::store::rocks_store::new_storage;
 use openraft::Config;
-use openraft::SnapshotPolicy::{LogsSinceLast, Never};
-use rocksdb::{DB, DBWithThreadMode};
-use serde::de::Unexpected::Option;
-use std::collections::{BTreeMap, HashMap};
+use openraft::SnapshotPolicy::LogsSinceLast;
+use rocksdb::DB;
+use std::collections::HashMap;
 use std::io::Cursor;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use tempfile::TempDir;
 
 openraft::declare_raft_types!(
     /// Declare the type configuration for example K/V store.

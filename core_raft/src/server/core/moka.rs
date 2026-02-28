@@ -1,5 +1,5 @@
 use crate::network::node::TypeConfig;
-use crate::server::core::config::{create_temp_dir, get_cache_file_name};
+use crate::server::core::config::{create_temp_dir};
 use byteorder::LittleEndian;
 use moka::Expiry;
 use moka::sync::Cache;

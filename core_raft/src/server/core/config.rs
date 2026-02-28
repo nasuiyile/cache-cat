@@ -15,9 +15,9 @@ pub const TEMP_PATH: &str = r"E:\tmp\raft\raft-engine";
 pub const GROUP_NUM: i16 = 2;
 pub const TCP_CONNECT_NUM: u32 = 3;
 
-pub const CACHE_FILE_NAME: &str = "snapshot_cache";
-pub fn get_cache_file_name(group_id: GroupId) -> String {
-    format!("{}_{}", CACHE_FILE_NAME, group_id)
+pub const SNAPSHOT_FILE_NAME: &str = "snapshot";
+pub fn get_snapshot_file_name(group_id: GroupId) -> String {
+    format!("{}_{}.snapshot", SNAPSHOT_FILE_NAME, group_id)
 }
 
 #[derive(Debug, Deserialize, Serialize)]
