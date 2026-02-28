@@ -7,6 +7,7 @@ use openraft::SnapshotMeta;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use std::error::Error;
 use std::mem::size_of;
+use std::option::Option;
 use std::path::Path;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -187,7 +188,7 @@ where
 pub async fn load_cache_from_path<P>(
     cache: MyCache,
     path: P,
-) -> Result<SnapshotMeta<TypeConfig>, std::io::Error>
+) -> Result<Option<SnapshotMeta<TypeConfig>>, io::Error>
 where
     P: AsRef<Path>,
 {
@@ -196,7 +197,7 @@ where
     let f = match File::open(path).await {
         Ok(f) => f,
         //文件不存在
-        Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(Default::default()),
+        Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(None),
         Err(e) => return Err(e),
     };
 
@@ -219,7 +220,7 @@ where
         .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
 
     cache.load_cache_from_reader(&mut reader).await?;
-    Ok(meta)
+    Ok(Some(meta))
 }
 
 impl Serialize for MyCache {

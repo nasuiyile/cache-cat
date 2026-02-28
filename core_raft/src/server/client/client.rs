@@ -14,6 +14,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::task::{Context, Poll};
 use std::time::Instant;
+use tokio::io::AsyncWriteExt;
 use tokio::net::TcpStream;
 use tokio::sync::mpsc;
 use tokio_util::codec::{Framed, LengthDelimitedCodec};
@@ -125,9 +126,9 @@ pub struct RpcClient {
 
 impl RpcClient {
     pub async fn connect(addr: &str) -> Result<Self, Box<dyn Error + Send + Sync>> {
-        let stream = TcpStream::connect(addr).await?;
+        let mut stream = TcpStream::connect(addr).await?;
         stream.set_nodelay(true)?; // RPC 必须关闭 Nagle 算法以降低延迟
-
+        stream.write_all(&[0u8]).await?;
         let framed = Framed::new(stream, LengthDelimitedCodec::new());
         let (mut sink, mut stream) = framed.split();
 
@@ -138,7 +139,7 @@ impl RpcClient {
         // 写任务
         tokio::spawn(async move {
             // 先等第一个消息
-            while let Some(mut req) = rx_writer.recv().await {
+            while let Some(req) = rx_writer.recv().await {
                 let _ = sink.feed(Bytes::from(req)).await;
                 // 贪婪地榨干当前 channel 里的积压消息
                 while let Ok(req) = rx_writer.try_recv() {

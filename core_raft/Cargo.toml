@@ -39,6 +39,7 @@ serde_yaml = "0.9.33"
 tracing-subscriber = { version = "0.3.22", features = ["env-filter", "fmt"] }
 console-subscriber = { version = "0.5", optional = true }
 tracing-flame = { version = "0.2", optional = true }
+uuid = { version = "1.19.0", features = ["v4"] }
 
 [features]
 tokio-console = ["console-subscriber"]
