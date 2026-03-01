@@ -1,6 +1,6 @@
 use crate::network::model::{Request, Response};
 use crate::network::node::{GroupId, TypeConfig};
-use crate::server::core::moka::{MyCache, MyValue};
+use crate::server::core::moka::{MyCache, MyValue, dump_cache_to_path, load_cache_from_path};
 use crate::server::handler::model::SetRes;
 use futures::Stream;
 use futures::TryStreamExt;
@@ -9,16 +9,13 @@ use openraft::storage::RaftStateMachine;
 use openraft::{EntryPayload, LogId, SnapshotMeta};
 use openraft::{OptionalSend, Snapshot, StoredMembership};
 use openraft::{RaftSnapshotBuilder, RaftTypeConfig};
-use rocksdb::ColumnFamilyDescriptor;
-use rocksdb::DB;
-use rocksdb::Options;
-use rocksdb::{ColumnFamily, DBWithThreadMode, SingleThreaded};
+
 use serde::Deserialize;
 use serde::Serialize;
 use std::collections::HashMap;
 use std::io;
 use std::io::Cursor;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU8, Ordering};
 
@@ -34,14 +31,7 @@ pub struct StoredSnapshot {
 pub struct StateMachineStore {
     pub data: StateMachineData,
 
-    /// snapshot index is not persisted in this example.
-    ///
-    /// It is only used as a suffix of snapshot id, and should be globally unique.
-    /// In practice, using a timestamp in micro-second would be good enough.
-    snapshot_idx: u64,
-
-    /// State machine stores snapshot in db.
-    db: Arc<DB>,
+    pub path: PathBuf,
 
     group_id: GroupId,
 }
@@ -68,14 +58,9 @@ impl RaftSnapshotBuilder<TypeConfig> for StateMachineStore {
         let last_membership = self.data.last_membership.clone();
 
         let snapshot_id = if let Some(last) = last_applied_log {
-            format!(
-                "{}-{}-{}",
-                last.committed_leader_id(),
-                last.index(),
-                self.snapshot_idx
-            )
+            format!("{}-{}", last.committed_leader_id(), last.index(),)
         } else {
-            format!("--{}", self.snapshot_idx)
+            String::from("--")
         };
 
         let meta = SnapshotMeta {
@@ -84,82 +69,74 @@ impl RaftSnapshotBuilder<TypeConfig> for StateMachineStore {
             snapshot_id,
         };
 
-        let kv_json = {
-            bincode2::serialize(&self.data.kvs)
-                .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?
-        };
+        let cache = self.data.kvs.clone();
 
-        let snapshot = StoredSnapshot {
-            meta: meta.clone(),
-            data: kv_json.clone(),
-        };
-
-        self.set_current_snapshot_(snapshot)?;
-
+        dump_cache_to_path(cache, meta.clone(), &self.path).await?;
         Ok(Snapshot {
             meta,
-            snapshot: Cursor::new(kv_json),
+            snapshot: Cursor::new(Vec::new()),
         })
     }
 }
 
 impl StateMachineStore {
-    pub async fn new(db: Arc<DB>, group_id: GroupId) -> Result<StateMachineStore, io::Error> {
+    pub async fn new(path: PathBuf, group_id: GroupId) -> Result<StateMachineStore, io::Error> {
         let cache = MyCache::new();
         let mut sm = Self {
             data: StateMachineData {
                 last_applied_log_id: None,
                 last_membership: Default::default(),
-                kvs: cache,
+                kvs: cache.clone(),
                 diff_map: Arc::new(HashMap::new()),
                 snapshot_state: Arc::new(AtomicU8::new(0)),
             },
-            snapshot_idx: 0,
-            db,
-            group_id
+            path: path.clone(),
+            group_id,
         };
 
-        let snapshot = sm.get_current_snapshot_()?;
-        if let Some(snap) = snapshot {
-            //当存在快照的时候才会恢复状态机
-            sm.update_state_machine_(snap).await?;
-        }
+        load_cache_from_path(cache, path).await?;
+
+        // let snapshot = sm.get_current_snapshot_()?;
+        // if let Some(snap) = snapshot {
+        //     //当存在快照的时候才会恢复状态机
+        //     sm.update_state_machine_(snap).await?;
+        // }
         Ok(sm)
     }
 
     //
-    async fn update_state_machine_(&mut self, snapshot: StoredSnapshot) -> Result<(), io::Error> {
-        let kvs: MyCache = bincode2::deserialize(&snapshot.data)
-            .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
-        self.data.last_applied_log_id = snapshot.meta.last_log_id;
-        self.data.last_membership = snapshot.meta.last_membership.clone();
-        self.data.kvs = kvs;
-        Ok(())
-    }
+    // async fn update_state_machine_(&mut self, snapshot: StoredSnapshot) -> Result<(), io::Error> {
+    //     let kvs: MyCache = bincode2::deserialize(&snapshot.data)
+    //         .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
+    //     self.data.last_applied_log_id = snapshot.meta.last_log_id;
+    //     self.data.last_membership = snapshot.meta.last_membership.clone();
+    //     self.data.kvs = kvs;
+    //     Ok(())
+    // }
 
-    fn get_current_snapshot_(&self) -> Result<Option<StoredSnapshot>, io::Error> {
-        Ok(self
-            .db
-            .get_cf(self.store(), b"snapshot")
-            .map_err(io::Error::other)?
-            .and_then(|v| bincode2::deserialize::<StoredSnapshot>(&v).ok()))
-    }
-
-    fn set_current_snapshot_(&self, snap: StoredSnapshot) -> Result<(), io::Error> {
-        self.db
-            .put_cf(
-                self.store(),
-                b"snapshot",
-                bincode2::serialize(&snap).unwrap().as_slice(),
-            )
-            .map_err(io::Error::other)?;
-        self.db.flush_wal(true).map_err(io::Error::other)?;
-        Ok(())
-    }
-
-    fn store(&self) -> &ColumnFamily {
-        self.db.cf_handle("store").unwrap()
-    }
+    // fn get_current_snapshot_(&self) -> Result<Option<StoredSnapshot>, io::Error> {
+    //     Ok(self
+    //         .db
+    //         .get_cf(self.store(), b"snapshot")
+    //         .map_err(io::Error::other)?
+    //         .and_then(|v| bincode2::deserialize::<StoredSnapshot>(&v).ok()))
+    // }
+    //
+    // fn set_current_snapshot_(&self, snap: StoredSnapshot) -> Result<(), io::Error> {
+    //     self.db
+    //         .put_cf(
+    //             self.store(),
+    //             b"snapshot",
+    //             bincode2::serialize(&snap).unwrap().as_slice(),
+    //         )
+    //         .map_err(io::Error::other)?;
+    //     self.db.flush_wal(true).map_err(io::Error::other)?;
+    //     Ok(())
+    // }
+    //
+    // fn store(&self) -> &ColumnFamily {
+    //     self.db.cf_handle("store").unwrap()
+    // }
 }
 
 impl RaftStateMachine<TypeConfig> for StateMachineStore {
@@ -221,7 +198,6 @@ impl RaftStateMachine<TypeConfig> for StateMachineStore {
     }
 
     async fn get_snapshot_builder(&mut self) -> Self::SnapshotBuilder {
-        self.snapshot_idx += 1;
         self.clone()
     }
 
@@ -234,49 +210,38 @@ impl RaftStateMachine<TypeConfig> for StateMachineStore {
         meta: &SnapshotMeta<TypeConfig>,
         snapshot: <TypeConfig as RaftTypeConfig>::SnapshotData,
     ) -> Result<(), io::Error> {
-        let new_snapshot = StoredSnapshot {
-            meta: meta.clone(),
-            data: snapshot.into_inner(),
-        };
-
-        self.update_state_machine_(new_snapshot.clone()).await?;
-        self.set_current_snapshot_(new_snapshot)?;
-
+        load_cache_from_path(self.data.kvs.clone(), self.path.clone()).await?;
         Ok(())
     }
 
     async fn get_current_snapshot(&mut self) -> Result<Option<Snapshot<TypeConfig>>, io::Error> {
-        let x = self.get_current_snapshot_()?;
-        Ok(x.map(|s| Snapshot {
-            meta: s.meta.clone(),
-            snapshot: Cursor::new(s.data.clone()),
-        }))
+        Ok(None)
     }
 }
 
-pub(crate) async fn new_storage<P: AsRef<Path>>(db_path: P) -> Arc<DB> {
-    let mut db_opts = Options::default();
-    db_opts.create_missing_column_families(true);
-    db_opts.create_if_missing(true);
-    //设置常见的优化
-
-    db_opts
-        .set_max_background_jobs((std::thread::available_parallelism().unwrap().get() / 1) as i32); //def 2
-    db_opts.set_enable_pipelined_write(true); // 启用流水线写入，并发大时写入性能更高
-    //l0
-    db_opts.set_level_zero_file_num_compaction_trigger(8); //默认是4
-    db_opts.set_level_zero_slowdown_writes_trigger(40); //默认20
-    db_opts.set_level_zero_stop_writes_trigger(48); //def 24
-    db_opts.set_target_file_size_base(128 * 1024 * 1024); //默认为64M
-    //
-    let store = ColumnFamilyDescriptor::new("store", db_opts.clone());
-    let meta = ColumnFamilyDescriptor::new("meta", db_opts.clone());
-    let logs = ColumnFamilyDescriptor::new("logs", db_opts.clone());
-
-    //打开多个数据库并创建列族
-    let db: DBWithThreadMode<SingleThreaded> =
-        DB::open_cf_descriptors(&db_opts, db_path, vec![store, meta, logs]).unwrap();
-
-    let db = Arc::new(db);
-    db
-}
+// pub(crate) async fn new_storage<P: AsRef<Path>>(db_path: P) -> Arc<DB> {
+//     let mut db_opts = Options::default();
+//     db_opts.create_missing_column_families(true);
+//     db_opts.create_if_missing(true);
+//     //设置常见的优化
+//
+//     db_opts
+//         .set_max_background_jobs((std::thread::available_parallelism().unwrap().get() / 1) as i32); //def 2
+//     db_opts.set_enable_pipelined_write(true); // 启用流水线写入，并发大时写入性能更高
+//     //l0
+//     db_opts.set_level_zero_file_num_compaction_trigger(8); //默认是4
+//     db_opts.set_level_zero_slowdown_writes_trigger(40); //默认20
+//     db_opts.set_level_zero_stop_writes_trigger(48); //def 24
+//     db_opts.set_target_file_size_base(128 * 1024 * 1024); //默认为64M
+//     //
+//     let store = ColumnFamilyDescriptor::new("store", db_opts.clone());
+//     let meta = ColumnFamilyDescriptor::new("meta", db_opts.clone());
+//     let logs = ColumnFamilyDescriptor::new("logs", db_opts.clone());
+//
+//     //打开多个数据库并创建列族
+//     let db: DBWithThreadMode<SingleThreaded> =
+//         DB::open_cf_descriptors(&db_opts, db_path, vec![store, meta, logs]).unwrap();
+//
+//     let db = Arc::new(db);
+//     db
+// }

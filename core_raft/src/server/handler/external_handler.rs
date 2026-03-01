@@ -1,18 +1,17 @@
 use crate::network::model::Request;
-use crate::network::node::{App, CacheCatApp, TypeConfig, get_app, get_group};
+use crate::network::node::{App, TypeConfig, get_app, get_group};
 use crate::server::handler::model::*;
 use async_trait::async_trait;
 use bytes::Bytes;
 use openraft::Snapshot;
 use openraft::raft::{
-    AppendEntriesRequest, AppendEntriesResponse, ClientWriteResponse, InstallSnapshotRequest,
-    InstallSnapshotResponse, SnapshotResponse, VoteRequest, VoteResponse,
+    AppendEntriesResponse, ClientWriteResponse, InstallSnapshotRequest, InstallSnapshotResponse,
+    SnapshotResponse, VoteRequest, VoteResponse,
 };
 use serde::Serialize;
 use serde::de::DeserializeOwned;
 use std::hash::{DefaultHasher, Hash, Hasher};
 use std::io::Cursor;
-use std::sync::Arc;
 use std::time::Instant;
 
 pub type HandlerEntry = (u32, fn() -> Box<dyn RpcHandler>);

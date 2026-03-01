@@ -1,5 +1,5 @@
-use crate::network::node::TypeConfig;
-use crate::server::core::config::{create_temp_dir};
+use crate::network::node::{GroupId, TypeConfig};
+use crate::server::core::config::{create_temp_dir, get_snapshot_file_name};
 use byteorder::LittleEndian;
 use moka::Expiry;
 use moka::sync::Cache;
@@ -14,6 +14,8 @@ use std::time::{Duration, Instant};
 use tokio::fs::File;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, BufReader, BufWriter};
 use tokio::{fs, io};
+use tracing::trace;
+use uuid::Uuid;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct MyValue {
@@ -103,17 +105,16 @@ impl MyCache {
 
     // todo 优化为字节编码
     //流式序列化和反序列化
-    pub async fn dump_cache_to_writer<W>(
-        &self,
-        writer: &mut W,
-    ) -> Result<(), Box<dyn Error + Send + Sync>>
+    pub async fn dump_cache_to_writer<W>(&self, writer: &mut W) -> Result<(), io::Error>
     where
         W: AsyncWrite + Unpin + Send,
     {
         for entry in self.cache.iter() {
             let (k_arc, v) = entry;
-            let key_bytes = bincode2::serialize(&*k_arc)?;
-            let val_bytes = bincode2::serialize(&v)?;
+            let key_bytes = bincode2::serialize(&*k_arc)
+                .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
+            let val_bytes = bincode2::serialize(&v)
+                .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
             writer.write_u64(key_bytes.len() as u64).await?;
             writer.write_all(&key_bytes).await?;
             writer.write_u64(val_bytes.len() as u64).await?;
@@ -162,26 +163,42 @@ pub async fn dump_cache_to_path<P>(
     cache: MyCache,
     meta: SnapshotMeta<TypeConfig>,
     path: P,
-) -> Result<(), Box<dyn Error + Send + Sync>>
+) -> Result<(), std::io::Error>
 where
     P: AsRef<Path>,
 {
     let path = path.as_ref();
-    let tmp = path.with_extension("tmp");
-    let f = File::create(&tmp).await?;
+    let snapshot_dir = path.join("snapshot");
+    // 确保 snapshot 文件夹存在
+    fs::create_dir_all(&snapshot_dir).await?;
+
+    // 创建临时文件名
+    let group_id = 0; // 这里应该传入实际的 group_id，可能需要修改函数参数
+    let temp_filename = format!("snapshot_from_mem_{}_{}.tmp", Uuid::new_v4(), group_id);
+    let final_filename = get_snapshot_file_name(group_id as GroupId);
+
+    let temp_path = snapshot_dir.join(&temp_filename);
+    let final_path = snapshot_dir.join(&final_filename);
+    tracing::info!("dump cache to {}", final_path.display());
+    // 写入临时文件
+    let f = File::create(&temp_path).await?;
     let mut writer = BufWriter::new(f);
 
     writer.write_all(CACHE_MAGIC_NUM).await?;
     writer.write_u8(VERSION).await?;
 
-    let result = bincode2::serialize(&meta)?;
+    let result =
+        bincode2::serialize(&meta).map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
     writer.write_u64(result.len() as u64).await?;
     writer.write_all(&result).await?;
 
     cache.dump_cache_to_writer(&mut writer).await?;
     writer.flush().await?;
     writer.get_ref().sync_all().await?;
-    fs::rename(&tmp, path).await?;
+
+    // 通过 rename 原子替换目标文件
+    fs::rename(&temp_path, &final_path).await?;
+
     Ok(())
 }
 

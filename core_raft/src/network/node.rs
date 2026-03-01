@@ -3,10 +3,8 @@ use crate::network::router::{MultiNetworkFactory, Router};
 use crate::server::core::config::GROUP_NUM;
 use crate::store::raft_engine::create_raft_engine;
 use crate::store::rocks_log_store::RocksLogStore;
-use crate::store::rocks_store::new_storage;
 use openraft::Config;
 use openraft::SnapshotPolicy::LogsSinceLast;
-use rocksdb::DB;
 use std::collections::HashMap;
 use std::io::Cursor;
 use std::path::{Path, PathBuf};
@@ -84,8 +82,9 @@ pub async fn create_node<P>(addr: &str, node_id: NodeId, dir: P) -> Node
 where
     P: AsRef<Path>,
 {
-    let rocksdb_path = dir.as_ref().join("rocksdb");
-    let db: Arc<DB> = new_storage(rocksdb_path).await;
+    let path = dir.as_ref().join("");
+    // let rocksdb_path = dir.as_ref().join("rocksdb");
+    // let db: Arc<DB> = new_storage(rocksdb_path).await;
     let mut node = Node::new(node_id, addr.to_string());
     let raft_engine = dir.as_ref().join("raft-engine");
     let engine = create_raft_engine(raft_engine.clone());
@@ -112,7 +111,9 @@ where
         let router = Router::new(addr.to_string());
         let network = MultiNetworkFactory::new(router, group_id);
         let log_store = RocksLogStore::new(group_id, engine.clone());
-        let sm_store = StateMachineStore::new(db.clone(), group_id).await.unwrap();
+        let sm_store = StateMachineStore::new(path.clone(), group_id)
+            .await
+            .unwrap();
         let raft = openraft::Raft::new(
             node_id,
             config.clone(),

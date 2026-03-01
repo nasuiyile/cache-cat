@@ -1,64 +1,72 @@
 use crate::network::model::Request;
+use crate::network::node::TypeConfig;
 use crate::server::client::client::RpcMultiClient;
 use crate::server::handler::model::{PrintTestReq, PrintTestRes, SetReq};
 use openraft::raft::ClientWriteResponse;
 use std::time::{Duration, Instant};
 use tokio::time;
-use crate::network::node::TypeConfig;
 
 #[tokio::test]
 async fn test_add() {
-    let mut client = RpcMultiClient::connect("127.0.0.1:3003").await.unwrap();
+    let client = RpcMultiClient::connect("127.0.0.1:3003")
+        .await
+        .expect("connect failed");
 
-    let mut total_elapsed = Duration::new(0, 0);
+    const ITERATIONS: u32 = 100;
 
+    // ========================
+    // 1️⃣ 测写延迟
+    // ========================
+    let mut total_write = Duration::ZERO;
 
-    for i in 0..100 {
+    for i in 0..ITERATIONS {
+        time::sleep(Duration::from_millis(1)).await;
         let start = Instant::now();
-        let res: ClientWriteResponse<TypeConfig> = client
+        let _: ClientWriteResponse<TypeConfig> = client
             .call(
                 2,
                 Request::Set(SetReq {
-                    key: Vec::from(format!("test_{}", i)), // 使用不同键避免覆盖
-                    value: Vec::from(format!("test_value_{}", i)),
+                    key: format!("test_{}", i).into_bytes(),
+                    value: format!("test_value_{}", i).into_bytes(),
                     ex_time: 0,
                 }),
-            ) 
+            )
             .await
-            .expect("call failed");
-        let elapsed = start.elapsed();
-        total_elapsed += elapsed;
+            .expect("write call failed");
 
-        // 可选：打印每次的结果用于调试
-        // println!("第{}次 - 毫秒: {}", i + 1, elapsed.as_millis());
+        total_write += start.elapsed();
     }
-    let avg_elapsed = total_elapsed / 100;
-    let iterations = 150;
-    time::sleep(Duration::from_secs(1));
-    for i in 0..iterations {
-        time::sleep(Duration::from_millis(2));
+
+    let avg_write = total_write / ITERATIONS;
+    println!("写入平均耗时: {} 微秒", avg_write.as_micros());
+
+    // 等待系统稳定
+    time::sleep(Duration::from_secs(1)).await;
+
+    // ========================
+    // 2️⃣ 测读 / RPC 延迟
+    // ========================
+    let mut total_read = Duration::ZERO;
+
+    for i in 0..ITERATIONS {
         let start = Instant::now();
-        let res: PrintTestRes = client
+
+        let _: PrintTestRes = client
             .call(
                 1,
                 PrintTestReq {
-                    message: String::from("xxx"),
+                    message: "xxx".to_string(),
                 },
             )
             .await
-            .expect("call failed");
-        let elapsed = start.elapsed();
-        println!("第{}次 - 微秒: {}", i + 1, elapsed.as_micros())
-    }
-    println!("写入操作平均耗时: {} 微秒", avg_elapsed.as_micros());
+            .expect("read call failed");
 
-    // 验证读取操作
-    // let start = Instant::now();
-    // let res: Option<String> = client
-    //     .call(3, "test_0".to_string()) // 读取第一个插入的值
-    //     .await
-    //     .expect("call failed");
-    // println!("读取结果: {:?}", res.expect("res is none"));
-    // let elapsed = start.elapsed();
-    // println!("读取耗时: {} 微秒", elapsed.as_micros());
+        let elapsed = start.elapsed();
+        total_read += elapsed;
+
+        println!("第 {} 次 - {} 微秒", i + 1, elapsed.as_micros());
+    }
+
+    let avg_read = total_read / ITERATIONS;
+    println!("读/RPC 平均耗时: {} 微秒", avg_read.as_micros());
 }

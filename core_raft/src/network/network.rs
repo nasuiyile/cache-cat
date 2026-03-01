@@ -1,4 +1,4 @@
-use crate::network::router::Router;
+use crate::network::node::{NodeId, TypeConfig};
 use crate::server::client::client::RpcMultiClient;
 use crate::server::handler::model::{
     AppendEntriesReq, InstallFullSnapshotReq, PrintTestReq, PrintTestRes, VoteReq,
@@ -16,7 +16,6 @@ use openraft_multi::{GroupNetworkAdapter, GroupNetworkFactory};
 use serde::Serialize;
 use serde::de::DeserializeOwned;
 use std::time::Instant;
-use crate::network::node::{NodeId, TypeConfig};
 
 pub struct NetworkFactory {}
 impl RaftNetworkFactory<TypeConfig> for NetworkFactory {
