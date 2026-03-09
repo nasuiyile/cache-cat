@@ -3,8 +3,11 @@ use crate::server::client::client::{RpcClient, RpcMultiClient};
 use crate::server::handler::model::{AppendEntriesReq, InstallFullSnapshotReq, VoteReq};
 
 use dashmap::DashMap;
+use openraft::RPCTypes::InstallSnapshot;
 use openraft::alias::VoteOf;
-use openraft::error::{RPCError, RemoteError, ReplicationClosed, StreamingError, Unreachable};
+use openraft::error::{
+    RPCError, RemoteError, ReplicationClosed, StreamingError, Timeout, Unreachable,
+};
 use openraft::network::RPCOption;
 use openraft::raft::{
     AppendEntriesRequest, AppendEntriesResponse, SnapshotResponse, VoteRequest, VoteResponse,
@@ -59,13 +62,15 @@ pub struct Router {
     pub nodes: Arc<DashMap<NodeId, RpcMultiClient>>,
     pub addr: String,
     pub path: PathBuf,
+    pub node_id: NodeId,
 }
 impl Router {
-    pub fn new(addr: String, path: PathBuf) -> Self {
+    pub fn new(addr: String, path: PathBuf, node_id: NodeId) -> Self {
         Self {
             nodes: Arc::new((DashMap::new())),
             addr,
             path,
+            node_id,
         }
     }
     // pub async fn register_node(&mut self, node_id: NodeId) {}
@@ -100,26 +105,7 @@ impl GroupRouter<TypeConfig, GroupId> for Router {
                     target as u64
                 ))))
             }
-            Some(client) => {
-                let start = Instant::now();
-                let result = client.call(7, req).await;
-                let elapsed = start.elapsed();
-                tracing::info!(
-                    "RPC call slave to node {} took {:?}",
-                    target as u64,
-                    elapsed
-                );
-                match result {
-                    Ok(r) => Ok(r),
-                    Err(e) => {
-                        tracing::info!("RPC call to node {} failed: {}", target as u64, e);
-                        Err(RPCError::Unreachable(Unreachable::from_string(format!(
-                            "RPC call to node {} failed: {}",
-                            target as u64, e
-                        ))))
-                    }
-                }
-            }
+            Some(client) => client.call(7, req).await,
         }
     }
 
@@ -146,17 +132,7 @@ impl GroupRouter<TypeConfig, GroupId> for Router {
                     target as u64
                 ))))
             }
-            Some(client) => match client.call(6, req).await {
-                Ok(r) => Ok(r),
-                Err(e) => {
-                    tracing::info!("RPC call to node {} failed: {}", target as u64, e);
-                    let unreachable = Unreachable::from_string(format!(
-                        "RPC call to node {} failed: {}",
-                        target as u64, e
-                    ));
-                    Err(RPCError::Unreachable(unreachable))
-                }
-            },
+            Some(client) => client.call(6, req).await,
         }
     }
 
@@ -168,7 +144,7 @@ impl GroupRouter<TypeConfig, GroupId> for Router {
         vote: VoteOf<TypeConfig>,
         snapshot: Snapshot<TypeConfig>,
         cancel: impl Future<Output = ReplicationClosed> + OptionalSend + 'static,
-        _option: RPCOption,
+        option: RPCOption,
     ) -> Result<SnapshotResponse<TypeConfig>, StreamingError<TypeConfig>> {
         // 如果节点不存在，返回 StreamingError
         let client = match self.nodes.get(&target) {
@@ -180,8 +156,25 @@ impl GroupRouter<TypeConfig, GroupId> for Router {
             Some(c) => c,
         };
 
-        // 发送
-        let _ = snapshot.snapshot.send_file(&self.addr).await.unwrap();
+        let send_result = tokio::select! {
+            _cancel_result = cancel => {
+                //直接return 无需管返回值
+                return Err(StreamingError::Timeout(Timeout{
+                    action:InstallSnapshot,
+                    target,
+                    timeout:option.soft_ttl(),
+                    id:self.node_id ,
+                }));
+            }
+            send_result = snapshot.snapshot.send_file(&self.addr) => {
+                send_result
+            }
+        };
+        if send_result.is_err() {
+            return Err(StreamingError::Unreachable(Unreachable::from_string(
+                format!("node {} not found", target as u64),
+            )));
+        }
 
         let req = InstallFullSnapshotReq {
             vote,
@@ -190,18 +183,7 @@ impl GroupRouter<TypeConfig, GroupId> for Router {
             group_id,
         };
 
-        let result = client.call(8, req).await;
-
-        match result {
-            Ok(resp) => Ok(resp),
-
-            Err(e) => {
-                tracing::info!("snapshot RPC to node {} failed: {}", target as u64, e);
-
-                Err(StreamingError::Unreachable(Unreachable::from_string(
-                    format!("snapshot RPC to node {} failed: {}", target as u64, e),
-                )))
-            }
-        }
+        let result = client.call(8, req).await?;
+        Ok(result)
     }
 }

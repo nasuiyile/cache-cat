@@ -10,22 +10,7 @@ futures = "0.3.31"
 tracing = "0.1.44"
 serde = "1.0.228"
 
-reqwest = "0.13.1"
 tokio = { version = "1.49.0", features = ["rt", "rt-multi-thread", "macros"] }
-fory = "0.14.1"
-fory-derive = "0.14.1"
-fory-core = "0.14.1"
-bincode2 = "2.0.1"
-bytes = "1.0"
-moka = { version = "0.12.12", features = ["sync"] }
-async-trait = "0.1.89"
-tracing-subscriber = { version = "0.3.0", features = ["env-filter"] }
-rocksdb = "0.24.0"
-byteorder = "1.5.0"
-tempfile = "3.24.0"
-flamegraph = "0.6.11"
-dashmap = "6.1.0"
-tokio-util = "0.7.18"
-mimalloc = "0.1.48"
+
 clap = { version = "4.5.54", features = ["derive"] }
 console-subscriber = "0.5.0"

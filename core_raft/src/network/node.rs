@@ -99,7 +99,7 @@ where
         let group_id = i as GroupId;
         // let engine_path = dir.as_ref().join(format!("raft-engine-{}", group_id));
         // let engine = create_raft_engine(engine_path);
-        let router = Router::new(addr.to_string(), dir.as_ref().join(""));
+        let router = Router::new(addr.to_string(), dir.as_ref().join(""), node_id);
         let network = MultiNetworkFactory::new(router, group_id);
         let log_store = LogStore::new(group_id, engine.clone());
         let sm_store = StateMachineStore::new(path.clone(), group_id)

@@ -28,7 +28,7 @@ impl Drop for FileStore {
     fn drop(&mut self) {
         //销毁的时候如果文件存在，则删除文件
         if Path::new(&self.path).exists() {
-            std::fs::remove_file(&self.path);
+            let _ = std::fs::remove_file(&self.path);
         }
     }
 }
@@ -82,11 +82,7 @@ impl RaftSnapshotBuilder<TypeConfig> for StateMachineStore {
             last_membership,
             snapshot_id,
         };
-        // println!(
-        //     "build_snapshot: {:?},count{:?}",
-        //     self.path,
-        //     self.data.kvs.count()
-        // );
+
         let cache = self.data.kvs.clone();
         dump_cache_to_path(cache, meta.clone(), &self.path, self.group_id).await?;
         //创建快照的硬链接
