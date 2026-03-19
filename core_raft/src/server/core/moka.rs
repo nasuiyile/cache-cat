@@ -270,7 +270,8 @@ where
     tracing::info!("dump cache to {}", final_path.display());
     // 写入临时文件
     let f = File::create(&temp_path).await?;
-    let mut writer = BufWriter::new(f);
+    // 通过 with_capacity 指定缓冲区大小 如果缓冲区满了则会自动 flush，让操作系统决定刷盘时间（flush不是真正刷盘，sync才是真正刷盘）
+    let mut writer = BufWriter::with_capacity(1024 * 1024,f);
 
     writer.write_all(CACHE_MAGIC_NUM).await?;
     writer.write_u8(VERSION).await?;
@@ -283,7 +284,7 @@ where
     cache
         .dump_cache_to_writer(&mut writer, old_map, removed_map, current_snapshot_num)
         .await?;
-    //在最耗时的刷盘工作开始前将快照标记为已经结束
+    //在最耗时的刷盘工作开始前将快照标记为已经结束 理论上可以在removed_map之前调用
     let mut raft_meta_data = raft_meta.lock().await;
     raft_meta_data.snapshot_state = false;
     drop(raft_meta_data);
@@ -307,7 +308,6 @@ where
     //先将缓存清空
     cache.invalidate_all();
     let path = path.as_ref();
-    // println!("load cache from {}", path.display());
     let f = match File::open(path).await {
         Ok(f) => f,
         //文件不存在
