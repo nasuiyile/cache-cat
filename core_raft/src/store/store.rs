@@ -12,6 +12,7 @@ use openraft::storage::RaftStateMachine;
 use openraft::{EntryPayload, LogId, SnapshotMeta};
 use openraft::{OptionalSend, Snapshot, StoredMembership};
 use openraft::{RaftSnapshotBuilder, RaftTypeConfig};
+use std::fs::Metadata;
 use std::io;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -56,7 +57,7 @@ pub struct StateMachineData {
     //增量日志队列
     pub incremental_operation_queue: Arc<Mutex<Vec<AtomicRequest>>>,
 
-    // 只有俩个任务会获取这个锁，快照和raft主任务。它们都是单线程的。
+    // 只有俩个任务会获取这个锁，快照和raft主任务。它们都是单线程的。 启动的时候也可能被获取但这不影响性能。
     raft_meta_data: Arc<Mutex<RaftMetaData>>,
 }
 
@@ -106,7 +107,7 @@ impl StateMachineStore {
         node_id: NodeId,
     ) -> Result<StateMachineStore, io::Error> {
         let cache = MyCache::new();
-        let sm = Self {
+        let mut sm = Self {
             data: StateMachineData {
                 kvs: cache.clone(),
                 incremental_operation_queue: Arc::new(Mutex::new(Vec::new())),
@@ -121,8 +122,20 @@ impl StateMachineStore {
             group_id,
         };
         let filename = get_snapshot_file_name(group_id);
-        load_cache_from_path(cache, path.join("snapshot").join(filename)).await?;
+        let res = load_cache_from_path(cache, path.join("snapshot").join(filename)).await?;
+        match res {
+            None => {}
+            Some(data) => {
+                //如果有值就更新元数据
+                sm.update_meta_data(data.0).await;
+            }
+        }
         Ok(sm)
+    }
+    pub async fn update_meta_data(&mut self, metadata: SnapshotMeta<TypeConfig>) {
+        let mut guard = self.data.raft_meta_data.lock().await;
+        guard.last_membership = metadata.last_membership;
+        guard.last_applied_log_id = metadata.last_log_id;
     }
 }
 
@@ -214,13 +227,21 @@ impl RaftStateMachine<TypeConfig> for StateMachineStore {
     ) -> Result<(), io::Error> {
         tracing::warn!("node {} snapshot start!!!!", self.node_id);
         let path_buf = snapshot.get_local_hard_link_buf(&self.path);
-        let res = load_cache_from_path(self.data.kvs.clone(), &path_buf).await?;
-        match res {
-            None => {}
-            Some(r) => {
-                println!("res:--------{}", r.1.len())
+        //理论上快照一定会存在
+        let res = load_cache_from_path(self.data.kvs.clone(), &path_buf)
+            .await?
+            .ok_or(io::Error::new(io::ErrorKind::Other, "meta data is empty"))?;
+        for atomic_request in res.1 {
+            match atomic_request.request {
+                Request::Set(set_req) => {
+                    self.data
+                        .kvs
+                        .cas_insert(set_req, atomic_request.version)
+                        .await;
+                }
             }
         }
+        self.update_meta_data(res.0).await;
         Ok(())
     }
 

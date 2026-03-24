@@ -212,14 +212,14 @@ async fn test_dump_and_load_with_data() {
     // 插入测试数据
     let key1 = Arc::new(b"key1".to_vec());
     let value1 = MyValue {
-        version: 0,
+        version: 1,
         data: Arc::new(b"value1".to_vec()),
         ttl_ms: 1000,
     };
 
     let key2 = Arc::new(b"key2".to_vec());
     let value2 = MyValue {
-        version: 0,
+        version: 1,
         data: Arc::new(b"value2".to_vec()),
         ttl_ms: 0, // 永不过期
     };

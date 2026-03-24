@@ -126,7 +126,7 @@ async fn benchmark_requests(apps: Vec<Arc<CacheCatApp>>) {
     let start_time = std::time::Instant::now();
     let mut handles = Vec::new();
     let thread = 1;
-    let num = 5000;
+    let num: u32 = 5000;
     // 创建 100 个并发任务
     for _ in 0..thread {
         let apps_clone = apps.clone();
@@ -134,7 +134,7 @@ async fn benchmark_requests(apps: Vec<Arc<CacheCatApp>>) {
             for i in 0..num {
                 // sleep(std::time::Duration::from_millis(1)).await;
                 let request = Request::Set(SetReq {
-                    key: Arc::from(Vec::from(Uuid::new_v4().as_bytes())),
+                    key: Arc::from((num).to_be_bytes().to_vec()),
                     value: Arc::from(Vec::from(format!("value_{}", i))),
                     ex_time: 0,
                 });

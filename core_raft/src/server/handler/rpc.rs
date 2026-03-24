@@ -154,7 +154,7 @@ async fn run_stream_mode(
 
     // 关键：通过rename原子替换目标文件
     // fs::rename(&temp_path, &final_path).await?;
-    tracing::warn!(
+    tracing::info!(
         "接收到来自{}的文件 文件接收完成: {}",
         peer_addr,
         final_path.to_string_lossy()

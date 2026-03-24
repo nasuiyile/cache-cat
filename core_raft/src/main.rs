@@ -130,6 +130,7 @@ fn multi_raft() -> Result<(), Box<dyn std::error::Error>> {
     });
     sleep(Duration::from_secs(1));
 
+
     let _h2 = thread::spawn(move || {
         let rt = Builder::new_multi_thread()
             .max_blocking_threads(512)

@@ -26,7 +26,7 @@ use uuid::Uuid;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct MyValue {
-    pub version: u32, //在快照期间每一次更新都会增加version
+    pub version: u32, //在快照期间每一次更新都会增加version 默认为1
     pub data: Arc<Vec<u8>>,
     pub ttl_ms: u64,
 }
@@ -116,12 +116,13 @@ impl MyCache {
         self.cache
             .entry(set_req.key.clone())
             .and_upsert_with(|old_entry| async move {
-                let a = if let Some(entry) = old_entry {
+                let old_version = if let Some(entry) = old_entry {
                     entry.into_value().version + 1
                 } else {
+                    //不存在默认为0
                     0
                 };
-                value.version = a;
+                value.version = old_version;
                 queue.push(AtomicRequest {
                     version: value.version,
                     request: Request::Set(set_req),
@@ -130,6 +131,39 @@ impl MyCache {
             })
             .await;
         return;
+    }
+    pub async fn cas_insert(&self, set_req: SetReq, version: u32) {
+        let key = set_req.key.clone();
+        // 我们预先准备好要插入的新数据
+        let new_data = set_req.value.clone();
+        let ttl = set_req.ex_time;
+        self.cache
+            .entry(key)
+            .and_upsert_with(async move |maybe_entry| {
+                if let Some(entry) = maybe_entry {
+                    let current_val = entry.value();
+                    // 核心逻辑：只有传入的 version 与缓存中的 version 相同时才允许更新
+                    if version == current_val.version {
+                        MyValue {
+                            data: new_data,
+                            ttl_ms: ttl,
+                            version: current_val.version + 1, // 更新版本号
+                        }
+                    } else {
+                        // 版本不匹配，直接返回旧值（即不更新）
+                        current_val.clone()
+                    }
+                } else {
+                    // 如果缓存里根本没数据：
+                    // 此时你可以根据业务决定：是允许插入（version从0开始），还是报错
+                    MyValue {
+                        data: new_data,
+                        ttl_ms: ttl,
+                        version: 1, // 初始版本
+                    }
+                }
+            })
+            .await;
     }
 
     pub fn invalidate_all(&self) {
@@ -164,7 +198,7 @@ impl MyCache {
                             Op::Put(MyValue {
                                 data: Arc::new(v),
                                 ttl_ms: 0,
-                                version: 0,
+                                version: 1,
                             })
                         }
                     }
