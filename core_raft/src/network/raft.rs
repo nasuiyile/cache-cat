@@ -3,6 +3,7 @@ use crate::network::node::{App, CacheCatApp, NodeId, create_node};
 use crate::server::core::config::{ONE, THREE, TWO};
 use crate::server::handler::model::SetReq;
 use crate::server::handler::rpc;
+use crate::server::handler::rpc::Server;
 use openraft::{BasicNode, Config};
 use std::collections::BTreeMap;
 use std::path::Path;
@@ -116,8 +117,14 @@ where
     } else if node_id == 1 {
         // tokio::time::sleep(std::time::Duration::from_millis(1)).await;
     }
+    let server = Server {
+        app: App::new(apps),
+        addr,
+        redis_addr: "".to_string(),
+    };
+    server.start_server().await?;
 
-    rpc::start_server(App::new(apps), addr).await
+    Ok(())
 }
 
 //这个方法用于测试主节点直接迭代状态机

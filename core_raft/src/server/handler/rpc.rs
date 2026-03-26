@@ -1,61 +1,146 @@
 use crate::network::node::{App, GroupId, get_app, get_group};
+use crate::protocol::resp::Parser;
 use crate::server::core::config::{get_snapshot_file_name, init_config};
 use crate::server::handler::external_handler::HANDLER_TABLE;
 use bytes::{Buf, BufMut, Bytes, BytesMut};
 use futures::{SinkExt, StreamExt};
+use std::io::Result as IoResult;
+use std::net::SocketAddr;
 use std::path::Path;
+use std::sync::Arc;
 use std::time::Instant;
 use tokio::fs;
 use tokio::fs::File;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
-use tokio::net::TcpListener;
+use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::mpsc;
 use tokio::sync::mpsc::UnboundedSender;
 use tokio_util::codec::{Framed, LengthDelimitedCodec};
-use tracing::Instrument;
+use tracing::{Instrument, error, info, warn};
 use uuid::Uuid;
 
-pub async fn start_server(app: App, addr: String) -> std::io::Result<()> {
-    // 初始化配置（保留原有逻辑）
-    // let _ = init_config("./server/config.yml");
-    // let config = get_config();
-    let listener = TcpListener::bind(addr).await?;
-    println!("Listening on: {}", listener.local_addr()?);
-    loop {
-        let app = app.clone();
-        let (mut socket, peer_addr) = match listener.accept().await {
-            Ok(p) => p,
-            Err(e) => {
-                eprintln!("接受连接失败: {}", e);
-                continue;
-            }
-        };
-        // 读循环：从 framed stream 中取出每个帧（frame 是去除 length header 后的 payload）
-        tokio::spawn(async move {
-            // 关闭 Nagle
-            if let Err(e) = socket.set_nodelay(true) {
-                eprintln!("set_nodelay 失败: {}", e);
-            }
-            println!("接收到来自 {} 的新连接", peer_addr);
+pub struct Server {
+    pub(crate) app: App,
+    pub addr: String,
+    pub redis_addr: String,
+}
+impl Server {
+    pub async fn start_server(self: Self) -> std::io::Result<()> {
+        // 初始化配置（保留原有逻辑）
+        // let _ = init_config("./server/config.yml");
+        // let config = get_config();
+        let listener = TcpListener::bind(self.addr.clone()).await?;
+        println!("Listening on: {}", listener.local_addr()?);
+        loop {
+            let app = self.app.clone();
+            let (mut socket, peer_addr) = match listener.accept().await {
+                Ok(p) => p,
+                Err(e) => {
+                    eprintln!("接受连接失败: {}", e);
+                    continue;
+                }
+            };
+            // 读循环：从 framed stream 中取出每个帧（frame 是去除 length header 后的 payload）
+            tokio::spawn(async move {
+                // 关闭 Nagle
+                if let Err(e) = socket.set_nodelay(true) {
+                    eprintln!("set_nodelay 失败: {}", e);
+                }
+                println!("接收到来自 {} 的新连接", peer_addr);
 
-            let mut first = [0u8; 1];
-            if let Err(e) = socket.read_exact(&mut first).await {
-                eprintln!("读取协议字节失败 {}: {}", peer_addr, e);
-                return;
-            }
-            //建立连接时通过一个字段来标识模式
-            if first[0] == 0 {
-                run_rpc_mode(app, socket, peer_addr).await;
-            } else {
-                let result = run_stream_mode(app, socket, peer_addr).await;
-                match result {
-                    Ok(_) => {}
-                    Err(e) => {
-                        eprintln!("处理连接失败: {}", e);
+                let mut first = [0u8; 1];
+                if let Err(e) = socket.read_exact(&mut first).await {
+                    eprintln!("读取协议字节失败 {}: {}", peer_addr, e);
+                    return;
+                }
+                //建立连接时通过一个字段来标识模式
+                if first[0] == 0 {
+                    run_rpc_mode(app, socket, peer_addr).await;
+                } else {
+                    let result = run_stream_mode(app, socket, peer_addr).await;
+                    match result {
+                        Ok(_) => {}
+                        Err(e) => {
+                            eprintln!("处理连接失败: {}", e);
+                        }
                     }
                 }
+            });
+        }
+    }
+    pub async fn start_redis_server(self: Arc<Self>) -> std::io::Result<()> {
+        let listener = TcpListener::bind(self.addr.clone()).await?;
+        loop {
+            match listener.accept().await {
+                Ok((stream, peer_addr)) => {
+                    info!("New connection accepted from {}", peer_addr);
+                    // Clone the Arc<Server> for the new connection
+                    let server = Arc::clone(&self);
+                    // Spawn an independent task for each connection
+                    tokio::spawn(async move {
+                        if let Err(e) = server.handle_connection(stream, peer_addr).await {
+                            error!("Error handling connection from {}: {}", peer_addr, e);
+                        }
+                    });
+                }
+                Err(e) => {
+                    error!("Failed to accept connection: {}", e);
+                }
             }
-        });
+        }
+    }
+    /// Handle a single client connection
+    async fn handle_connection(
+        self: Arc<Self>,
+        mut stream: TcpStream,
+        peer_addr: SocketAddr,
+    ) -> IoResult<()> {
+        let mut buffer = vec![0u8; 8192]; // 8KB buffer
+        let mut pending = Vec::new(); // Buffer for incomplete commands
+
+        loop {
+            match stream.read(&mut buffer).await {
+                Ok(0) => {
+                    info!("Connection closed by client: {}", peer_addr);
+                    break;
+                }
+                Ok(n) => {
+                    // Append new data to pending buffer
+                    pending.extend_from_slice(&buffer[..n]);
+
+                    // Try to parse and process complete commands
+                    let mut processed = 0;
+                    while let Some((value, consumed)) = Parser::parse(&pending[processed..]) {
+                        processed += consumed;
+
+                        // Log the parsed command
+                        info!("Received command from {}: {:?}", peer_addr, value);
+
+                        // Process the command and get response
+                       /* let response = self.process_command(value).await;
+                        let encoded = response.encode();
+
+                        // Send response
+                        if let Err(e) = stream.write_all(&encoded).await {
+                            warn!("Failed to write response to {}: {}", peer_addr, e);
+                            break;
+                        }*/
+                    }
+
+                    // Remove processed data from pending buffer
+                    if processed > 0 {
+                        pending = pending.split_off(processed);
+                    }
+                }
+                Err(e) => {
+                    error!("Error reading from {}: {}", peer_addr, e);
+                    break;
+                }
+            }
+        }
+
+        info!("Connection handler ended for {}", peer_addr);
+        Ok(())
     }
 }
 
