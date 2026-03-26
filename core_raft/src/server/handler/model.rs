@@ -43,7 +43,9 @@ impl Hash for SetReq {
 }
 
 #[derive(Serialize, Deserialize, Debug, PartialEq, Clone)]
-pub struct SetRes {}
+pub struct SetRes {
+    
+}
 
 #[derive(Serialize, Deserialize, Debug, PartialEq)]
 pub struct GetReq {

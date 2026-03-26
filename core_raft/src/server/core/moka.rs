@@ -1,3 +1,4 @@
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet, LinkedList};
 use crate::network::model::{AtomicRequest, Request};
 use crate::network::node::{GroupId, TypeConfig};
 use crate::server::core::config::{TEMP_PATH, create_temp_dir, get_snapshot_file_name};
@@ -13,6 +14,7 @@ use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use std::io::SeekFrom;
 use std::mem::size_of;
 use std::option::Option;
+use std::os::raw::c_int;
 use std::path::Path;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -27,7 +29,7 @@ use uuid::Uuid;
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct MyValue {
     pub version: u32, //在快照期间每一次更新都会增加version 默认为1
-    pub data: Arc<Vec<u8>>,
+    pub data: Value,
     pub ttl_ms: u64,
 }
 
@@ -41,7 +43,8 @@ const VEC_SIZE: usize = size_of::<Vec<u8>>();
 
 impl MyValue {
     pub fn estimated_memory_usage(&self) -> usize {
-        MY_VALUE_SIZE + ARC_COUNTER_SIZE + VEC_SIZE + self.data.capacity()
+        // MY_VALUE_SIZE + ARC_COUNTER_SIZE + VEC_SIZE + self.data.capacity()
+        0
     }
 }
 
@@ -98,17 +101,17 @@ impl MyCache {
     }
 
     /// 插入值
-    pub async fn insert(&self, set_req: SetReq) {
+    pub async fn set(&self, set_req: SetReq) {
         let value = MyValue {
-            data: set_req.value.clone(),
+            data: Value::String(set_req.value.clone()),
             ttl_ms: set_req.ex_time,
             version: 0,
         };
         self.cache.insert(set_req.key, value).await;
     }
-    pub async fn snapshot_insert(&self, set_req: SetReq, queue: &mut Vec<AtomicRequest>) {
+    pub async fn snapshot_set(&self, set_req: SetReq, queue: &mut Vec<AtomicRequest>) {
         let mut value = MyValue {
-            data: set_req.value.clone(),
+            data: Value::String(set_req.value.clone()),
             ttl_ms: set_req.ex_time,
             version: 0,
         };
@@ -132,10 +135,10 @@ impl MyCache {
             .await;
         return;
     }
-    pub async fn cas_insert(&self, set_req: SetReq, version: u32) {
+    pub async fn cas_set(&self, set_req: SetReq, version: u32) {
         let key = set_req.key.clone();
         // 我们预先准备好要插入的新数据
-        let new_data = set_req.value.clone();
+        let new_data = Value::String(set_req.value.clone());
         let ttl = set_req.ex_time;
         self.cache
             .entry(key)
@@ -187,16 +190,22 @@ impl MyCache {
                     match maybe_entry {
                         Some(entry) => {
                             let mut value = entry.into_value();
-                            // 关键：不会复制旧数据
-                            let data = Arc::make_mut(&mut value.data);
-                            data.extend_from_slice(&suffix);
-                            Op::Put(value)
+                            match &mut value.data {
+                                Value::String(data_arc) => {
+                                    // 关键：只在 String 类型下 append
+                                    let data = Arc::make_mut(data_arc);
+                                    data.extend_from_slice(&suffix);
+                                    value.version += 1;
+                                    Op::Put(value)
+                                }
+                                // 方案1：保持原值（最安全）
+                                _ => Op::Put(value),
+                            }
                         }
+                        // key 不存在 → 创建 String
                         None => {
-                            let mut v = Vec::with_capacity(suffix.len());
-                            v.extend_from_slice(&suffix);
                             Op::Put(MyValue {
-                                data: Arc::new(v),
+                                data: Value::String(suffix.clone()),
                                 ttl_ms: 0,
                                 version: 1,
                             })
@@ -278,4 +287,15 @@ impl Serialize for MyCache {
 
         entries.serialize(serializer)
     }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub enum Value{
+    Int(i32),
+
+    String(Arc<Vec<u8>>),
+    ZSet(BTreeMap<Vec<u8>, Vec<u8>>),
+    List(LinkedList<Vec<u8>>),
+    Set(HashSet<Vec<u8>>),
+    Hash(HashMap<Vec<u8>, Vec<u8>>),
 }

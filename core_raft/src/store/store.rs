@@ -166,7 +166,7 @@ impl RaftStateMachine<TypeConfig> for StateMachineStore {
                         Request::Set(set_req) => {
                             // 使用结构体的字段名来访问成员
                             let st = &self.data.kvs;
-                            st.snapshot_insert(set_req, &mut operation_queue).await;
+                            st.snapshot_set(set_req, &mut operation_queue).await;
                             Response::Set(SetRes {})
                         }
                     },
@@ -189,7 +189,7 @@ impl RaftStateMachine<TypeConfig> for StateMachineStore {
                         Request::Set(set_req) => {
                             // 使用结构体的字段名来访问成员
                             let st = &self.data.kvs;
-                            st.insert(set_req).await;
+                            st.set(set_req).await;
                             Response::Set(SetRes {})
                         }
                     },
@@ -234,7 +234,7 @@ impl RaftStateMachine<TypeConfig> for StateMachineStore {
                 Request::Set(set_req) => {
                     self.data
                         .kvs
-                        .cas_insert(set_req, atomic_request.version)
+                        .cas_set(set_req, atomic_request.version)
                         .await;
                 }
             }
