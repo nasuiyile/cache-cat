@@ -6,7 +6,6 @@ use bytes::{Buf, BufMut, Bytes, BytesMut};
 use futures::{SinkExt, StreamExt};
 use std::io::Result as IoResult;
 use std::net::SocketAddr;
-use std::path::Path;
 use std::sync::Arc;
 use std::time::Instant;
 use tokio::fs;
@@ -16,15 +15,22 @@ use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::mpsc;
 use tokio::sync::mpsc::UnboundedSender;
 use tokio_util::codec::{Framed, LengthDelimitedCodec};
-use tracing::{Instrument, error, info, warn};
+use tracing::{error, info, warn};
 use uuid::Uuid;
+use crate::network::model::Value;
+use crate::protocol::command::CommandFactory;
 
 pub struct Server {
     pub(crate) app: App,
     pub addr: String,
     pub redis_addr: String,
+    pub cmd_factory: Arc<CommandFactory>,
 }
 impl Server {
+    /// Process a RESP command and return the response
+    async fn process_command(&self, value: Value) -> Value {
+        self.cmd_factory.execute(value, self).await
+    }
     pub async fn start_server(self: Self) -> std::io::Result<()> {
         // 初始化配置（保留原有逻辑）
         // let _ = init_config("./server/config.yml");
@@ -117,14 +123,14 @@ impl Server {
                         info!("Received command from {}: {:?}", peer_addr, value);
 
                         // Process the command and get response
-                       /* let response = self.process_command(value).await;
+                        let response = self.process_command(value).await;
                         let encoded = response.encode();
 
                         // Send response
                         if let Err(e) = stream.write_all(&encoded).await {
                             warn!("Failed to write response to {}: {}", peer_addr, e);
                             break;
-                        }*/
+                        }
                     }
 
                     // Remove processed data from pending buffer

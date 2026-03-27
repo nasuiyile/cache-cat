@@ -1,4 +1,4 @@
-use crate::network::model::{Request, Response};
+use crate::network::model::{Request, Value};
 use crate::network::node::{App, CacheCatApp, NodeId, create_node};
 use crate::server::core::config::{ONE, THREE, TWO};
 use crate::server::handler::model::SetReq;
@@ -10,6 +10,7 @@ use std::path::Path;
 use std::sync::Arc;
 use tokio::time::sleep;
 use uuid::Uuid;
+use crate::protocol::command::CommandFactory;
 
 // pub async fn start_raft_app<P>(node_id: NodeId, dir: P, addr: String) -> std::io::Result<()>
 // where
@@ -117,9 +118,12 @@ where
     } else if node_id == 1 {
         // tokio::time::sleep(std::time::Duration::from_millis(1)).await;
     }
+    // Initialize command factory
+    let cmd_factory = Arc::new(CommandFactory::init());
     let server = Server {
         app: App::new(apps),
         addr,
+        cmd_factory,
         redis_addr: "".to_string(),
     };
     server.start_server().await?;

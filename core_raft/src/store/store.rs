@@ -1,4 +1,4 @@
-use crate::network::model::{AtomicRequest, Request, Response};
+use crate::network::model::{AtomicRequest, Request, Value};
 use crate::network::node::{GroupId, NodeId, TypeConfig};
 use crate::server::client::file_client::FileOperator;
 use crate::server::core::config::get_snapshot_file_name;
@@ -161,13 +161,13 @@ impl RaftStateMachine<TypeConfig> for StateMachineStore {
             while let Some((entry, responder)) = entries.try_next().await? {
                 raft_meta.last_applied_log_id = Some(entry.log_id);
                 let response = match entry.payload {
-                    EntryPayload::Blank => Response::none(),
+                    EntryPayload::Blank => Value::none(),
                     EntryPayload::Normal(req) => match req {
                         Request::Set(set_req) => {
                             // 使用结构体的字段名来访问成员
                             let st = &self.data.kvs;
                             st.snapshot_set(set_req, &mut operation_queue).await;
-                            Response::Success
+                            Value::SimpleString("OK".to_string())
                         }
                         Request::LPush(l_push_req) => {
                             let st = &self.data.kvs;
@@ -178,7 +178,7 @@ impl RaftStateMachine<TypeConfig> for StateMachineStore {
                     EntryPayload::Membership(mem) => {
                         raft_meta.last_membership =
                             StoredMembership::new(Some(entry.log_id.clone()), mem.clone());
-                        Response::none()
+                        Value::none()
                     }
                 };
                 if let Some(responder) = responder {
@@ -189,13 +189,13 @@ impl RaftStateMachine<TypeConfig> for StateMachineStore {
             while let Some((entry, responder)) = entries.try_next().await? {
                 raft_meta.last_applied_log_id = Some(entry.log_id);
                 let response = match entry.payload {
-                    EntryPayload::Blank => Response::none(),
+                    EntryPayload::Blank => Value::none(),
                     EntryPayload::Normal(req) => match req {
                         Request::Set(set_req) => {
                             // 使用结构体的字段名来访问成员
                             let st = &self.data.kvs;
                             st.set(set_req).await;
-                            Response::Success
+                            Value::SimpleString("OK".to_string())
                         }
                         Request::LPush(l_push_req) => {
                             let st = &self.data.kvs;
@@ -206,7 +206,7 @@ impl RaftStateMachine<TypeConfig> for StateMachineStore {
                     EntryPayload::Membership(mem) => {
                         raft_meta.last_membership =
                             StoredMembership::new(Some(entry.log_id.clone()), mem.clone());
-                        Response::none()
+                        Value::none()
                     }
                 };
                 if let Some(responder) = responder {

@@ -1,4 +1,4 @@
-use crate::network::model::{Request, Response};
+use crate::network::model::{Request, Value};
 use crate::network::router::{MultiNetworkFactory, Router};
 use crate::server::client::file_client::FileOperator;
 use crate::server::core::config::GROUP_NUM;
@@ -16,7 +16,7 @@ openraft::declare_raft_types!(
     /// Declare the type configuration for example K/V store.
     pub TypeConfig:
         D = Request,
-        R = Response,
+        R = Value,
         Entry = openraft::Entry<TypeConfig>,
         SnapshotData = FileOperator,
         NodeId=u16,

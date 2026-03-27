@@ -1,4 +1,4 @@
-use crate::network::model::{AtomicRequest, Request, Response};
+use crate::network::model::{AtomicRequest, Request, Value};
 use crate::network::node::{GroupId, TypeConfig};
 use crate::server::core::config::{TEMP_PATH, create_temp_dir, get_snapshot_file_name};
 use crate::server::handler::model::{LPushReq, SetReq};
@@ -29,7 +29,7 @@ use uuid::Uuid;
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct MyValue {
     pub version: u32, //在快照期间每一次更新都会增加version 默认为1
-    pub data: Value,
+    pub data: ValueObject,
     pub ttl_ms: u64,
 }
 
@@ -103,7 +103,7 @@ impl MyCache {
     /// 插入值
     pub async fn set(&self, set_req: SetReq) {
         let value = MyValue {
-            data: Value::String(set_req.value.clone()),
+            data: ValueObject::String(set_req.value.clone()),
             ttl_ms: set_req.ex_time,
             version: 0,
         };
@@ -111,7 +111,7 @@ impl MyCache {
     }
     pub async fn snapshot_set(&self, set_req: SetReq, queue: &mut Vec<AtomicRequest>) {
         let mut value = MyValue {
-            data: Value::String(set_req.value.clone()),
+            data: ValueObject::String(set_req.value.clone()),
             ttl_ms: set_req.ex_time,
             version: 0,
         };
@@ -138,7 +138,7 @@ impl MyCache {
     pub async fn cas_set(&self, set_req: SetReq, version: u32) {
         let key = set_req.key.clone();
         // 我们预先准备好要插入的新数据
-        let new_data = Value::String(set_req.value.clone());
+        let new_data = ValueObject::String(set_req.value.clone());
         let ttl = set_req.ex_time;
         self.cache
             .entry(key)
@@ -181,7 +181,7 @@ impl MyCache {
         self.cache.entry_count()
     }
     //成功就返回链表长度 失败返回错误内容 不存在就创建一个list
-    pub async fn l_push(&self, l_push: LPushReq) -> Response {
+    pub async fn l_push(&self, l_push: LPushReq) -> Value {
         let result = self
             .cache
             .entry(l_push.key)
@@ -190,7 +190,7 @@ impl MyCache {
                     Some(entry) => {
                         let mut value = entry.into_value();
                         match &mut value.data {
-                            Value::List(data) => {
+                            ValueObject::List(data) => {
                                 value.version += 1;
                                 data.push_front(l_push.value);
                                 Op::Put(value)
@@ -200,7 +200,7 @@ impl MyCache {
                     }
                     None => {
                         let value = MyValue {
-                            data: Value::List(LinkedList::from([l_push.value])),
+                            data: ValueObject::List(LinkedList::from([l_push.value])),
                             ttl_ms: 0,
                             version: 0,
                         };
@@ -213,14 +213,14 @@ impl MyCache {
             CompResult::Inserted(entry)
             | CompResult::ReplacedWith(entry)
             | CompResult::Unchanged(entry) => match entry.into_value().data {
-                Value::List(data_arc) => Response::Integer(data_arc.len() as i32),
-                _ => Response::Error("Key exists but is not a List".to_string()),
+                ValueObject::List(data_arc) => Value::Integer(data_arc.len() as i64),
+                _ => Value::Error("Key exists but is not a List".to_string()),
             },
             CompResult::StillNone(_) => {
                 // 理论不会发生（因为我们 Put 了）
-                Response::Error("Unexpected: key not found".to_string())
+                Value::Error("Unexpected: key not found".to_string())
             }
-            CompResult::Removed(_) => Response::Error("Unexpected: value removed".to_string()),
+            CompResult::Removed(_) => Value::Error("Unexpected: value removed".to_string()),
         }
     }
 
@@ -229,7 +229,7 @@ impl MyCache {
         &self,
         l_push: LPushReq,
         queue: &mut Vec<AtomicRequest>,
-    ) -> Response {
+    ) -> Value {
         let result = self
             .cache
             .entry(l_push.key.clone())
@@ -238,7 +238,7 @@ impl MyCache {
                     Some(entry) => {
                         let mut value = entry.into_value();
                         match &mut value.data {
-                            Value::List(data) => {
+                            ValueObject::List(data) => {
                                 queue.push(AtomicRequest {
                                     version: value.version,
                                     request: Request::LPush(l_push.clone()),
@@ -256,7 +256,7 @@ impl MyCache {
                             request: Request::LPush(l_push.clone()),
                         });
                         let value = MyValue {
-                            data: Value::List(LinkedList::from([l_push.value])),
+                            data: ValueObject::List(LinkedList::from([l_push.value])),
                             ttl_ms: 0,
                             version: 1,
                         };
@@ -269,19 +269,19 @@ impl MyCache {
             CompResult::Inserted(entry)
             | CompResult::ReplacedWith(entry)
             | CompResult::Unchanged(entry) => match entry.into_value().data {
-                Value::List(data_arc) => Response::Integer(data_arc.len() as i32),
-                _ => Response::Error("Key exists but is not a List".to_string()),
+                ValueObject::List(data_arc) => Value::Integer(data_arc.len() as i64),
+                _ => Value::Error("Key exists but is not a List".to_string()),
             },
             CompResult::StillNone(_) => {
                 // 理论不会发生（因为我们 Put 了）
-                Response::Error("Unexpected: key not found".to_string())
+                Value::Error("Unexpected: key not found".to_string())
             }
-            CompResult::Removed(_) => Response::Error("Unexpected: value removed".to_string()),
+            CompResult::Removed(_) => Value::Error("Unexpected: value removed".to_string()),
         }
     }
 
     //成功就返回链表长度 失败返回错误内容 不存在就创建一个list
-    pub async fn l_push_cas(&self, l_push: LPushReq, version: u32) -> Response {
+    pub async fn l_push_cas(&self, l_push: LPushReq, version: u32) -> Value {
         let result = self
             .cache
             .entry(l_push.key.clone())
@@ -290,7 +290,7 @@ impl MyCache {
                     Some(entry) => {
                         let mut value = entry.into_value();
                         match &mut value.data {
-                            Value::List(data) => {
+                            ValueObject::List(data) => {
                                 if value.version != version {
                                     return Op::Nop;
                                 }
@@ -307,7 +307,7 @@ impl MyCache {
                             tracing::error!("CAS failed: operation not found");
                         }
                         let value = MyValue {
-                            data: Value::List(LinkedList::from([l_push.value])),
+                            data: ValueObject::List(LinkedList::from([l_push.value])),
                             ttl_ms: 0,
                             version: 1,
                         };
@@ -320,14 +320,14 @@ impl MyCache {
             CompResult::Inserted(entry)
             | CompResult::ReplacedWith(entry)
             | CompResult::Unchanged(entry) => match entry.into_value().data {
-                Value::List(data_arc) => Response::Integer(data_arc.len() as i32),
-                _ => Response::Error("Key exists but is not a List".to_string()),
+                ValueObject::List(data_arc) => Value::Integer(data_arc.len() as i64),
+                _ => Value::Error("Key exists but is not a List".to_string()),
             },
             CompResult::StillNone(_) => {
                 // 理论不会发生（因为我们 Put 了）
-                Response::Error("Unexpected: key not found".to_string())
+                Value::Error("Unexpected: key not found".to_string())
             }
-            CompResult::Removed(_) => Response::Error("Unexpected: value removed".to_string()),
+            CompResult::Removed(_) => Value::Error("Unexpected: value removed".to_string()),
         }
     }
 
@@ -343,7 +343,7 @@ impl MyCache {
                         Some(entry) => {
                             let mut value = entry.into_value();
                             match &mut value.data {
-                                Value::String(data_arc) => {
+                                ValueObject::String(data_arc) => {
                                     let data = Arc::make_mut(data_arc);
                                     data.extend_from_slice(&suffix);
                                     value.version += 1;
@@ -356,7 +356,7 @@ impl MyCache {
                             }
                         }
                         None => Op::Put(MyValue {
-                            data: Value::String(suffix.clone()),
+                            data: ValueObject::String(suffix.clone()),
                             ttl_ms: 0,
                             version: 1,
                         }),
@@ -370,7 +370,7 @@ impl MyCache {
             CompResult::Inserted(entry)
             | CompResult::ReplacedWith(entry)
             | CompResult::Unchanged(entry) => match entry.into_value().data {
-                Value::String(data_arc) => Ok(data_arc.len() as u32),
+                ValueObject::String(data_arc) => Ok(data_arc.len() as u32),
                 _ => Err("Key exists but is not a String".to_string()),
             },
             CompResult::StillNone(_) => {
@@ -455,7 +455,7 @@ impl Serialize for MyCache {
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
-pub enum Value {
+pub enum ValueObject {
     Int(i32),
 
     String(Arc<Vec<u8>>),

@@ -1,7 +1,7 @@
 use crate::network::model::{AtomicRequest, Request};
 use crate::network::node::{GroupId, TypeConfig};
 use crate::server::core::config::{TEMP_PATH, get_snapshot_file_name};
-use crate::server::core::moka::{MyCache, MyValue, Value};
+use crate::server::core::moka::{MyCache, MyValue, ValueObject};
 use crate::server::handler::model::SetReq;
 use crate::store::store::RaftMetaData;
 use openraft::SnapshotMeta;
@@ -214,14 +214,14 @@ async fn test_dump_and_load_with_data() {
     let key1 = Arc::new(b"key1".to_vec());
     let value1 = MyValue {
         version: 1,
-        data: Value::String(Arc::new(b"value1".to_vec())),
+        data: ValueObject::String(Arc::new(b"value1".to_vec())),
         ttl_ms: 1000,
     };
 
     let key2 = Arc::new(b"key2".to_vec());
     let value2 = MyValue {
         version: 1,
-        data: Value::String(Arc::new(b"value1".to_vec())),
+        data: ValueObject::String(Arc::new(b"value1".to_vec())),
         ttl_ms: 0, // 永不过期
     };
 
@@ -277,7 +277,7 @@ async fn test_dump_and_load_with_data() {
     let v2 = loaded_value2.unwrap();
 
     match (&v1.data, &value1.data) {
-        (Value::String(a), Value::String(b)) => {
+        (ValueObject::String(a), ValueObject::String(b)) => {
             assert_eq!(a.as_slice(), b.as_slice(), "key1 value mismatch");
         }
         _ => panic!("key1 type mismatch"),
@@ -286,7 +286,7 @@ async fn test_dump_and_load_with_data() {
     assert_eq!(v1.ttl_ms, value1.ttl_ms);
 
     match (&v2.data, &value2.data) {
-        (Value::String(a), Value::String(b)) => {
+        (ValueObject::String(a), ValueObject::String(b)) => {
             assert_eq!(a.as_slice(), b.as_slice(), "key2 value mismatch");
         }
         _ => panic!("key2 type mismatch"),
