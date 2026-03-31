@@ -1,36 +1,24 @@
 use crate::network::model::{AtomicRequest, Request, Value};
-use crate::network::node::{GroupId, TypeConfig};
 use crate::server::core::config::{TEMP_PATH, create_temp_dir, get_snapshot_file_name};
 use crate::server::handler::model::{LPushReq, SetReq};
-use crate::store::store::RaftMetaData;
-use byteorder::LittleEndian;
-use dashmap::DashMap;
+use crate::util::now_ms;
 use moka::Expiry;
 use moka::future::Cache;
 use moka::ops::compute::{CompResult, Op};
-use openraft::SnapshotMeta;
-use serde::{Deserialize, Deserializer, Serialize, Serializer};
-use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet, LinkedList};
-use std::io::SeekFrom;
+use serde::{Deserialize, Serialize, Serializer};
+use std::collections::{BTreeMap, HashMap, HashSet, LinkedList};
 use std::mem::size_of;
 use std::option::Option;
-use std::os::raw::c_int;
-use std::path::Path;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
-use tokio::fs::File;
-use tokio::io::{
-    AsyncRead, AsyncReadExt, AsyncSeekExt, AsyncWrite, AsyncWriteExt, BufReader, BufWriter,
-};
-use tokio::sync::Mutex;
-use tokio::{fs, io};
-use uuid::Uuid;
+use tokio::io;
+use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct MyValue {
     pub version: u32, //在快照期间每一次更新都会增加version 默认为1
     pub data: ValueObject,
-    pub ttl_ms: u64,
+    pub expires_at: u64, //绝对时间  这里 假设不同节点的时钟偏移是有界的
 }
 
 // =====================
@@ -62,10 +50,15 @@ impl Expiry<Arc<Vec<u8>>, MyValue> for MyExpiry {
         value: &MyValue,
         _created_at: Instant,
     ) -> Option<Duration> {
-        if value.ttl_ms == 0 {
-            None // 永不过期
+        if value.expires_at == 0 {
+            None
         } else {
-            Some(Duration::from_millis(value.ttl_ms))
+            let now = now_ms();
+            if value.expires_at <= now {
+                Some(Duration::from_millis(0))
+            } else {
+                Some(Duration::from_millis(value.expires_at - now))
+            }
         }
     }
 
@@ -76,10 +69,15 @@ impl Expiry<Arc<Vec<u8>>, MyValue> for MyExpiry {
         _updated_at: Instant,
         _duration_until_expiry: Option<Duration>,
     ) -> Option<Duration> {
-        if value.ttl_ms == 0 {
+        if value.expires_at == 0 {
             None
         } else {
-            Some(Duration::from_millis(value.ttl_ms))
+            let now = now_ms();
+            if value.expires_at <= now {
+                Some(Duration::from_millis(0))
+            } else {
+                Some(Duration::from_millis(value.expires_at - now))
+            }
         }
     }
 }
@@ -108,7 +106,7 @@ impl MyCache {
     pub async fn set(&self, set_req: SetReq, queue: UpdateType<'_>) {
         let mut value = MyValue {
             data: ValueObject::String(set_req.value.clone()),
-            ttl_ms: set_req.ex_time,
+            expires_at: set_req.ex_time,
             version: 0,
         };
         match queue {
@@ -156,7 +154,7 @@ impl MyCache {
                             let ttl = set_req.ex_time;
                             MyValue {
                                 data: new_data,
-                                ttl_ms: ttl,
+                                expires_at: ttl,
                                 version: 1, // 初始版本
                             }
                         }
@@ -165,7 +163,6 @@ impl MyCache {
             }
         }
     }
-
 
     pub fn invalidate_all(&self) {
         self.cache.invalidate_all();
@@ -199,7 +196,7 @@ impl MyCache {
                     None => {
                         let value = MyValue {
                             data: ValueObject::List(LinkedList::from([l_push.value])),
-                            ttl_ms: 0,
+                            expires_at: 0,
                             version: 0,
                         };
                         Op::Put(value)
@@ -251,7 +248,7 @@ impl MyCache {
                         });
                         let value = MyValue {
                             data: ValueObject::List(LinkedList::from([l_push.value])),
-                            ttl_ms: 0,
+                            expires_at: 0,
                             version: 1,
                         };
                         Op::Put(value)
@@ -302,7 +299,7 @@ impl MyCache {
                         }
                         let value = MyValue {
                             data: ValueObject::List(LinkedList::from([l_push.value])),
-                            ttl_ms: 0,
+                            expires_at: 0,
                             version: 1,
                         };
                         Op::Put(value)
@@ -351,7 +348,7 @@ impl MyCache {
                         }
                         None => Op::Put(MyValue {
                             data: ValueObject::String(suffix.clone()),
-                            ttl_ms: 0,
+                            expires_at: 0,
                             version: 1,
                         }),
                     }

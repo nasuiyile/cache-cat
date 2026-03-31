@@ -315,7 +315,7 @@ pub async fn redis_set_hand(
             match cache.cache.get(&params.key).await {
                 None => NO_EXPIRATION,
                 Some(value) => {
-                    let ttl_ms = value.ttl_ms;
+                    let ttl_ms = value.expires_at;
                     existing_key = match value.data {
                         ValueObject::Int(v) => {
                             ExistingKey::Data(Arc::from(v.to_string().into_bytes()))
