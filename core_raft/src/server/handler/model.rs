@@ -63,15 +63,30 @@ impl Hash for LPushReq {
     }
 }
 
-
+#[derive(Serialize, Deserialize, Debug, PartialEq, Clone)]
+pub struct DelReq {
+    pub key: Arc<Vec<u8>>,
+}
+impl fmt::Display for DelReq {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(
+            f,
+            "DelReq {{ key: {} }}",
+            String::from_utf8_lossy(&self.key)
+        )
+    }
+}
+impl Hash for DelReq {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.key.hash(state);
+    }
+}
 
 #[derive(Serialize, Deserialize, Debug, PartialEq, Clone)]
-pub struct SetRes {
-    
-}
+pub struct SetRes {}
 #[derive(Serialize, Deserialize, Debug, PartialEq, Clone)]
 pub struct LPushRes {
-    pub value: Result<u32,String>,
+    pub value: Result<u32, String>,
 }
 
 #[derive(Serialize, Deserialize, Debug, PartialEq)]
@@ -85,10 +100,6 @@ pub struct GetRes {
     pub value: Option<Arc<Vec<u8>>>,
 }
 
-#[derive(Serialize, Deserialize, Debug, PartialEq)]
-pub struct DelReq {
-    pub key: String,
-}
 
 #[derive(Serialize, Deserialize, Debug, PartialEq)]
 pub struct DelRes {

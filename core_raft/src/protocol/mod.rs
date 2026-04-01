@@ -2,6 +2,7 @@ pub mod command;
 mod connection;
 pub mod resp;
 pub mod string;
+mod key;
 
 /// Current format version for all encoded types (stored in high 4 bits of flags)
 pub const CURRENT_VERSION: u8 = 1;

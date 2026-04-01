@@ -1,5 +1,5 @@
 use crate::protocol::string::set::SetParams;
-use crate::server::handler::model::{LPushReq, LPushRes, SetReq, SetRes};
+use crate::server::handler::model::{DelReq, LPushReq, LPushRes, SetReq, SetRes};
 use serde::{Deserialize, Serialize};
 use std::fmt;
 use std::hash::{DefaultHasher, Hash, Hasher};
@@ -10,6 +10,7 @@ use std::sync::Arc;
 pub enum Request {
     Set(SetReq),
     LPush(LPushReq),
+    Del(DelReq),
 
     RedisSet(SetParams),
 }
@@ -34,6 +35,7 @@ impl fmt::Display for Request {
             Request::Set(req) => write!(f, "Set: {}", req),
             Request::LPush(req) => write!(f, "LPush: {}", req),
             Request::RedisSet(req) => write!(f, "RedisSet: {}", req),
+            Request::Del(req) => write!(f, "DEL:{}", req),
         }
     }
 }

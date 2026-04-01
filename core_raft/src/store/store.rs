@@ -163,23 +163,27 @@ impl RaftStateMachine<TypeConfig> for StateMachineStore {
             let mut operation_queue = self.data.incremental_operation_queue.lock().await;
             while let Some((entry, responder)) = entries.try_next().await? {
                 raft_meta.last_applied_log_id = Some(entry.log_id);
+                let st = &self.data.kvs;
                 let response = match entry.payload {
                     EntryPayload::Blank => Value::none(),
                     EntryPayload::Normal(req) => match req {
                         Request::Set(set_req) => {
                             // 使用结构体的字段名来访问成员
-                            let st = &self.data.kvs;
                             st.set(set_req, UpdateType::Snapshot(&mut operation_queue))
                                 .await;
                             Value::SimpleString("OK".to_string())
                         }
                         Request::LPush(l_push_req) => {
-                            let st = &self.data.kvs;
                             let res = st.l_push_snapshot(l_push_req, &mut operation_queue).await;
                             res
                         }
+                        Request::Del(del_req) => {
+                            let res = st
+                                .del(del_req, UpdateType::Snapshot(&mut operation_queue))
+                                .await;
+                            res
+                        }
                         Request::RedisSet(set) => {
-                            let st = &self.data.kvs;
                             redis_set_hand(st, set, UpdateType::Snapshot(&mut operation_queue))
                                 .await
                         }
@@ -197,24 +201,24 @@ impl RaftStateMachine<TypeConfig> for StateMachineStore {
         } else {
             while let Some((entry, responder)) = entries.try_next().await? {
                 raft_meta.last_applied_log_id = Some(entry.log_id);
+                let st = &self.data.kvs;
                 let response = match entry.payload {
                     EntryPayload::Blank => Value::none(),
                     EntryPayload::Normal(req) => match req {
                         Request::Set(set_req) => {
                             // 使用结构体的字段名来访问成员
-                            let st = &self.data.kvs;
                             st.set(set_req, UpdateType::None).await;
                             Value::SimpleString("OK".to_string())
                         }
                         Request::LPush(l_push_req) => {
-                            let st = &self.data.kvs;
                             let res = st.l_push(l_push_req).await;
                             res
                         }
-                        Request::RedisSet(set) => {
-                            let st = &self.data.kvs;
-                            redis_set_hand(st, set, UpdateType::None).await
+                        Request::Del(del_req) => {
+                            let res = st.del(del_req, UpdateType::None).await;
+                            res
                         }
+                        Request::RedisSet(set) => redis_set_hand(st, set, UpdateType::None).await,
                     },
                     EntryPayload::Membership(mem) => {
                         raft_meta.last_membership =
@@ -264,6 +268,12 @@ impl RaftStateMachine<TypeConfig> for StateMachineStore {
                     self.data
                         .kvs
                         .l_push_cas(l_push_req, atomic_request.version)
+                        .await;
+                }
+                Request::Del(del_req) => {
+                    self.data
+                        .kvs
+                        .del(del_req, UpdateType::CAS(atomic_request.version))
                         .await;
                 }
                 Request::RedisSet(set) => {

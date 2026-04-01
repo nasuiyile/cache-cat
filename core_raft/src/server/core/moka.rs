@@ -1,6 +1,6 @@
 use crate::network::model::{AtomicRequest, Request, Value};
 use crate::server::core::config::{TEMP_PATH, create_temp_dir, get_snapshot_file_name};
-use crate::server::handler::model::{LPushReq, SetReq};
+use crate::server::handler::model::{DelReq, LPushReq, SetReq};
 use crate::util::now_ms;
 use moka::Expiry;
 use moka::future::Cache;
@@ -103,6 +103,51 @@ impl MyCache {
         Self { cache }
     }
 
+    pub async fn del(&self, del_req: DelReq, queue: UpdateType<'_>) -> Value {
+        let key = del_req.key.clone();
+
+        match queue {
+            UpdateType::None => {
+                let existed = self.cache.remove(&key).await;
+                if existed.is_some() {
+                    Value::Integer(1)
+                } else {
+                    Value::Integer(0)
+                }
+            }
+
+            UpdateType::Snapshot(queue) => {
+                // 先记录当前版本，再删除
+                let version = if let Some(entry) = self.cache.get(&key).await {
+                    entry.version + 1
+                } else {
+                    0
+                };
+
+                queue.push(AtomicRequest {
+                    version,
+                    request: Request::Del(del_req.clone()),
+                });
+
+                let existed = self.cache.remove(&key).await;
+                if existed.is_some() {
+                    Value::Integer(1)
+                } else {
+                    Value::Integer(0)
+                }
+            }
+
+            UpdateType::CAS(version) => {
+                if let Some(entry) = self.cache.get(&key).await {
+                    if entry.version == version {
+                        self.cache.remove(&key).await;
+                        return Value::Integer(1);
+                    }
+                }
+                Value::Integer(0)
+            }
+        }
+    }
     pub async fn set(&self, set_req: SetReq, queue: UpdateType<'_>) {
         let mut value = MyValue {
             data: ValueObject::String(set_req.value.clone()),
