@@ -7,15 +7,13 @@
 //! - The number of keys that were removed
 //! - 0 if none of the specified keys existed
 
-use crate::network::model::Request::Del;
-use crate::network::model::Value;
-use crate::network::node::{TypeConfig, get_app, get_group_id_by_key};
+use crate::network::model::BaseOperation::Del;
+use crate::network::model::{Request, Value};
+use crate::network::node::{get_app, get_group_id_by_key};
 use crate::protocol::command::Command;
 use crate::server::handler::model::DelReq;
 use crate::server::handler::rpc::Server;
 use async_trait::async_trait;
-use openraft::error::{ClientWriteError, RaftError};
-use openraft::raft::ClientWriteResponse;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fmt::{Display, Formatter};
@@ -75,9 +73,9 @@ impl Command for DelCommand {
         }
         for (group_id, keys) in map {
             let app = get_app(&server.app, group_id);
-            let request = Del(DelReq {
+            let request = Request::Base(Del(DelReq {
                 keys: Arc::from(keys),
-            });
+            }));
             match app.raft.client_write(request).await {
                 Ok(res) => match res.data {
                     Value::Integer(i) => {

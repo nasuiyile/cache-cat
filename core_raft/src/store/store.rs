@@ -1,4 +1,4 @@
-use crate::network::model::{AtomicRequest, Request, Value};
+use crate::network::model::{AtomicRequest, BaseOperation, Request, Value};
 use crate::network::node::{GroupId, NodeId, TypeConfig};
 use crate::protocol::NO_EXPIRATION;
 use crate::protocol::string::set::{Expiration, SetMode, SetParams};
@@ -167,21 +167,26 @@ impl RaftStateMachine<TypeConfig> for StateMachineStore {
                 let response = match entry.payload {
                     EntryPayload::Blank => Value::none(),
                     EntryPayload::Normal(req) => match req {
-                        Request::Set(set_req) => {
-                            // 使用结构体的字段名来访问成员
-                            st.set(set_req, UpdateType::Snapshot(&mut operation_queue))
-                                .await;
-                            Value::SimpleString("OK".to_string())
-                        }
-                        Request::LPush(l_push_req) => {
-                            let res = st.l_push_snapshot(l_push_req, &mut operation_queue).await;
-                            res
-                        }
-                        Request::Del(del_req) => {
-                            let res = st
-                                .del(del_req, UpdateType::Snapshot(&mut operation_queue))
-                                .await;
-                            res
+                        Request::Base(base) => {
+                            match base {
+                                BaseOperation::Set(set) => {
+                                    // 使用结构体的字段名来访问成员
+                                    st.set(set, UpdateType::Snapshot(&mut operation_queue))
+                                        .await;
+                                    Value::SimpleString("OK".to_string())
+                                }
+                                BaseOperation::LPush(l_push) => {
+                                    let res =
+                                        st.l_push_snapshot(l_push, &mut operation_queue).await;
+                                    res
+                                }
+                                BaseOperation::Del(del) => {
+                                    let res = st
+                                        .del(del, UpdateType::Snapshot(&mut operation_queue))
+                                        .await;
+                                    res
+                                }
+                            }
                         }
                         Request::RedisSet(set) => {
                             redis_set_hand(st, set, UpdateType::Snapshot(&mut operation_queue))
@@ -205,18 +210,22 @@ impl RaftStateMachine<TypeConfig> for StateMachineStore {
                 let response = match entry.payload {
                     EntryPayload::Blank => Value::none(),
                     EntryPayload::Normal(req) => match req {
-                        Request::Set(set_req) => {
-                            // 使用结构体的字段名来访问成员
-                            st.set(set_req, UpdateType::None).await;
-                            Value::SimpleString("OK".to_string())
-                        }
-                        Request::LPush(l_push_req) => {
-                            let res = st.l_push(l_push_req).await;
-                            res
-                        }
-                        Request::Del(del_req) => {
-                            let res = st.del(del_req, UpdateType::None).await;
-                            res
+                        Request::Base(base) => {
+                            match base {
+                                BaseOperation::Set(set) => {
+                                    // 使用结构体的字段名来访问成员
+                                    st.set(set, UpdateType::None).await;
+                                    Value::SimpleString("OK".to_string())
+                                }
+                                BaseOperation::LPush(l_push) => {
+                                    let res = st.l_push(l_push).await;
+                                    res
+                                }
+                                BaseOperation::Del(del) => {
+                                    let res = st.del(del, UpdateType::None).await;
+                                    res
+                                }
+                            }
                         }
                         Request::RedisSet(set) => redis_set_hand(st, set, UpdateType::None).await,
                     },
@@ -258,27 +267,25 @@ impl RaftStateMachine<TypeConfig> for StateMachineStore {
             .ok_or(io::Error::new(io::ErrorKind::Other, "meta data is empty"))?;
         for atomic_request in res.1 {
             match atomic_request.request {
-                Request::Set(set_req) => {
+                BaseOperation::Set(set_req) => {
                     self.data
                         .kvs
                         .set(set_req, UpdateType::CAS(atomic_request.version))
                         .await;
                 }
-                Request::LPush(l_push_req) => {
+                BaseOperation::LPush(l_push_req) => {
                     self.data
                         .kvs
                         .l_push_cas(l_push_req, atomic_request.version)
                         .await;
                 }
-                Request::Del(del_req) => {
+                BaseOperation::Del(del_req) => {
                     self.data
                         .kvs
                         .del(del_req, UpdateType::CAS(atomic_request.version))
                         .await;
                 }
-                Request::RedisSet(set) => {
-                    todo!()
-                }
+
             }
         }
         self.update_meta_data(res.0).await;

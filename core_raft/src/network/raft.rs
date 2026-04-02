@@ -1,4 +1,4 @@
-use crate::network::model::{Request, Value};
+use crate::network::model::{BaseOperation, Request, Value};
 use crate::network::node::{App, CacheCatApp, NodeId, create_node};
 use crate::protocol::command::CommandFactory;
 use crate::server::core::config::{ONE, THREE, TWO};
@@ -154,11 +154,11 @@ async fn benchmark_requests(apps: Vec<Arc<CacheCatApp>>) {
         let handle = tokio::spawn(async move {
             for i in 0..num {
                 // sleep(std::time::Duration::from_millis(1)).await;
-                let request = Request::Set(SetReq {
+                let request = Request::Base(BaseOperation::Set(SetReq {
                     key: Arc::from((num).to_be_bytes().to_vec()),
                     value: Arc::from(Vec::from(format!("value_{}", i))),
                     ex_time: 0,
-                });
+                }));
                 //往第一个group发送请求
                 if let Some(app) = apps_clone.get(0) {
                     match app.raft.client_write(request).await {

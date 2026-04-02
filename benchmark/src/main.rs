@@ -1,5 +1,5 @@
 use clap::Parser;
-use core_raft::network::model::Request;
+use core_raft::network::model::{BaseOperation, Request};
 use core_raft::network::node::TypeConfig;
 use core_raft::server::client::client::RpcMultiClient;
 use core_raft::server::handler::model::{PrintTestReq, PrintTestRes, SetReq};
@@ -179,11 +179,11 @@ async fn run_engine(
                     let res: Result<ClientWriteResponse<TypeConfig>, _> = client_c
                         .call(
                             2,
-                            Request::Set(SetReq {
+                            Request::Base(BaseOperation::Set(SetReq {
                                 key: i.to_string().into_bytes().into(),
                                 value: Vec::from("xxx").into(),
                                 ex_time: 0,
-                            }),
+                            })),
                         )
                         .await;
                     success = res.is_ok();

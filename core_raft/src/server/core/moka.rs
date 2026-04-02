@@ -1,4 +1,4 @@
-use crate::network::model::{AtomicRequest, Request, Value};
+use crate::network::model::{AtomicRequest, BaseOperation, Request, Value};
 use crate::server::core::config::{TEMP_PATH, create_temp_dir, get_snapshot_file_name};
 use crate::server::handler::model::{DelReq, LPushReq, SetReq};
 use crate::util::now_ms;
@@ -129,7 +129,7 @@ impl MyCache {
 
                     queue.push(AtomicRequest {
                         version,
-                        request: Request::Del(DelReq {
+                        request: BaseOperation::Del(DelReq {
                             keys: Arc::from(vec![key.clone()]), // 保持单 key 语义
                         }),
                     });
@@ -180,7 +180,7 @@ impl MyCache {
                             value.version = old_version;
                             queue.push(AtomicRequest {
                                 version: value.version,
-                                request: Request::Set(set_req),
+                                request: BaseOperation::Set(set_req),
                             });
                             value
                         }
@@ -284,7 +284,7 @@ impl MyCache {
                             ValueObject::List(data) => {
                                 queue.push(AtomicRequest {
                                     version: value.version,
-                                    request: Request::LPush(l_push.clone()),
+                                    request: BaseOperation::LPush(l_push.clone()),
                                 });
                                 value.version += 1;
                                 data.push_front(l_push.value);
@@ -296,7 +296,7 @@ impl MyCache {
                     None => {
                         queue.push(AtomicRequest {
                             version: 1,
-                            request: Request::LPush(l_push.clone()),
+                            request: BaseOperation::LPush(l_push.clone()),
                         });
                         let value = MyValue {
                             data: ValueObject::List(LinkedList::from([l_push.value])),
