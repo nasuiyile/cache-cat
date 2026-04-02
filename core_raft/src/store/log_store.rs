@@ -1,6 +1,5 @@
 use crate::network::node::{GroupId, TypeConfig};
 use crate::store::raft_engine::MessageExtTyped;
-use lru::LruCache;
 use meta::StoreMeta;
 use openraft::OptionalSend;
 use openraft::RaftLogReader;

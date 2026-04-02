@@ -2,7 +2,12 @@
 name = "core_raft"
 version = "0.1.0"
 edition = "2024"
-
+description = "An extremely high-performance strongly consistent key value pair database"
+documentation = "https://github.com/nasuiyile/cache-cat"
+readme = "README.md"
+homepage = "https://github.com/nasuiyile/cache-cat"
+repository = "https://github.com/nasuiyile/cache-cat"
+license = "Apache-2.0"
 [profile.release]
 debug = true
 
@@ -23,13 +28,11 @@ async-trait = "0.1.89"
 
 tempfile = "3.24.0"
 flamegraph = "0.6.11"
-dashmap = "6.1.0"
 
 mimalloc = "0.1.48"
 anyhow = { version = "1.0.102" }
 crossbeam-utils = "0.8.21"
 parking_lot = "0.12.5"
-lru = "0.16.3"
 raft-engine = { git = "https://github.com/nasuiyile/raft-engine-serde" }
 serde_yaml = "0.9.33"
 tracing-subscriber = { version = "0.3.22", features = ["env-filter", "fmt"] }

@@ -2,8 +2,8 @@ use crate::network::node::{GroupId, NodeId, TypeConfig};
 use crate::server::client::client::{RpcClient, RpcMultiClient};
 use crate::server::handler::model::{AppendEntriesReq, InstallFullSnapshotReq, VoteReq};
 use openraft::error::Timeout;
+use std::collections::HashMap;
 
-use dashmap::DashMap;
 use openraft::RPCTypes::{InstallSnapshot, Vote};
 use openraft::alias::VoteOf;
 use openraft::error::{RPCError, ReplicationClosed, StreamingError, Unreachable};
@@ -13,6 +13,7 @@ use openraft::raft::{
 };
 use openraft::{OptionalSend, RaftNetworkFactory, Snapshot};
 use openraft_multi::{GroupNetworkAdapter, GroupNetworkFactory, GroupRouter};
+use parking_lot::RwLock;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
@@ -28,7 +29,7 @@ impl RaftNetworkFactory<TypeConfig> for MultiNetworkFactory {
         let nodes = router.nodes.clone();
         match RpcMultiClient::connect(&addr).await {
             Ok(client) => {
-                nodes.insert(target, client);
+                nodes.write().insert(target, client);
             }
             Err(_) => {
                 tracing::info!("connect to node {} failed, start retrying", addr);
@@ -38,7 +39,7 @@ impl RaftNetworkFactory<TypeConfig> for MultiNetworkFactory {
                         match RpcMultiClient::connect(&addr).await {
                             Ok(client) => {
                                 tracing::info!("reconnect to {} success", addr);
-                                nodes.insert(target, client);
+                                nodes.write().insert(target, client);
                                 break; // 成功后退出循环
                             }
                             Err(_) => {
@@ -58,7 +59,7 @@ impl RaftNetworkFactory<TypeConfig> for MultiNetworkFactory {
 pub struct Router {
     /// Map from node_id to node connection.
     /// 所有节点都有这个nodes副本
-    pub nodes: Arc<DashMap<NodeId, RpcMultiClient>>,
+    pub nodes: Arc<RwLock<HashMap<NodeId, RpcMultiClient>>>,
     pub addr: String,
     pub path: PathBuf,
     pub node_id: NodeId,
@@ -66,7 +67,7 @@ pub struct Router {
 impl Router {
     pub fn new(addr: String, path: PathBuf, node_id: NodeId) -> Self {
         Self {
-            nodes: Arc::new((DashMap::new())),
+            nodes: Arc::new(RwLock::new(HashMap::new())),
             addr,
             path,
             node_id,
@@ -88,38 +89,41 @@ impl GroupRouter<TypeConfig, GroupId> for Router {
             let i = rpc.entries.len();
             tracing::info!("send entries len:{}", i);
         }
+
         let req = AppendEntriesReq {
             append_entries: rpc,
             group_id,
         };
-        match self.nodes.get(&target) {
+
+        // 先 clone，提前释放锁
+        let client = match self.nodes.read().get(&target).cloned() {
             None => {
                 tracing::info!(
                     "node {} not found (target: {})",
                     target as u64,
                     target as u64
                 );
-                Err(RPCError::Unreachable(Unreachable::from_string(format!(
+                return Err(RPCError::Unreachable(Unreachable::from_string(format!(
                     "node {} not found",
                     target as u64
-                ))))
+                ))));
             }
-            Some(client) => {
-                client
-                    .call_with_timeout(
-                        7,
-                        req,
-                        option.hard_ttl(),
-                        Timeout {
-                            action: Vote,
-                            target,
-                            timeout: option.hard_ttl(),
-                            id: self.node_id,
-                        },
-                    )
-                    .await
-            }
-        }
+            Some(client) => client,
+        };
+
+        client
+            .call_with_timeout(
+                7,
+                req,
+                option.hard_ttl(),
+                Timeout {
+                    action: Vote,
+                    target,
+                    timeout: option.hard_ttl(),
+                    id: self.node_id,
+                },
+            )
+            .await
     }
 
     async fn vote(
@@ -133,34 +137,34 @@ impl GroupRouter<TypeConfig, GroupId> for Router {
             vote: rpc,
             group_id,
         };
-        match self.nodes.get(&target) {
+        let client = match self.nodes.read().get(&target).cloned() {
             None => {
                 tracing::info!(
                     "node {} not found (target: {})",
                     target as u64,
                     target as u64
                 );
-                Err(RPCError::Unreachable(Unreachable::from_string(format!(
+                return Err(RPCError::Unreachable(Unreachable::from_string(format!(
                     "node {} not found",
                     target as u64
-                ))))
+                ))));
             }
-            Some(client) => {
-                client
-                    .call_with_timeout(
-                        6,
-                        req,
-                        option.hard_ttl(),
-                        Timeout {
-                            action: Vote,
-                            target,
-                            timeout: option.hard_ttl(),
-                            id: self.node_id,
-                        },
-                    )
-                    .await
-            }
-        }
+            Some(client) => client,
+        }; // guard 在这里 drop
+
+        client
+            .call_with_timeout(
+                6,
+                req,
+                option.hard_ttl(),
+                Timeout {
+                    action: Vote,
+                    target,
+                    timeout: option.hard_ttl(),
+                    id: self.node_id,
+                },
+            )
+            .await
     }
 
     //主节点给从节点发送快照
@@ -174,7 +178,7 @@ impl GroupRouter<TypeConfig, GroupId> for Router {
         option: RPCOption,
     ) -> Result<SnapshotResponse<TypeConfig>, StreamingError<TypeConfig>> {
         // 如果节点不存在，返回 StreamingError
-        let client = match self.nodes.get(&target) {
+        let client = match self.nodes.read().get(&target).cloned() {
             None => {
                 return Err(StreamingError::Unreachable(Unreachable::from_string(
                     format!("node {} not found", target as u64),
