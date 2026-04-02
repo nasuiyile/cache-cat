@@ -5,7 +5,6 @@ use core_raft::server::core::config::{ONE, THREE, TWO};
 use mimalloc::MiMalloc;
 use openraft::AsyncRuntime;
 use openraft::alias::AsyncRuntimeOf;
-use rand_distr::num_traits::one;
 use std::thread::sleep;
 use std::time::Duration;
 use std::{fs, thread};

@@ -1,11 +1,14 @@
-use async_trait::async_trait;
-use crate::network::model::Value;
+use crate::network::model::{Request, Value};
+use crate::network::node::get_group_by_key;
 use crate::protocol::command::Command;
 use crate::server::handler::rpc::Server;
-use crate::util::now_ms;
+use async_trait::async_trait;
+use serde::{Deserialize, Serialize};
+use std::fmt::Display;
+use std::hash::{Hash, Hasher};
 
 /// Expiration time options for SET command
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum Expiration {
     /// EX seconds - Set the specified expire time, in seconds
     Ex(u64),
@@ -20,7 +23,7 @@ pub enum Expiration {
 }
 
 /// Set mode options (NX/XX)
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum SetMode {
     /// NX - Only set the key if it does not already exist
     Nx,
@@ -32,7 +35,7 @@ pub enum SetMode {
 ///
 /// Standard Redis SET command format:
 /// SET key value [NX | XX] [GET] [EX seconds | PX milliseconds | EXAT timestamp | PXAT milliseconds-timestamp | KEEPTTL]
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct SetParams {
     /// The key to set
     pub key: Vec<u8>,
@@ -44,6 +47,21 @@ pub struct SetParams {
     pub get: bool,
     /// Expiration time options (optional)
     pub expiration: Option<Expiration>,
+}
+impl Hash for SetParams {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.key.hash(state);
+    }
+}
+impl Display for SetParams {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "SET {} {}",
+            String::from_utf8_lossy(&self.key),
+            String::from_utf8_lossy(&self.value)
+        )
+    }
 }
 
 impl SetParams {
@@ -66,9 +84,9 @@ impl SetParams {
             return None;
         }
 
-        let key = match &items[1] {
-            Value::BulkString(Some(data)) => String::from_utf8_lossy(data).to_string(),
-            Value::SimpleString(s) => s.clone(),
+        let key: Vec<u8> = match &items[1] {
+            Value::BulkString(Some(data)) => data.clone(),
+            Value::SimpleString(s) => s.as_bytes().to_vec(),
             _ => return None,
         };
 
@@ -168,8 +186,6 @@ fn parse_u64(value: &Value) -> Option<u64> {
 /// SET command executor
 pub struct SetCommand;
 
-
-
 #[async_trait]
 impl Command for SetCommand {
     async fn execute(&self, items: &[Value], server: &Server) -> Value {
@@ -178,13 +194,17 @@ impl Command for SetCommand {
             None => return Value::error("ERR wrong number of arguments for 'set' command"),
         };
 
-        // Get current timestamp once for all expiration calculations
-        let now = now_ms();
-
-
-
-
-        // Calculate expiration timestamp in milliseconds (0 means no expiration)
-        Value::ok()
+        let group = get_group_by_key(&server.app, &params.key);
+        let get = params.get;
+        match group.raft.client_write(Request::RedisSet(params)).await {
+            Ok(res) => {
+                if get {
+                    res.data
+                } else {
+                    Value::ok()
+                }
+            }
+            Err(e) => Value::error(format!("ERR {}", e)),
+        }
     }
 }

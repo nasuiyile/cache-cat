@@ -1,11 +1,14 @@
-use std::sync::Arc;
-use crate::network::model::{Request, Value};
+use crate::network::model::BaseOperation::LPush;
+use crate::network::model::{BaseOperation, Request, Value};
 use crate::network::node::TypeConfig;
 use crate::server::client::client::RpcMultiClient;
-use crate::server::handler::model::{LPushReq, LPushRes, PrintTestReq, PrintTestRes, SetReq, SetRes};
+use crate::server::handler::model::{
+    LPushReq, LPushRes, PrintTestReq, PrintTestRes, SetReq, SetRes,
+};
 use openraft::RPCTypes::Vote;
 use openraft::error::Timeout;
 use openraft::raft::ClientWriteResponse;
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::time;
 
@@ -25,24 +28,30 @@ async fn test_add() {
     for i in 0..ITERATIONS {
         time::sleep(Duration::from_millis(1)).await;
         let start = Instant::now();
-        let r: Value = client
+        let r: ClientWriteResponse<TypeConfig> = client
             .call(
                 2,
-                Request::Set(SetReq {
+                Request::Base(BaseOperation::Set(SetReq {
                     key: Arc::from(format!("test_{}", i).into_bytes()),
                     value: Arc::from(format!("test_value_{}", i).into_bytes()),
                     ex_time: 0,
-                }),
+                })),
             )
             .await
             .expect("write call failed");
 
         total_write += start.elapsed();
     }
-    let l_push_res: Value =client.call(2, Request::LPush(LPushReq{
-        key: Arc::from(format!("tes1t_{}", 1).into_bytes()),
-        value: Arc::from(format!("test_value_{}", 1).into_bytes()),
-    })).await.expect("write call failed");
+    let l_push_res: ClientWriteResponse<TypeConfig> = client
+        .call(
+            2,
+            Request::Base(LPush(LPushReq {
+                key: Arc::from(format!("tes1t_{}", 1).into_bytes()),
+                value: Arc::from(format!("test_value_{}", 1).into_bytes()),
+            })),
+        )
+        .await
+        .expect("write call failed");
 
     let avg_write = total_write / ITERATIONS;
     println!("写入平均耗时: {} 微秒", avg_write.as_micros());

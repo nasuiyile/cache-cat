@@ -1,4 +1,6 @@
+use crate::network::model::Value;
 use crate::network::node::{App, GroupId, get_app, get_group};
+use crate::protocol::command::CommandFactory;
 use crate::protocol::resp::Parser;
 use crate::server::core::config::{get_snapshot_file_name, init_config};
 use crate::server::handler::external_handler::HANDLER_TABLE;
@@ -17,9 +19,8 @@ use tokio::sync::mpsc::UnboundedSender;
 use tokio_util::codec::{Framed, LengthDelimitedCodec};
 use tracing::{error, info, warn};
 use uuid::Uuid;
-use crate::network::model::Value;
-use crate::protocol::command::CommandFactory;
 
+#[derive(Clone)]
 pub struct Server {
     pub(crate) app: App,
     pub addr: String,
@@ -75,7 +76,7 @@ impl Server {
         }
     }
     pub async fn start_redis_server(self: Arc<Self>) -> std::io::Result<()> {
-        let listener = TcpListener::bind(self.addr.clone()).await?;
+        let listener = TcpListener::bind(self.redis_addr.clone()).await?;
         loop {
             match listener.accept().await {
                 Ok((stream, peer_addr)) => {

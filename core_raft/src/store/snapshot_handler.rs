@@ -215,14 +215,14 @@ async fn test_dump_and_load_with_data() {
     let value1 = MyValue {
         version: 1,
         data: ValueObject::String(Arc::new(b"value1".to_vec())),
-        ttl_ms: 1000,
+        expires_at: 1000,
     };
 
     let key2 = Arc::new(b"key2".to_vec());
     let value2 = MyValue {
         version: 1,
         data: ValueObject::String(Arc::new(b"value1".to_vec())),
-        ttl_ms: 0, // 永不过期
+        expires_at: 0, // 永不过期
     };
 
     cache.cache.insert(key1.clone(), value1.clone()).await;
@@ -283,7 +283,7 @@ async fn test_dump_and_load_with_data() {
         _ => panic!("key1 type mismatch"),
     }
 
-    assert_eq!(v1.ttl_ms, value1.ttl_ms);
+    assert_eq!(v1.expires_at, value1.expires_at);
 
     match (&v2.data, &value2.data) {
         (ValueObject::String(a), ValueObject::String(b)) => {
@@ -292,5 +292,5 @@ async fn test_dump_and_load_with_data() {
         _ => panic!("key2 type mismatch"),
     }
 
-    assert_eq!(v2.ttl_ms, value2.ttl_ms);
+    assert_eq!(v2.expires_at, value2.expires_at);
 }

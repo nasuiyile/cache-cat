@@ -1,36 +1,24 @@
-use crate::network::model::{AtomicRequest, Request, Value};
-use crate::network::node::{GroupId, TypeConfig};
+use crate::network::model::{AtomicRequest, BaseOperation, Request, Value};
 use crate::server::core::config::{TEMP_PATH, create_temp_dir, get_snapshot_file_name};
-use crate::server::handler::model::{LPushReq, SetReq};
-use crate::store::store::RaftMetaData;
-use byteorder::LittleEndian;
-use dashmap::DashMap;
+use crate::server::handler::model::{DelReq, LPushReq, SetReq};
+use crate::util::now_ms;
 use moka::Expiry;
 use moka::future::Cache;
 use moka::ops::compute::{CompResult, Op};
-use openraft::SnapshotMeta;
-use serde::{Deserialize, Deserializer, Serialize, Serializer};
-use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet, LinkedList};
-use std::io::SeekFrom;
+use serde::{Deserialize, Serialize, Serializer};
+use std::collections::{BTreeMap, HashMap, HashSet, LinkedList};
 use std::mem::size_of;
 use std::option::Option;
-use std::os::raw::c_int;
-use std::path::Path;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
-use tokio::fs::File;
-use tokio::io::{
-    AsyncRead, AsyncReadExt, AsyncSeekExt, AsyncWrite, AsyncWriteExt, BufReader, BufWriter,
-};
-use tokio::sync::Mutex;
-use tokio::{fs, io};
-use uuid::Uuid;
+use tokio::io;
+use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct MyValue {
     pub version: u32, //在快照期间每一次更新都会增加version 默认为1
     pub data: ValueObject,
-    pub ttl_ms: u64,
+    pub expires_at: u64, //绝对时间  这里 假设不同节点的时钟偏移是有界的
 }
 
 // =====================
@@ -62,10 +50,15 @@ impl Expiry<Arc<Vec<u8>>, MyValue> for MyExpiry {
         value: &MyValue,
         _created_at: Instant,
     ) -> Option<Duration> {
-        if value.ttl_ms == 0 {
-            None // 永不过期
+        if value.expires_at == 0 {
+            None
         } else {
-            Some(Duration::from_millis(value.ttl_ms))
+            let now = now_ms();
+            if value.expires_at <= now {
+                Some(Duration::from_millis(0))
+            } else {
+                Some(Duration::from_millis(value.expires_at - now))
+            }
         }
     }
 
@@ -76,10 +69,15 @@ impl Expiry<Arc<Vec<u8>>, MyValue> for MyExpiry {
         _updated_at: Instant,
         _duration_until_expiry: Option<Duration>,
     ) -> Option<Duration> {
-        if value.ttl_ms == 0 {
+        if value.expires_at == 0 {
             None
         } else {
-            Some(Duration::from_millis(value.ttl_ms))
+            let now = now_ms();
+            if value.expires_at <= now {
+                Some(Duration::from_millis(0))
+            } else {
+                Some(Duration::from_millis(value.expires_at - now))
+            }
         }
     }
 }
@@ -88,6 +86,11 @@ impl Expiry<Arc<Vec<u8>>, MyValue> for MyExpiry {
 pub struct MyCache {
     // 内部 Cache的Clone成本是低廉的
     pub cache: Cache<Arc<Vec<u8>>, MyValue>,
+}
+pub enum UpdateType<'a> {
+    None,
+    Snapshot(&'a mut Vec<AtomicRequest>),
+    CAS(u32),
 }
 
 impl MyCache {
@@ -100,73 +103,117 @@ impl MyCache {
         Self { cache }
     }
 
-    /// 插入值
-    pub async fn set(&self, set_req: SetReq) {
-        let value = MyValue {
-            data: ValueObject::String(set_req.value.clone()),
-            ttl_ms: set_req.ex_time,
-            version: 0,
-        };
-        self.cache.insert(set_req.key, value).await;
-    }
-    pub async fn snapshot_set(&self, set_req: SetReq, queue: &mut Vec<AtomicRequest>) {
-        let mut value = MyValue {
-            data: ValueObject::String(set_req.value.clone()),
-            ttl_ms: set_req.ex_time,
-            version: 0,
-        };
-        //发现存在老数据，获取老数据版本
-        self.cache
-            .entry(set_req.key.clone())
-            .and_upsert_with(|old_entry| async move {
-                let old_version = if let Some(entry) = old_entry {
-                    entry.into_value().version + 1
-                } else {
-                    //不存在默认为0
-                    0
-                };
-                value.version = old_version;
-                queue.push(AtomicRequest {
-                    version: value.version,
-                    request: Request::Set(set_req),
-                });
-                value
-            })
-            .await;
-        return;
-    }
-    pub async fn cas_set(&self, set_req: SetReq, version: u32) {
-        let key = set_req.key.clone();
-        // 我们预先准备好要插入的新数据
-        let new_data = ValueObject::String(set_req.value.clone());
-        let ttl = set_req.ex_time;
-        self.cache
-            .entry(key)
-            .and_upsert_with(async move |maybe_entry| {
-                if let Some(entry) = maybe_entry {
-                    let current_val = entry.value();
-                    // 核心逻辑：只有传入的 version 与缓存中的 version 相同时才允许更新
-                    if version == current_val.version {
-                        MyValue {
-                            data: new_data,
-                            ttl_ms: ttl,
-                            version: current_val.version + 1, // 更新版本号
-                        }
-                    } else {
-                        // 版本不匹配，直接返回旧值（即不更新）
-                        current_val.clone()
-                    }
-                } else {
-                    // 如果缓存里根本没数据：
-                    // 此时你可以根据业务决定：是允许插入（version从0开始），还是报错
-                    MyValue {
-                        data: new_data,
-                        ttl_ms: ttl,
-                        version: 1, // 初始版本
+    pub async fn del(&self, del_req: DelReq, queue: UpdateType<'_>) -> Value {
+        let keys = (*del_req.keys).clone();
+        let mut deleted = 0;
+
+        match queue {
+            UpdateType::None => {
+                for key in keys {
+                    let existed = self.cache.remove(&key).await;
+                    if existed.is_some() {
+                        deleted += 1;
                     }
                 }
-            })
-            .await;
+                Value::Integer(deleted)
+            }
+
+            UpdateType::Snapshot(queue) => {
+                for key in keys {
+                    // 计算 version
+                    let version = if let Some(entry) = self.cache.get(&key).await {
+                        entry.version + 1
+                    } else {
+                        0
+                    };
+
+                    queue.push(AtomicRequest {
+                        version,
+                        request: BaseOperation::Del(DelReq {
+                            keys: Arc::from(vec![key.clone()]), // 保持单 key 语义
+                        }),
+                    });
+
+                    let existed = self.cache.remove(&key).await;
+                    if existed.is_some() {
+                        deleted += 1;
+                    }
+                }
+                Value::Integer(deleted)
+            }
+
+            UpdateType::CAS(version) => {
+                for key in keys {
+                    if let Some(entry) = self.cache.get(&key).await {
+                        if entry.version == version {
+                            self.cache.remove(&key).await;
+                            deleted += 1;
+                        }
+                    }
+                }
+                Value::Integer(deleted)
+            }
+        }
+    }
+    pub async fn set(&self, set_req: SetReq, queue: UpdateType<'_>) {
+        let mut value = MyValue {
+            data: ValueObject::String(set_req.value.clone()),
+            expires_at: set_req.ex_time,
+            version: 0,
+        };
+        match queue {
+            UpdateType::None => {
+                self.cache.insert(set_req.key.clone(), value).await;
+            }
+            UpdateType::Snapshot(queue) => {
+                let key = set_req.key.clone();
+                self.cache
+                    .entry(key)
+                    .and_upsert_with(|old_entry| {
+                        let set_req = set_req.clone();
+                        async move {
+                            let old_version = if let Some(entry) = old_entry {
+                                entry.into_value().version + 1
+                            } else {
+                                0
+                            };
+                            value.version = old_version;
+                            queue.push(AtomicRequest {
+                                version: value.version,
+                                request: BaseOperation::Set(set_req),
+                            });
+                            value
+                        }
+                    })
+                    .await;
+            }
+            UpdateType::CAS(version) => {
+                let key = set_req.key.clone();
+                self.cache
+                    .entry(key)
+                    .and_upsert_with(async move |maybe_entry| {
+                        if let Some(entry) = maybe_entry {
+                            let current_val = entry.value();
+                            // 核心逻辑：只有传入的 version 与缓存中的 version 相同时才允许更新
+                            if version == current_val.version {
+                                value
+                            } else {
+                                // 版本不匹配，直接返回旧值（即不更新）
+                                current_val.clone()
+                            }
+                        } else {
+                            let new_data = ValueObject::String(set_req.value.clone());
+                            let ttl = set_req.ex_time;
+                            MyValue {
+                                data: new_data,
+                                expires_at: ttl,
+                                version: 1, // 初始版本
+                            }
+                        }
+                    })
+                    .await;
+            }
+        }
     }
 
     pub fn invalidate_all(&self) {
@@ -201,7 +248,7 @@ impl MyCache {
                     None => {
                         let value = MyValue {
                             data: ValueObject::List(LinkedList::from([l_push.value])),
-                            ttl_ms: 0,
+                            expires_at: 0,
                             version: 0,
                         };
                         Op::Put(value)
@@ -225,11 +272,7 @@ impl MyCache {
     }
 
     //成功就返回链表长度 失败返回错误内容 不存在就创建一个list
-    pub async fn l_push_snapshot(
-        &self,
-        l_push: LPushReq,
-        queue: &mut Vec<AtomicRequest>,
-    ) -> Value {
+    pub async fn l_push_snapshot(&self, l_push: LPushReq, queue: &mut Vec<AtomicRequest>) -> Value {
         let result = self
             .cache
             .entry(l_push.key.clone())
@@ -241,7 +284,7 @@ impl MyCache {
                             ValueObject::List(data) => {
                                 queue.push(AtomicRequest {
                                     version: value.version,
-                                    request: Request::LPush(l_push.clone()),
+                                    request: BaseOperation::LPush(l_push.clone()),
                                 });
                                 value.version += 1;
                                 data.push_front(l_push.value);
@@ -253,11 +296,11 @@ impl MyCache {
                     None => {
                         queue.push(AtomicRequest {
                             version: 1,
-                            request: Request::LPush(l_push.clone()),
+                            request: BaseOperation::LPush(l_push.clone()),
                         });
                         let value = MyValue {
                             data: ValueObject::List(LinkedList::from([l_push.value])),
-                            ttl_ms: 0,
+                            expires_at: 0,
                             version: 1,
                         };
                         Op::Put(value)
@@ -308,7 +351,7 @@ impl MyCache {
                         }
                         let value = MyValue {
                             data: ValueObject::List(LinkedList::from([l_push.value])),
-                            ttl_ms: 0,
+                            expires_at: 0,
                             version: 1,
                         };
                         Op::Put(value)
@@ -357,7 +400,7 @@ impl MyCache {
                         }
                         None => Op::Put(MyValue {
                             data: ValueObject::String(suffix.clone()),
-                            ttl_ms: 0,
+                            expires_at: 0,
                             version: 1,
                         }),
                     }

@@ -8,6 +8,7 @@ use crate::store::store::StateMachineStore;
 use openraft::Config;
 use openraft::SnapshotPolicy::LogsSinceLast;
 use std::collections::HashMap;
+use std::hash::{DefaultHasher, Hash, Hasher};
 use std::io::Cursor;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -42,6 +43,16 @@ pub fn get_app(app: &App, group_id: GroupId) -> &CacheCatApp {
 pub fn get_group(app: &App, hash_code: u64) -> &CacheCatApp {
     let usize = hash_code % app.len() as u64;
     get_app(app, usize as GroupId)
+}
+pub fn get_group_by_key<'a>(app: &'a App, key: &Vec<u8>) -> &'a CacheCatApp {
+    let mut hasher = DefaultHasher::new();
+    key.hash(&mut hasher);
+    get_group(app, hasher.finish())
+}
+pub fn get_group_id_by_key(key: &Vec<u8>) -> GroupId {
+    let mut hasher = DefaultHasher::new();
+    key.hash(&mut hasher);
+    (hasher.finish() % GROUP_NUM as u64) as GroupId
 }
 
 pub struct Node {

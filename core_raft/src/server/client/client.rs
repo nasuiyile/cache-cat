@@ -1,13 +1,12 @@
-use crate::network::node::{NodeId, TypeConfig};
+use crate::network::node::TypeConfig;
 use crate::server::core::config::TCP_CONNECT_NUM;
 use bincode2;
 use bytes::{BufMut, Bytes, BytesMut};
 use crossbeam_utils::CachePadded;
 use futures::task::AtomicWaker;
 use futures::{SinkExt, StreamExt};
-use openraft::alias::TimeoutErrorOf;
 use openraft::error::Timeout;
-use openraft::error::{NetworkError, RPCError, RemoteError, Unreachable};
+use openraft::error::{NetworkError, RPCError, Unreachable};
 use parking_lot::Mutex;
 use serde::Serialize;
 use serde::de::DeserializeOwned;

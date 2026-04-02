@@ -1,5 +1,5 @@
 use crate::network::model::Request;
-use crate::network::node::{App, TypeConfig, get_app, get_group};
+use crate::network::node::{App, TypeConfig, get_app};
 use crate::server::handler::model::*;
 use async_trait::async_trait;
 use bytes::Bytes;
@@ -81,7 +81,7 @@ async fn print_test(_app: App, d: PrintTestReq) -> Result<PrintTestRes, String> 
 
 // 主节点才能成功调用这个方法，其他节点会失败
 async fn write(app: App, req: Request) -> Result<ClientWriteResponse<TypeConfig>, String> {
-    let group = get_group(&app, req.hash_code());
+    let group = get_app(&app, req.get_group_id());
     group.raft.client_write(req).await.map_err(|e| {
         tracing::error!("write error: {:?}", e);
         e.to_string()

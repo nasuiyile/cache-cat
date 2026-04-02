@@ -1,41 +1,72 @@
-use crate::server::handler::model::{LPushReq, LPushRes, SetReq, SetRes};
+use crate::network::node::GroupId;
+use crate::protocol::key::del::DelParams;
+use crate::protocol::string::set::SetParams;
+use crate::server::core::config::GROUP_NUM;
+use crate::server::handler::model::{DelReq, LPushReq, LPushRes, SetReq, SetRes};
 use serde::{Deserialize, Serialize};
 use std::fmt;
 use std::hash::{DefaultHasher, Hash, Hasher};
 use std::sync::Arc;
 
 /// A request to the KV store.
-#[derive(Debug, Clone, Serialize, Deserialize, Hash)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum Request {
+    Base(BaseOperation),
+    RedisSet(SetParams),
+}
+#[derive(Debug, Clone, Serialize, Deserialize)]
+
+pub enum BaseOperation {
     Set(SetReq),
     LPush(LPushReq),
+    Del(DelReq),
 }
 impl Request {
-    pub fn set(key: impl Into<Vec<u8>>, value: impl Into<Vec<u8>>) -> Self {
-        Request::Set(SetReq {
-            key: Arc::from(key.into()),
-            value: Arc::from(value.into()),
-            ex_time: 0,
-        })
-    }
-    pub fn hash_code(&self) -> u64 {
+    pub fn get_group_id(&self) -> GroupId {
         let mut hasher = DefaultHasher::new();
-        self.hash(&mut hasher);
-        hasher.finish()
+
+        match self {
+            Request::Base(op) => match op {
+                BaseOperation::Set(req) => {
+                    req.key.hash(&mut hasher);
+                }
+                BaseOperation::LPush(req) => {
+                    req.key.hash(&mut hasher);
+                }
+                BaseOperation::Del(req) => {
+                    if let Some(key) = req.keys.get(0) {
+                        key.hash(&mut hasher);
+                    } else {
+                        return 0;
+                    }
+                }
+            },
+
+            Request::RedisSet(req) => {
+                req.hash(&mut hasher);
+            }
+        }
+
+        (hasher.finish() % GROUP_NUM as u64) as GroupId
     }
 }
 
 impl fmt::Display for Request {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Request::Set(req) => write!(f, "Set: {}", req),
-            Request::LPush(req) => write!(f, "LPush: {}", req),
+            Request::Base(op) => match op {
+                BaseOperation::Set(req) => write!(f, "Set: {}", req),
+                BaseOperation::LPush(req) => write!(f, "LPush: {}", req),
+                BaseOperation::Del(req) => write!(f, "DEL: {}", req),
+            },
+
+            Request::RedisSet(req) => write!(f, "RedisSet: {}", req),
         }
     }
 }
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AtomicRequest {
-    pub request: Request,
+    pub request: BaseOperation,
     pub version: u32,
 }
 
@@ -52,7 +83,7 @@ pub enum Value {
     BulkString(Option<Vec<u8>>),
     /// Arrays of other values (can be null)
     Array(Option<Vec<Value>>),
-    Null
+    Null,
 }
 
 impl Value {
@@ -114,8 +145,7 @@ impl Value {
                     item.encode_to(buf);
                 }
             }
-            Value::Null => {
-            }
+            Value::Null => {}
         }
     }
 }

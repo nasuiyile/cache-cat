@@ -22,7 +22,11 @@ impl Parser {
         *pos += 1;
 
         match type_byte {
-
+            b'+' => Self::parse_simple_string(buffer, pos),
+            b'-' => Self::parse_error(buffer, pos),
+            b':' => Self::parse_integer(buffer, pos),
+            b'$' => Self::parse_bulk_string(buffer, pos),
+            b'*' => Self::parse_array(buffer, pos),
             _ => None,
         }
     }

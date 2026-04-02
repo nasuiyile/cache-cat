@@ -1,5 +1,6 @@
-use crate::network::model::{Request, Value};
+use crate::network::model::{BaseOperation, Request, Value};
 use crate::network::node::{App, CacheCatApp, NodeId, create_node};
+use crate::protocol::command::CommandFactory;
 use crate::server::core::config::{ONE, THREE, TWO};
 use crate::server::handler::model::SetReq;
 use crate::server::handler::rpc;
@@ -10,7 +11,6 @@ use std::path::Path;
 use std::sync::Arc;
 use tokio::time::sleep;
 use uuid::Uuid;
-use crate::protocol::command::CommandFactory;
 
 // pub async fn start_raft_app<P>(node_id: NodeId, dir: P, addr: String) -> std::io::Result<()>
 // where
@@ -85,7 +85,7 @@ where
     let node = create_node(&addr, node_id, dir).await;
     let apps: Vec<Arc<CacheCatApp>> = node.groups.into_values().map(Arc::new).collect();
     let mut nodes = BTreeMap::new();
-    if node_id == 3 {
+    let redis_addr = if node_id == 3 {
         nodes.insert(
             1,
             BasicNode {
@@ -113,21 +113,31 @@ where
             tokio::time::sleep(std::time::Duration::from_secs(3)).await;
             benchmark_requests(apps_for_task).await;
         });
+        "127.0.0.1:6379"
     } else if node_id == 2 {
         // tokio::time::sleep(std::time::Duration::from_secs(10)).await;
-    } else if node_id == 1 {
+        "127.0.0.1:6378"
+    } else {
         // tokio::time::sleep(std::time::Duration::from_millis(1)).await;
-    }
+        "127.0.0.1:6377"
+    };
     // Initialize command factory
     let cmd_factory = Arc::new(CommandFactory::init());
     let server = Server {
         app: App::new(apps),
         addr,
         cmd_factory,
-        redis_addr: "".to_string(),
+        redis_addr: redis_addr.to_string(),
     };
+    let redis_server = server.clone();
+    tokio::spawn(async move {
+        Arc::new(redis_server)
+            .clone()
+            .start_redis_server()
+            .await
+            .expect("Redis : panic message");
+    });
     server.start_server().await?;
-
     Ok(())
 }
 
@@ -144,11 +154,11 @@ async fn benchmark_requests(apps: Vec<Arc<CacheCatApp>>) {
         let handle = tokio::spawn(async move {
             for i in 0..num {
                 // sleep(std::time::Duration::from_millis(1)).await;
-                let request = Request::Set(SetReq {
+                let request = Request::Base(BaseOperation::Set(SetReq {
                     key: Arc::from((num).to_be_bytes().to_vec()),
                     value: Arc::from(Vec::from(format!("value_{}", i))),
                     ex_time: 0,
-                });
+                }));
                 //往第一个group发送请求
                 if let Some(app) = apps_clone.get(0) {
                     match app.raft.client_write(request).await {
