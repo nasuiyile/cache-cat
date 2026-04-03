@@ -1,5 +1,8 @@
 #!/bin/bash
-
+if [[ -n "$MSYSTEM" ]]; then
+  echo "Error: Please run this script under real linux or wsl."
+  exit 1
+fi
 docker run -it --rm \
     -v .:/cache-cat \
     -v /usr/local/cargo/registry:/usr/local/cargo/registry \

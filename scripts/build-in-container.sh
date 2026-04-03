@@ -4,16 +4,16 @@ for TARGET_NAME in $@; do
 
     case ${TARGET_NAME} in
         "linux/amd64")   
-            TARGET_PLATFORM="x86_64-unknown-linux-musl" 
+            export TARGET_PLATFORM="x86_64-unknown-linux-musl" 
             ;;
         "linux/arm64")   
-            TARGET_PLATFORM="aarch64-unknown-linux-musl" 
+            export TARGET_PLATFORM="aarch64-unknown-linux-musl" 
             ;;
         "linux/arm" | "linux/arm/v7")     
-            TARGET_PLATFORM="armv7-unknown-linux-musleabihf" 
+            export TARGET_PLATFORM="armv7-unknown-linux-musleabihf" 
             ;;
         "linux/riscv64") 
-            TARGET_PLATFORM="riscv64gc-unknown-linux-musl" 
+            export TARGET_PLATFORM="riscv64gc-unknown-linux-musl" 
             ;;
         *)               
             echo "Unsupported architecture: ${TARGET_NAME}" >&2
@@ -27,6 +27,4 @@ for TARGET_NAME in $@; do
     mkdir -p target/dist/${TARGET_NAME}
 
     cp target/${TARGET_PLATFORM}/release/core_raft target/dist/${TARGET_NAME}/
-    cp target/${TARGET_PLATFORM}/release/benchmark target/dist/${TARGET_NAME}/
-
 done
