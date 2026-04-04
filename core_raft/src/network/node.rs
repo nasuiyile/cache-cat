@@ -99,8 +99,8 @@ where
         election_timeout_max: 599, // 添加最大选举超时时间
         purge_batch_size: 1,
         max_in_snapshot_log_to_keep: 500, //生成快照后要保留的日志数量（以供从节点同步数据）需要大于等于replication_lag_threshold,该参数会影响快照逻辑
-        max_append_entries: Some(50),
-        max_payload_entries: 50,
+        max_append_entries: Some(5000000),
+        max_payload_entries: 5000000,
         snapshot_policy: Never,         //LogsSinceLast(100),
         replication_lag_threshold: 200, //需要大于snapshot_policy
         ..Default::default()

@@ -1,11 +1,11 @@
 use crate::network::model::{BaseOperation, Request};
 use crate::network::node::{App, CacheCatApp, NodeId, create_node};
 use crate::protocol::command::CommandFactory;
-use crate::server::core::config::{ONE, THREE, TWO};
+use crate::server::core::config::{Config, ONE, THREE, TWO};
 use crate::server::handler::model::SetReq;
 use crate::server::handler::rpc::Server;
 use openraft::BasicNode;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 use std::path::Path;
 use std::sync::Arc;
 
@@ -81,7 +81,7 @@ where
 {
     let node = create_node(&addr, node_id, dir).await;
     let apps: Vec<Arc<CacheCatApp>> = node.groups.into_values().map(Arc::new).collect();
-    let mut nodes = BTreeMap::new();
+    let mut nodes = HashMap::new();
     let redis_addr = if node_id == 3 {
         nodes.insert(
             1,
@@ -125,6 +125,46 @@ where
         addr,
         cmd_factory,
         redis_addr: redis_addr.to_string(),
+    };
+    let redis_server = server.clone();
+    tokio::spawn(async move {
+        Arc::new(redis_server)
+            .clone()
+            .start_redis_server()
+            .await
+            .expect("Redis : panic message");
+    });
+    server.start_server().await?;
+    Ok(())
+}
+pub async fn start_multi_raft(config: &Config) -> std::io::Result<()> {
+    let node = create_node(
+        &config.raft.address,
+        config.node_id,
+        Path::new(&config.raft.log_path),
+    )
+    .await;
+
+    let apps: Vec<Arc<CacheCatApp>> = node.groups.into_values().map(Arc::new).collect();
+    let mut nodes = BTreeMap::new();
+    if config.raft.single {
+        nodes.insert(
+            1,
+            BasicNode {
+                addr: config.raft.address.clone(),
+            },
+        );
+        for app in &apps {
+            app.raft.initialize(nodes.clone()).await.unwrap();
+        }
+    }
+    // Initialize command factory
+    let cmd_factory = Arc::new(CommandFactory::init());
+    let server = Server {
+        app: App::new(apps),
+        addr: config.raft.address.clone(),
+        cmd_factory,
+        redis_addr: config.redis_address.to_string(),
     };
     let redis_server = server.clone();
     tokio::spawn(async move {

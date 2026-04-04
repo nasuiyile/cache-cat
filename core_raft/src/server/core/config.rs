@@ -1,4 +1,4 @@
-use crate::network::node::GroupId;
+use crate::network::node::{GroupId, NodeId};
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -26,36 +26,52 @@ pub struct ServerConfig {
     pub log_level: String,
 }
 
-impl ServerConfig {
-    pub fn from_file(path: &str) -> Result<Self, Box<dyn std::error::Error>> {
-        let content = fs::read_to_string(path)?;
-        let config: ServerConfig = serde_yaml::from_str(&content)?;
-        Ok(config)
-    }
-}
-
-pub static CONFIG: OnceLock<ServerConfig> = OnceLock::new();
-
-// 初始化函数
-pub fn init_config(path: &str) -> Result<(), Box<dyn std::error::Error>> {
-    let config = ServerConfig::from_file(path)?;
-    CONFIG
-        .set(config)
-        .map_err(|_| "Config already initialized".into())
-}
-
-// 获取配置的辅助函数
-pub fn get_config() -> &'static ServerConfig {
-    CONFIG.get().expect("Config not initialized")
-}
-
-// 使用示例
-pub fn get_port() -> u16 {
-    get_config().port
-}
 pub fn create_temp_dir() -> io::Result<PathBuf> {
     let path = Path::new(TEMP_PATH);
     // create_dir_all 是幂等的：目录存在不会报错
     fs::create_dir_all(path)?;
     Ok(path.to_path_buf())
+}
+pub fn default_raft_config() -> RaftConfig {
+    RaftConfig {
+        address: "127.0.0.1:6682".to_string(),
+        advertise_host: "localhost".to_string(),
+        single: true,
+        join: vec![],
+        log_path: "info".to_string(),
+    }
+}
+
+#[derive(Debug, Deserialize, Serialize, Clone, Default)]
+pub struct Config {
+    pub node_id: NodeId,
+    pub redis_address: String,
+    #[serde(default = "default_raft_config")]
+    pub raft: RaftConfig,
+}
+#[derive(Debug, Deserialize, Serialize, Clone, Default)]
+pub struct RaftConfig {
+    pub address: String,
+
+    pub advertise_host: String,
+
+    /// Single node raft cluster.
+    pub single: bool,
+
+    /// Bring up a raft node and join a cluster.
+    ///
+    /// The value is one or more addresses of a node in the cluster, to which this node sends a `join` request.
+    pub join: Vec<String>,
+
+    pub log_path: String,
+}
+/// Load configuration from TOML file
+pub fn load_config(path: &str) -> Result<Config, Box<dyn std::error::Error>> {
+    let config_str = fs::read_to_string(path)
+        .map_err(|e| format!("Failed to read config file '{}': {}", path, e))?;
+
+    let config: Config = toml::from_str(&config_str)
+        .map_err(|e| format!("Failed to parse config file '{}': {}", path, e))?;
+
+    Ok(config)
 }

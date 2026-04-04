@@ -154,6 +154,7 @@ impl RaftStateMachine<TypeConfig> for StateMachineStore {
         ))
     }
 
+
     async fn apply<Strm>(&mut self, mut entries: Strm) -> Result<(), io::Error>
     where
         Strm: Stream<Item = Result<EntryResponder<TypeConfig>, io::Error>> + Unpin + OptionalSend,

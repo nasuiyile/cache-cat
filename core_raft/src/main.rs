@@ -1,10 +1,12 @@
-use core_raft::network::raft::start_multi_raft_app;
-use core_raft::server::core::config::{ONE, THREE, TWO};
+use core_raft::network::raft::{start_multi_raft, start_multi_raft_app};
+use core_raft::server::core::config::{Config, ONE, THREE, TWO, load_config};
+use core_raft::store::snapshot_handler::load_cache_from_path;
 use mimalloc::MiMalloc;
 use openraft::AsyncRuntime;
+use std::path::Path;
 use std::thread::sleep;
 use std::time::Duration;
-use std::{fs, thread};
+use std::{env, fs, thread};
 use tokio::runtime::Builder;
 #[cfg(feature = "flamegraph")]
 use tracing_flame::FlushGuard;
@@ -39,7 +41,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     #[cfg(feature = "flamegraph")]
     let _flame_guard = init_flamegraph("./flamegraph.folded")?;
-    multi_raft()
+    // multi_raft()
+    start()
 }
 fn multi_raft() -> Result<(), Box<dyn std::error::Error>> {
     let _base = "/home/suiyi/cache-cat/tmp";
@@ -76,33 +79,6 @@ fn multi_raft() -> Result<(), Box<dyn std::error::Error>> {
         .init();
     let num_cpus = std::thread::available_parallelism()?.get();
 
-    // let rt = Builder::new_multi_thread()
-    //     .worker_threads(num_cpus)
-    //     .max_blocking_threads(512)
-    //     .enable_all()
-    //     .build()
-    //     .unwrap();
-    // rt.block_on(async move {
-    //     let t1 = tokio::spawn(network::raft_rocksdb::start_multi_raft_app(
-    //         1,
-    //         d1,
-    //         String::from(ONE),
-    //     ));
-    //     tokio::time::sleep(Duration::from_secs(1)).await;
-    //     let t2 = tokio::spawn(network::raft_rocksdb::start_multi_raft_app(
-    //         2,
-    //         d2,
-    //         String::from(TWO),
-    //     ));
-    //     tokio::time::sleep(Duration::from_secs(1)).await;
-    //     let t3 = tokio::spawn(network::raft_rocksdb::start_multi_raft_app(
-    //         3,
-    //         d3,
-    //         String::from(THREE),
-    //     ));
-    //     let _ = tokio::join!(t1, t2, t3);
-    // });
-
     let _h1 = thread::spawn(move || {
         let rt = Builder::new_multi_thread()
             .max_blocking_threads(512)
@@ -135,6 +111,23 @@ fn multi_raft() -> Result<(), Box<dyn std::error::Error>> {
         let _x = rt.block_on(start_multi_raft_app(2, d2, String::from(TWO)));
     });
     sleep(Duration::from_secs(40000));
+    Ok(())
+}
+fn start() -> Result<(), Box<dyn std::error::Error>> {
+    let args: Vec<String> = env::args().collect();
+    let config_path = if args.len() > 2 && args[1] == "--conf" {
+        args[2].clone()
+    } else {
+        eprintln!("Usage: {} --conf <config-file>", args[0]);
+        eprintln!("Example: {} --conf conf/node1.toml", args[0]);
+        std::process::exit(1);
+    };
+
+    let config: Config = load_config(&config_path)?;
+    //  创建 runtime 并执行 async
+    let rt = tokio::runtime::Runtime::new()?;
+    rt.block_on(start_multi_raft(&config))?;
+
     Ok(())
 }
 
