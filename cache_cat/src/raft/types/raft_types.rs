@@ -10,7 +10,7 @@ use std::fmt::Result as FmtResult;
 use std::hash::{DefaultHasher, Hash, Hasher};
 use std::path::PathBuf;
 use std::sync::Arc;
-use crate::raft::types::store::statemachine::StateMachineStore;
+use crate::raft::store::statemachine::StateMachineStore;
 
 pub type SnapshotData = tokio::fs::File;
 

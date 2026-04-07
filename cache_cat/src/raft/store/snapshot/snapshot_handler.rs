@@ -2,7 +2,7 @@ use crate::raft::types::core::moka::{MyCache, MyValue};
 use crate::raft::types::core::value_object::ValueObject;
 use crate::raft::types::entry::request::AtomicRequest;
 use crate::raft::types::raft_types::{GroupId, TypeConfig};
-use crate::raft::types::store::statemachine::RaftMetaData;
+use crate::raft::store::statemachine::RaftMetaData;
 use openraft::SnapshotMeta;
 use std::io::SeekFrom;
 use std::path::Path;

@@ -4,7 +4,7 @@ use crate::raft::types::entry::bae_operation::BaseOperation;
 use crate::raft::types::entry::request::{AtomicRequest, Request};
 use crate::raft::types::file_operator::FileOperator;
 use crate::raft::types::raft_types::{GroupId, NodeId, TypeConfig};
-use crate::raft::types::store::snapshot::snapshot_handler::{
+use crate::raft::store::snapshot::snapshot_handler::{
     dump_cache_to_path, get_snapshot_file_name, load_cache_from_path,
 };
 use futures::Stream;

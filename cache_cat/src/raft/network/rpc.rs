@@ -1,7 +1,7 @@
 use crate::raft::network::external_handler::HANDLER_TABLE;
 use crate::raft::types::core::response_value::Value;
 use crate::raft::types::raft_types::{App, GroupId, get_app};
-use crate::raft::types::store::snapshot::snapshot_handler::get_snapshot_file_name;
+use crate::raft::store::snapshot::snapshot_handler::get_snapshot_file_name;
 use crate::utils;
 use bytes::{Buf, BufMut, Bytes, BytesMut};
 use futures::{SinkExt, StreamExt};
@@ -124,7 +124,7 @@ async fn run_stream_mode(
     Ok(())
 }
 
-async fn run_rpc_mode(app: App, socket: tokio::net::TcpStream, peer_addr: std::net::SocketAddr) {
+async fn run_rpc_mode(app: App, socket: TcpStream, peer_addr: SocketAddr) {
     let codec = LengthDelimitedCodec::new();
     let framed = Framed::new(socket, codec);
 
