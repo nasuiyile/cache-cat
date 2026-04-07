@@ -29,7 +29,7 @@ openraft-multi = { git = "https://github.com/databendlabs/openraft", tag = "v0.1
 futures = "0.3.31"
 tracing = "0.1.44"
 serde = { version = "1.0.228", features = ["derive"] }
-tokio = { version = "1.49.0", features = ["net", "io-util", "fs", "rt", "rt-multi-thread", "macros"] }
+tokio = { version = "1.49.0", features = ["net", "io-util", "fs", "rt", "rt-multi-thread", "macros","signal"] }
 tokio-util = { version = "0.7.18", features = ["codec"] }
 bincode2 = "2.0.1"
 bytes = "1.11.0"

@@ -1,3 +1,4 @@
+use std::fs;
 use std::net::SocketAddr;
 
 use serde::Deserialize;
@@ -5,11 +6,12 @@ use serde::Serialize;
 
 use super::default::default_raft_config;
 use crate::error::{Error, Result};
+use std::result::Result as StdResult;
+
 #[derive(Debug, Deserialize, Serialize, Clone, Default)]
 pub struct Config {
     pub node_id: u64,
 
-    pub redis_address: String,
     #[serde(default = "default_raft_config")]
     pub raft: RaftConfig,
 }
@@ -48,4 +50,15 @@ impl Config {
 
         Ok(())
     }
+}
+/// Load configuration from TOML file
+/// Load configuration from TOML file
+pub fn load_config(path: &str) -> StdResult<Config, Box<dyn std::error::Error>> {
+    let config_str = fs::read_to_string(path)
+        .map_err(|e| format!("Failed to read config file '{}': {}", path, e))?;
+
+    let config: Config = toml::from_str(&config_str)
+        .map_err(|e| format!("Failed to parse config file '{}': {}", path, e))?;
+
+    Ok(config)
 }

@@ -109,9 +109,16 @@ impl RaftNode {
                 endpoint: config.raft_endpoint.clone(),
             };
             raft_node.init_cluster(node).await?;
+        } else {
+            raft_node.join_cluster().await?;
         }
         Ok(())
     }
+
+    pub async fn join_cluster(&self) -> Result<()> {
+        Ok(())
+    }
+
     /// Initialize the Raft cluster with a single node
     /// * `Ok(())` - Successfully initialized the cluster
     /// * `Err(Error)` - Failed to initialize:
