@@ -127,7 +127,6 @@ async fn append_entries(
     res
 }
 
-//InstallFullSnapshotReq 把openraft自带的俩个参数包裹在一起了
 // 从节点收到数据 在这里序列化到磁盘 后续install_full_snapshot会从磁盘中反序列化
 async fn install_full_snapshot(
     app: App,
@@ -144,17 +143,17 @@ async fn install_full_snapshot(
         .map_err(|e| e.to_string())
 }
 
-/// Add a node as **Learner**.
-///
-/// A Learner receives log replication from the leader but does not vote.
-/// This should be done before adding a node as a member into the cluster
-/// (by calling `change-membership`)
 async fn add_node(app: App, req: JoinRequest) -> Result<(), String> {
     for app in app.iter() {
         let node = Node {
             node_id: req.node_id,
             endpoint: req.endpoint.clone(),
         };
+        // 已经存在就不继续加入
+        let existed = app.raft.voter_ids().any(|id| id == node.node_id);
+        if existed {
+            continue;
+        }
         let _ = app.raft.add_learner(node.node_id, node.clone(), true).await;
         // 使用 AddVoters 而不是传入完整集合
         // 这会自动计算并添加到现有成员中

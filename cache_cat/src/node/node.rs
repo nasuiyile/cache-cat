@@ -114,9 +114,14 @@ impl RaftNode {
             info!("'--join' is empty, do not need joining cluster");
             return Ok(());
         }
+        // if self.is_in_cluster()? {
+        //     info!("node has already in cluster, do not need joining cluster");
+        //     return Ok(());
+        // }
         self.do_join_cluster().await?;
         Ok(())
     }
+
     async fn do_join_cluster(&self) -> Result<()> {
         let config = &self.config;
         let addrs = &config.raft_join;

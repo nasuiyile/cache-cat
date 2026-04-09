@@ -33,8 +33,6 @@ impl Server {
         mut shutdown_rx: tokio::sync::broadcast::Receiver<()>,
     ) -> std::io::Result<()> {
         // 初始化配置（保留原有逻辑）
-        // let _ = init_config("./server/config.yml");
-        // let config = get_config();
         let listener = match TcpListener::bind(self.addr.clone()).await {
             Ok(l) => l,
             Err(err) => {
