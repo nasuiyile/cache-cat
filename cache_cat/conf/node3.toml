@@ -1,8 +1,8 @@
-node_id = 2
+node_id = 3
 
 [raft]
 address = "127.0.0.1:5003"
-advertise_host = "localhost"
+advertise_host = "127.0.0.1"
 single = false
 join = ["127.0.0.1:5001"]
 
