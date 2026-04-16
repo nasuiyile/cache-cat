@@ -129,17 +129,11 @@ async fn append_entries(
     app: App,
     req: AppendEntriesReq,
 ) -> Result<AppendEntriesResponse<TypeConfig>, String> {
-    let start = Instant::now();
-    let e = req.append_entries.entries.is_empty();
     let res = get_app(&app, req.group_id)
         .raft
         .append_entries(req.append_entries)
         .await
         .map_err(|e| e.to_string());
-    let elapsed = start.elapsed();
-    if !e {
-        tracing::debug!("append 从节点内部处理: {:?} ", elapsed);
-    }
     res
 }
 
