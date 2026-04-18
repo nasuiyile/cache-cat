@@ -12,6 +12,8 @@ use std::result::Result as StdResult;
 pub struct Config {
     pub node_id: u64,
 
+    pub redis_addr: String,
+
     #[serde(default = "default_raft_config")]
     pub raft: RaftConfig,
 }

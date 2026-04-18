@@ -4,7 +4,8 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
-core_raft = { path = "../core_raft" }
+#core_raft = { path = "../core_raft" }
+cache_cat = { path = "../cache_cat" }
 openraft = { git = "https://github.com/databendlabs/openraft", tag = "v0.10.0-alpha.13", features = ["type-alias", "serde"] }
 futures = "0.3.31"
 tracing = "0.1.44"

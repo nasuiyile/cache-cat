@@ -1,4 +1,5 @@
 use super::endpoint::Endpoint;
+use crate::raft::store::statemachine::StateMachineStore;
 use crate::raft::types::core::response_value::Value;
 use crate::raft::types::entry::request::Request;
 use crate::raft::types::file_operator::FileOperator;
@@ -10,7 +11,6 @@ use std::fmt::Result as FmtResult;
 use std::hash::{DefaultHasher, Hash, Hasher};
 use std::path::PathBuf;
 use std::sync::Arc;
-use crate::raft::store::statemachine::StateMachineStore;
 
 pub type SnapshotData = tokio::fs::File;
 
@@ -48,6 +48,8 @@ pub struct CacheCatApp {
     pub state_machine: StateMachineStore,
     pub path: PathBuf,
 }
+
+// app 初始化后就不会变了
 pub type App = Arc<Vec<Arc<CacheCatApp>>>;
 pub fn get_app(app: &App, group_id: GroupId) -> &CacheCatApp {
     app.iter().find(|app| app.group_id == group_id).unwrap()
@@ -66,7 +68,6 @@ pub fn get_group_id_by_key(key: &Vec<u8>) -> GroupId {
     key.hash(&mut hasher);
     (hasher.finish() % GROUP_NUM as u64) as GroupId
 }
-
 
 pub type Entry = openraft::Entry<TypeConfig>;
 pub type LogState = openraft::storage::LogState<TypeConfig>;

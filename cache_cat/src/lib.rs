@@ -1,5 +1,7 @@
-pub mod error;
-pub mod raft;
-pub mod utils;
-pub mod node;
 pub mod config;
+pub mod error;
+pub mod node;
+pub mod protocol;
+pub mod raft;
+mod test;
+pub mod utils;

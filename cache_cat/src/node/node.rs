@@ -1,27 +1,34 @@
 use crate::config::config::Config;
 use crate::error::{Error, Result};
 use crate::node::parsed_config::ParsedConfig;
+use crate::protocol::command::CommandFactory;
+use crate::raft::network::client::RpcClient;
 use crate::raft::network::router::{MultiNetworkFactory, Router};
 use crate::raft::network::rpc::Server;
 use crate::raft::store::log_store::LogStore;
 use crate::raft::store::raft_engine::create_raft_engine;
 use crate::raft::store::statemachine::{StateMachineData, StateMachineStore};
+use crate::raft::types::entry::forward::{ForwardRequest, ForwardRequestBody};
+use crate::raft::types::entry::membership::JoinRequest;
 use crate::raft::types::raft_types::{
     App, CacheCatApp, GROUP_NUM, GroupId, Node, NodeId, Raft, TypeConfig,
 };
 use openraft::SnapshotPolicy::Never;
 use openraft::error::{InitializeError, RaftError};
+use openraft::raft::ClientWriteResponse;
 use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
 use std::result::Result as StdResult;
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 use tokio::sync::{broadcast, oneshot};
-use tracing::{error, info};
+use tokio::time::sleep;
+use tracing::{debug, error, info};
 
 pub struct RaftNode {
     config: ParsedConfig,
 
-    pub groups: Mutex<HashMap<GroupId, CacheCatApp>>,
+    pub groups: App,
 
     shutdown_tx: broadcast::Sender<()>,
     _shutdown_rx: broadcast::Receiver<()>,
@@ -34,17 +41,11 @@ impl RaftNode {
         let dir = Path::new(&app_config.raft.log_path);
         let path = dir.join("");
         let (shutdown_tx, shutdown_rx_for_struct) = broadcast::channel(1);
-        let mut node = Self {
-            config: ParsedConfig::from(app_config)?,
-            groups: Default::default(),
-            shutdown_tx,
-            _shutdown_rx: shutdown_rx_for_struct,
-            service_handle: Mutex::new(None),
-        };
+        let mut groups = Vec::new();
         let raft_engine = dir.join("raft-engine");
         let engine = create_raft_engine(raft_engine.clone());
         let config = Arc::new(openraft::Config {
-            heartbeat_interval: 250,
+            heartbeat_interval: 200,
             election_timeout_min: 299,
             election_timeout_max: 599, // 添加最大选举超时时间
             purge_batch_size: 1,
@@ -72,34 +73,27 @@ impl RaftNode {
             )
             .await
             .map_err(|e| Error::internal(format!("Failed to create raft: {}", e)))?;
-            node.add_group(
-                &*app_config.raft.address,
-                group_id,
+            let app = CacheCatApp {
+                node_id,
+                addr: app_config.raft.address.clone(),
                 raft,
-                sm_store,
-                dir.join(""),
-            )
+                group_id,
+                state_machine: sm_store,
+                path: dir.join(""),
+            };
+            groups.push(app.into());
         }
+
+        let mut node = Self {
+            config: ParsedConfig::from(app_config)?,
+            groups: Arc::new(groups),
+            shutdown_tx,
+            _shutdown_rx: shutdown_rx_for_struct,
+            service_handle: Mutex::new(None),
+        };
         Ok(node)
     }
-    pub fn add_group(
-        &mut self,
-        addr: &str,
-        group_id: GroupId,
-        raft: Raft,
-        state_machine: StateMachineStore,
-        path: PathBuf,
-    ) {
-        let app = CacheCatApp {
-            node_id: self.config.node_id,
-            addr: addr.to_string(),
-            raft,
-            group_id,
-            state_machine,
-            path,
-        };
-        self.groups.lock().unwrap().insert(group_id, app);
-    }
+
     pub async fn start(raft_node: Arc<Self>) -> Result<()> {
         let config = &raft_node.config;
         Self::start_raft_service(raft_node.clone()).await?;
@@ -116,6 +110,83 @@ impl RaftNode {
     }
 
     pub async fn join_cluster(&self) -> Result<()> {
+        let config = &self.config;
+        if config.raft_join.is_empty() {
+            info!("'--join' is empty, do not need joining cluster");
+            return Ok(());
+        }
+        // if self.is_in_cluster()? {
+        //     info!("node has already in cluster, do not need joining cluster");
+        //     return Ok(());
+        // }
+        self.do_join_cluster().await?;
+        Ok(())
+    }
+
+    async fn do_join_cluster(&self) -> Result<()> {
+        let config = &self.config;
+        let addrs = &config.raft_join;
+        let mut errors = vec![];
+        let raft_address = config.raft_endpoint.to_string();
+        let raft_advertise_address = config.raft_advertise_endpoint.to_string();
+
+        for addr in addrs {
+            if addr == &raft_address || addr == &raft_advertise_address {
+                debug!("ignore join cluster via self node address {}", addr);
+                continue;
+            }
+            for _i in 0..3 {
+                let result = self.join_via(addr).await;
+                info!("join cluster via {} result: {:?}", addr, result);
+
+                match result {
+                    Ok(x) => return Ok(x),
+                    Err(api_error) => {
+                        let can_retry = api_error.is_retryable();
+
+                        if can_retry {
+                            debug!("try to connect to addr {} again", addr);
+                            sleep(Duration::from_millis(1_000)).await;
+                            continue;
+                        } else {
+                            errors.push(api_error);
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+
+        Err(Error::internal(format!(
+            "fail to join node-{} to cluster via {:?}, errors: {}",
+            self.config.node_id,
+            addrs,
+            errors
+                .into_iter()
+                .map(|e| e.to_string())
+                .collect::<Vec<_>>()
+                .join(", ")
+        )))
+    }
+    async fn join_via(&self, addr: &String) -> Result<()> {
+        let config = &self.config;
+
+        let join_req = JoinRequest {
+            node_id: config.node_id,
+            endpoint: config.raft_endpoint.clone(),
+        };
+        // let req = ForwardRequest {
+        //     forward_to_leader: 1,
+        //     body: ForwardRequestBody::Join(join_req),
+        // };
+        let client = RpcClient::connect(addr)
+            .await
+            .map_err(|e| Error::internal(e.to_string()))?;
+        let res: () = client
+            .call(9, join_req)
+            .await
+            .map_err(|e| Error::internal(e.to_string()))?;
+
         Ok(())
     }
 
@@ -125,8 +196,8 @@ impl RaftNode {
     ///   - `InvalidConfig` if node configuration is invalid
     ///   - `Internal` if adding node to cluster fails
     async fn init_cluster(&self, node: Node) -> Result<()> {
-        let groups = self.groups.lock().unwrap();
-        for (_, app) in groups.iter() {
+        let groups = &self.groups;
+        for app in groups.iter() {
             if node.node_id != *app.raft.node_id() {
                 return Err(Error::config(format!(
                     "Node ID {} does not match current node ID {}",
@@ -148,7 +219,7 @@ impl RaftNode {
         let mut nodes = BTreeMap::new();
         nodes.insert(node_id, node);
 
-        for (_, app) in groups.iter() {
+        for app in groups.iter() {
             if let Err(e) = app.raft.initialize(nodes.clone()).await {
                 match e {
                     RaftError::APIError(e) => match e {
@@ -177,22 +248,13 @@ impl RaftNode {
         // Create oneshot channel to signal startup completion
         let (startup_tx, startup_rx) = oneshot::channel::<StdResult<(), String>>();
 
-        let apps: Vec<Arc<CacheCatApp>> = raft_node
-            .groups
-            .lock()
-            .unwrap()
-            .drain()
-            .map(|(_, app)| Arc::new(app))
-            .collect();
+        let apps: App = raft_node.groups.clone();
 
         let addr = raft_node.config.raft_advertise_endpoint.to_string();
+        let redis_addr = raft_node.config.redis_addr.clone();
         let handle = tokio::task::spawn(async move {
             // Signal startup success
-            let server = Server {
-                app: App::new(apps),
-                addr,
-                startup_tx,
-            };
+            let server = Server::new(apps, addr, startup_tx, redis_addr);
             if let Err(e) = server.start_server(shutdown_rx).await {
                 error!("Server error: {}", e);
             }

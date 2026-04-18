@@ -1,0 +1,9 @@
+node_id = 2
+redis_addr = "127.0.0.1:6380"
+[raft]
+address = "127.0.0.1:5002"
+advertise_host = "127.0.0.1"
+single = false
+join = ["127.0.0.1:5001"]
+
+log_path = "C:/tmp/raft/cache-cat/2"

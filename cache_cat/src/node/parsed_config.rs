@@ -3,7 +3,6 @@ use crate::error::Result;
 use crate::raft::types::endpoint::Endpoint;
 use crate::raft::types::raft_types::NodeId;
 
-
 pub struct ParsedConfig {
     pub node_id: NodeId,
 
@@ -11,6 +10,7 @@ pub struct ParsedConfig {
 
     pub raft_advertise_endpoint: Endpoint,
 
+    pub redis_addr: String,
 
     pub raft_single: bool,
 
@@ -30,6 +30,7 @@ impl ParsedConfig {
             node_id: config.node_id as NodeId,
             raft_endpoint,
             raft_advertise_endpoint,
+            redis_addr: config.redis_addr.clone(),
             raft_single: config.raft.single,
             raft_join: config.raft.join.clone(),
             rocksdb_data_path: config.raft.log_path.clone(),

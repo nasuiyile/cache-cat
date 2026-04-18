@@ -1,4 +1,6 @@
-
+use crate::raft::types::endpoint::Endpoint;
+use crate::raft::types::file_operator::FileOperator;
+use crate::raft::types::raft_types::{GroupId, Node, NodeId, TypeConfig};
 use openraft::SnapshotMeta;
 use openraft::alias::VoteOf;
 use openraft::raft::{AppendEntriesRequest, VoteRequest};
@@ -6,8 +8,6 @@ use serde::{Deserialize, Serialize};
 use std::fmt;
 use std::hash::Hasher;
 use std::sync::Arc;
-use crate::raft::types::file_operator::FileOperator;
-use crate::raft::types::raft_types::{GroupId, TypeConfig};
 
 #[derive(Serialize, Deserialize, Debug, PartialEq)]
 pub struct PrintTestReq {
@@ -19,10 +19,9 @@ pub struct PrintTestRes {
     pub message: String,
 }
 
-
 #[derive(Serialize, Deserialize, Debug, PartialEq)]
 pub struct GetReq {
-    pub key: String,
+    pub key: Vec<u8>,
 }
 
 #[derive(Serialize, Deserialize, Debug, PartialEq)]
@@ -62,4 +61,9 @@ pub struct InstallFullSnapshotReq {
     pub snapshot_meta: SnapshotMeta<TypeConfig>,
     pub snapshot: FileOperator,
     pub group_id: GroupId,
+}
+
+#[derive(Serialize, Deserialize, Debug, PartialEq)]
+pub struct AddNodeReq {
+    pub node: Node,
 }

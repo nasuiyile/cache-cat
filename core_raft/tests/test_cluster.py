@@ -14,6 +14,6 @@ r.ping()
 # 等 5 秒
 # time.sleep(5)
 # 再获取
-r.delete('name')
+# r.delete('name')
 
 print(r.get('name'))

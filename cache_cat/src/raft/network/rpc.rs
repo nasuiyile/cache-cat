@@ -1,15 +1,14 @@
+use crate::protocol::command::CommandFactory;
+use crate::protocol::resp::Parser;
 use crate::raft::network::external_handler::HANDLER_TABLE;
 use crate::raft::store::snapshot::snapshot_handler::get_snapshot_file_name;
 use crate::raft::types::core::response_value::Value;
 use crate::raft::types::raft_types::{App, GroupId, get_app};
-use crate::utils;
-use std::result::Result as StdResult;
-
 use bytes::{Buf, BufMut, Bytes, BytesMut};
 use futures::{SinkExt, StreamExt};
-use std::fmt::Error;
 use std::io::Result as IoResult;
 use std::net::SocketAddr;
+use std::result::Result as StdResult;
 use std::sync::Arc;
 use std::time::Instant;
 use tokio::fs;
@@ -22,23 +21,47 @@ use tokio::sync::{mpsc, oneshot};
 use tokio_util::codec::{Framed, LengthDelimitedCodec};
 use tracing::{debug, error, info, warn};
 use uuid::Uuid;
+
 pub struct Server {
     pub(crate) app: App,
     pub addr: String,
     pub startup_tx: Sender<StdResult<(), String>>,
+    pub redis_server: RedisServer,
 }
 impl Server {
+    pub fn new(
+        app: App,
+        addr: String,
+        startup_tx: Sender<StdResult<(), String>>,
+        redis_addr: String,
+    ) -> Self {
+        Server {
+            app: app.clone(),
+            addr,
+            startup_tx,
+            redis_server: RedisServer {
+                app,
+                redis_addr,
+                cmd_factory: Arc::new(CommandFactory::init()),
+            },
+        }
+    }
     pub async fn start_server(
         self: Self,
         mut shutdown_rx: tokio::sync::broadcast::Receiver<()>,
     ) -> std::io::Result<()> {
+        tokio::spawn(async move {
+            Arc::new(self.redis_server)
+                .start_redis_server()
+                .await
+                .expect("Redis : panic message");
+        });
+
         // 初始化配置（保留原有逻辑）
-        // let _ = init_config("./server/config.yml");
-        // let config = get_config();
         let listener = match TcpListener::bind(self.addr.clone()).await {
             Ok(l) => l,
             Err(err) => {
-                let err_msg = format!("Failed to bind gRPC server to {}: {}", self.addr, err);
+                let err_msg = format!("Failed to bind TCP server to {}: {}", self.addr, err);
                 let _ = self.startup_tx.send(Err(err_msg));
                 return Err(err);
             }
@@ -96,6 +119,8 @@ async fn handle_connection(
 
     Ok(())
 }
+
+
 
 async fn run_stream_mode(
     app: App,
@@ -162,13 +187,35 @@ async fn run_rpc_mode(app: App, socket: TcpStream, peer_addr: SocketAddr) {
     // 写任务
     tokio::spawn(async move {
         let mut writer = writer;
+        let mut buffer = BytesMut::with_capacity(64 * 1024);
+        let mut write_count = 0;
+        let batch_size_limit = 100;
+
         while let Some(payload) = rx.recv().await {
-            if let Err(e) = writer.send(payload).await {
-                eprintln!("写入 TCP 失败 ({}): {}", peer_addr, e);
-                break;
+            buffer.put(payload);
+            write_count += 1;
+
+            // 尝试非阻塞地排空 channel 中现有的数据，实现批量写入
+            while let Ok(extra) = rx.try_recv() {
+                buffer.put(extra);
+                write_count += 1;
+                if buffer.len() > 128 * 1024 || write_count >= batch_size_limit {
+                    break;
+                }
+            }
+
+            match writer.send(buffer.split().freeze()).await {
+                Ok(_) => {
+                    write_count = 0;
+                }
+                Err(e) => {
+                    tracing::error!("Failed to send data to {}: {}", peer_addr, e);
+                    break;
+                }
             }
         }
-        debug!("写任务结束: {}", peer_addr);
+
+        tracing::debug!("RPC write task ended for {}", peer_addr);
     });
 
     // 读循环（完全复用）
@@ -180,11 +227,9 @@ async fn run_rpc_mode(app: App, socket: TcpStream, peer_addr: SocketAddr) {
                 let package = frame_bytes.freeze();
 
                 tokio::spawn(async move {
-                    let start = Instant::now();
-                    if let Err(_) = hand(app, tx, package).await {
-                        eprintln!("处理请求失败 {}", peer_addr);
-                    }
-                    debug!("rpc处理用时: {} 微秒", start.elapsed().as_micros());
+                if let Err(_) = hand(app, tx, package).await {
+                    eprintln!("处理请求失败 {}", peer_addr);
+                }
                 });
             }
             Err(e) => {
@@ -206,19 +251,11 @@ pub async fn hand(app: App, tx: UnboundedSender<Bytes>, mut package: Bytes) -> R
         return Err(());
     }
 
-    // 读取 request_id 和 func_id（网络字节序 big-endian）
-    let request_id = {
-        let mut b = [0u8; 4];
-        b.copy_from_slice(&package[0..4]);
-        u32::from_be_bytes(b)
-    };
-    let func_id = {
-        let mut b = [0u8; 4];
-        b.copy_from_slice(&package[4..8]);
-        u32::from_be_bytes(b)
-    };
+    // 使用 bytes 库的内置方法，减少手动切片和拷贝
+    let request_id = package.get_u32(); // 自动前进 4 字节
+    let func_id = package.get_u32();    // 自动再前进 4 字节
     // 前进 8 字节，留下 body
-    package.advance(8);
+    // package.advance(8);
 
     // 查找 handler 并调用
     let handler = HANDLER_TABLE
@@ -240,4 +277,90 @@ pub async fn hand(app: App, tx: UnboundedSender<Bytes>, mut package: Bytes) -> R
         return Err(());
     }
     Ok(())
+}
+
+
+pub struct RedisServer {
+    pub(crate) app: App,
+    redis_addr: String,
+    pub cmd_factory: Arc<CommandFactory>,
+}
+impl RedisServer {
+    async fn process_command(&self, value: Value) -> Value {
+        self.cmd_factory.execute(value, self).await
+    }
+    /// Handle a single client connection
+    async fn handle_connection(
+        self: Arc<Self>,
+        mut stream: TcpStream,
+        peer_addr: SocketAddr,
+    ) -> IoResult<()> {
+        let mut buffer = vec![0u8; 8192]; // 8KB buffer
+        let mut pending = Vec::new(); // Buffer for incomplete commands
+
+        loop {
+            match stream.read(&mut buffer).await {
+                Ok(0) => {
+                    info!("Connection closed by client: {}", peer_addr);
+                    break;
+                }
+                Ok(n) => {
+                    // Append new data to pending buffer
+                    pending.extend_from_slice(&buffer[..n]);
+
+                    // Try to parse and process complete commands
+                    let mut processed = 0;
+                    while let Some((value, consumed)) = Parser::parse(&pending[processed..]) {
+                        processed += consumed;
+
+                        // Log the parsed command
+                        info!("Received command from {}: {:?}", peer_addr, value);
+
+                        // Process the command and get response
+                        let response = self.process_command(value).await;
+                        let encoded = response.encode();
+
+                        // Send response
+                        if let Err(e) = stream.write_all(&encoded).await {
+                            warn!("Failed to write response to {}: {}", peer_addr, e);
+                            break;
+                        }
+                    }
+
+                    // Remove processed data from pending buffer
+                    if processed > 0 {
+                        pending = pending.split_off(processed);
+                    }
+                }
+                Err(e) => {
+                    error!("Error reading from {}: {}", peer_addr, e);
+                    break;
+                }
+            }
+        }
+
+        info!("Connection handler ended for {}", peer_addr);
+        Ok(())
+    }
+    pub async fn start_redis_server(self: Arc<Self>) -> std::io::Result<()> {
+        let listener = TcpListener::bind(self.redis_addr.clone()).await?;
+        loop {
+            match listener.accept().await {
+                Ok((stream, peer_addr)) => {
+                    info!("New connection accepted from {}", peer_addr);
+                    // Clone the Arc<Server> for the new connection
+                    let server = Arc::clone(&self);
+                    // Spawn an independent task for each connection
+                    tokio::spawn(async move {
+                        if let Err(e) = server.handle_connection(stream, peer_addr).await {
+                            error!("Error handling connection from {}: {}", peer_addr, e);
+                        }
+                    });
+                }
+                Err(e) => {
+                    error!("Failed to accept connection: {}", e);
+                }
+            }
+        }
+    }
 }

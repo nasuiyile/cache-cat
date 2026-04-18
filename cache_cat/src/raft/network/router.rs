@@ -85,6 +85,7 @@ impl GroupRouter<TypeConfig, GroupId> for Router {
         rpc: AppendEntriesRequest<TypeConfig>,
         option: RPCOption,
     ) -> Result<AppendEntriesResponse<TypeConfig>, RPCError<TypeConfig>> {
+        // println!("ttl:{}", option.hard_ttl().as_millis());
         if !rpc.entries.is_empty() {
             let i = rpc.entries.len();
             tracing::debug!("send entries len:{}", i);

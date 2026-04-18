@@ -1,19 +1,25 @@
-
+use crate::raft::network::model::{
+    AddNodeReq, AppendEntriesReq, GetReq, GetRes, InstallFullSnapshotReq, PrintTestReq,
+    PrintTestRes, VoteReq,
+};
+use crate::raft::types::core::moka::MyValue;
+use crate::raft::types::core::value_object::ValueObject;
+use crate::raft::types::entry::membership::JoinRequest;
+use crate::raft::types::entry::request::Request;
+use crate::raft::types::raft_types::{App, Node, NodeId, TypeConfig, get_app, get_group_by_key};
 use async_trait::async_trait;
 use bytes::Bytes;
-use openraft::Snapshot;
+use openraft::ReadPolicy::LeaseRead;
+use openraft::async_runtime::WatchReceiver;
 use openraft::error::RaftError;
-use openraft::raft::{
-    AppendEntriesResponse, ClientWriteResponse,
-    SnapshotResponse, VoteResponse,
-};
-use serde::de::DeserializeOwned;
+use openraft::raft::{AppendEntriesResponse, ClientWriteResponse, SnapshotResponse, VoteResponse};
+use openraft::{ChangeMembers, Snapshot};
 use serde::Serialize;
+use serde::de::DeserializeOwned;
+use std::collections::{BTreeMap, BTreeSet};
 use std::hash::{DefaultHasher, Hash, Hasher};
+use std::sync::Arc;
 use std::time::Instant;
-use crate::raft::network::model::{AppendEntriesReq, InstallFullSnapshotReq, PrintTestReq, PrintTestRes, VoteReq};
-use crate::raft::types::entry::request::Request;
-use crate::raft::types::raft_types::{get_app, App, TypeConfig};
 
 pub type HandlerEntry = (u32, fn() -> Box<dyn RpcHandler>);
 
@@ -32,6 +38,7 @@ pub static HANDLER_TABLE: &[HandlerEntry] = &[
             func: install_full_snapshot,
         })
     }),
+    (9, || Box::new(RpcMethod { func: add_node })),
 ];
 fn hash_string(s: &str) -> u64 {
     let mut hasher = DefaultHasher::new();
@@ -88,15 +95,26 @@ async fn write(app: App, req: Request) -> Result<ClientWriteResponse<TypeConfig>
         e.to_string()
     })
 }
-async fn read(_app: App, _req: String) -> Result<Option<String>, RaftError<TypeConfig>> {
-    // let group = get_group(&app, hash_string(&req));
-    // let kvs = group.state_machine.data.kvs.lock().await;
-    // let value = kvs.get(&req);
-    // value.map(|v| String::from_utf8(v.tostring()))
-    todo!()
+async fn read(app: App, get_req: GetReq) -> Result<GetRes, String> {
+    let group = get_group_by_key(&app, &get_req.key);
+    let ret = group.raft.get_read_linearizer(LeaseRead).await;
+
+    let value = match ret {
+        Ok(linearizer) => {
+            linearizer.await_ready(&group.raft).await.unwrap();
+            group.state_machine.data.kvs.cache.get(&get_req.key).await
+        }
+        Err(e) => return Err(e.to_string()),
+    };
+    match value {
+        None => Ok(GetRes { value: None }),
+        Some(v) => match v.data {
+            ValueObject::String(value) => Ok(GetRes { value: Some(value) }),
+            _ => Err("value is not string".to_string()),
+        },
+    }
 }
 
-//TODO 向上传播错误
 async fn vote(app: App, req: VoteReq) -> Result<VoteResponse<TypeConfig>, String> {
     // openraft 的 vote 是异步的
     let group = get_app(&app, req.group_id);
@@ -111,21 +129,14 @@ async fn append_entries(
     app: App,
     req: AppendEntriesReq,
 ) -> Result<AppendEntriesResponse<TypeConfig>, String> {
-    let start = Instant::now();
-    let e = req.append_entries.entries.is_empty();
     let res = get_app(&app, req.group_id)
         .raft
         .append_entries(req.append_entries)
         .await
         .map_err(|e| e.to_string());
-    let elapsed = start.elapsed();
-    if !e {
-        tracing::debug!("append 从节点内部处理: {:?} ", elapsed);
-    }
     res
 }
 
-//InstallFullSnapshotReq 把openraft自带的俩个参数包裹在一起了
 // 从节点收到数据 在这里序列化到磁盘 后续install_full_snapshot会从磁盘中反序列化
 async fn install_full_snapshot(
     app: App,
@@ -140,4 +151,29 @@ async fn install_full_snapshot(
         .install_full_snapshot(req.vote, snapshot)
         .await
         .map_err(|e| e.to_string())
+}
+
+async fn add_node(app: App, req: JoinRequest) -> Result<(), String> {
+    for app in app.iter() {
+        let node = Node {
+            node_id: req.node_id,
+            endpoint: req.endpoint.clone(),
+        };
+        // 已经存在就不继续加入
+        let existed = app.raft.voter_ids().any(|id| id == node.node_id);
+        if existed {
+            continue;
+        }
+        let _ = app.raft.add_learner(node.node_id, node.clone(), true).await;
+        // 使用 AddVoters 而不是传入完整集合
+        // 这会自动计算并添加到现有成员中
+        let mut map = BTreeMap::new();
+        map.insert(node.node_id, node.clone());
+        let changes = ChangeMembers::AddVoters(map);
+        app.raft
+            .change_membership(changes, true)
+            .await
+            .map_err(|e| e.to_string())?;
+    }
+    Ok(())
 }

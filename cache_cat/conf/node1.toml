@@ -1,9 +1,9 @@
 node_id = 1
-
+redis_addr = "127.0.0.1:6379"
 [raft]
-address = "127.0.0.1:7001"
-advertise_host = "localhost"
+address = "127.0.0.1:5001"
+advertise_host = "127.0.0.1"
 single = true
 join = []
 
-log_path = "E:/tmp/raft/cache-cat"
+log_path = "C:/tmp/raft/cache-cat/1"

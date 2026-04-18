@@ -1,15 +1,16 @@
+use crate::protocol::string::set::SetParams;
+use crate::raft::types::entry::bae_operation::BaseOperation;
 use crate::raft::types::raft_types::{GROUP_NUM, GroupId};
 use serde::{Deserialize, Serialize};
 use std::fmt;
 use std::hash::{DefaultHasher, Hash, Hasher};
-use crate::raft::types::entry::bae_operation::BaseOperation;
 
 /// A request to the KV store.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum Request {
     Base(BaseOperation),
+    RedisSet(SetParams),
 }
-
 
 impl Request {
     pub fn get_group_id(&self) -> GroupId {
@@ -32,7 +33,9 @@ impl Request {
                 }
             },
 
-
+            Request::RedisSet(req) => {
+                req.hash(&mut hasher);
+            }
         }
 
         (hasher.finish() % GROUP_NUM as u64) as GroupId
@@ -48,6 +51,7 @@ impl fmt::Display for Request {
                 BaseOperation::Del(req) => write!(f, "DEL: {}", req),
             },
 
+            Request::RedisSet(req) => write!(f, "RedisSet: {}", req),
         }
     }
 }
