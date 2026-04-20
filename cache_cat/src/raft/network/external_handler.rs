@@ -1,25 +1,22 @@
 use crate::raft::network::model::{
-    AddNodeReq, AppendEntriesReq, GetReq, GetRes, InstallFullSnapshotReq, PrintTestReq,
-    PrintTestRes, VoteReq,
+    AppendEntriesReq, GetReq, GetRes, InstallFullSnapshotReq, PrintTestReq, PrintTestRes, VoteReq,
 };
-use crate::raft::types::core::moka::MyValue;
 use crate::raft::types::core::value_object::ValueObject;
 use crate::raft::types::entry::membership::JoinRequest;
 use crate::raft::types::entry::request::Request;
-use crate::raft::types::raft_types::{App, Node, NodeId, TypeConfig, get_app, get_group_by_key};
+use crate::raft::types::raft_types::{App, Node, TypeConfig, get_app, get_group_by_key};
 use async_trait::async_trait;
 use bytes::Bytes;
+use futures::StreamExt;
 use openraft::ReadPolicy::LeaseRead;
-use openraft::async_runtime::WatchReceiver;
-use openraft::error::RaftError;
-use openraft::raft::{AppendEntriesResponse, ClientWriteResponse, SnapshotResponse, VoteResponse};
+use openraft::raft::{
+    AppendEntriesResponse, ClientWriteResponse, SnapshotResponse, VoteResponse, WriteResult,
+};
 use openraft::{ChangeMembers, Snapshot};
 use serde::Serialize;
 use serde::de::DeserializeOwned;
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 use std::hash::{DefaultHasher, Hash, Hasher};
-use std::sync::Arc;
-use std::time::Instant;
 
 pub type HandlerEntry = (u32, fn() -> Box<dyn RpcHandler>);
 
@@ -39,6 +36,7 @@ pub static HANDLER_TABLE: &[HandlerEntry] = &[
         })
     }),
     (9, || Box::new(RpcMethod { func: add_node })),
+    (10, || Box::new(RpcMethod { func: batch_write })),
 ];
 fn hash_string(s: &str) -> u64 {
     let mut hasher = DefaultHasher::new();
@@ -95,6 +93,27 @@ async fn write(app: App, req: Request) -> Result<ClientWriteResponse<TypeConfig>
         e.to_string()
     })
 }
+
+pub async fn batch_write(
+    app: App,
+    req: Vec<Request>,
+) -> Result<Vec<Result<WriteResult<TypeConfig>, String>>, String> {
+    let group = get_app(&app, 0);
+
+    let stream = group.raft.client_write_many(req).await.map_err(|e| {
+        tracing::error!("write error: {:?}", e);
+        e.to_string()
+    })?;
+
+    // 映射错误类型并等待所有结果收集到 Vec 中
+    let results: Vec<Result<WriteResult<TypeConfig>, String>> = stream
+        .map(|res| res.map_err(|e| e.to_string()))
+        .collect() // 这里会异步等待流结束
+        .await;
+
+    Ok(results)
+}
+
 async fn read(app: App, get_req: GetReq) -> Result<GetRes, String> {
     let group = get_group_by_key(&app, &get_req.key);
     let ret = group.raft.get_read_linearizer(LeaseRead).await;
@@ -129,17 +148,11 @@ async fn append_entries(
     app: App,
     req: AppendEntriesReq,
 ) -> Result<AppendEntriesResponse<TypeConfig>, String> {
-    let start = Instant::now();
-    let e = req.append_entries.entries.is_empty();
     let res = get_app(&app, req.group_id)
         .raft
         .append_entries(req.append_entries)
         .await
         .map_err(|e| e.to_string());
-    let elapsed = start.elapsed();
-    if !e {
-        tracing::debug!("append 从节点内部处理: {:?} ", elapsed);
-    }
     res
 }
 

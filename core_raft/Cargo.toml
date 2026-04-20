@@ -9,11 +9,13 @@ homepage = "https://github.com/nasuiyile/cache-cat"
 repository = "https://github.com/nasuiyile/cache-cat"
 license = "Apache-2.0"
 [profile.release]
+debug = true #todo
+strip = false
 opt-level = 3
 lto = true
 codegen-units = 1
 panic = "abort"
-strip = true
+
 
 [profile.dev]
 opt-level = 0
@@ -29,7 +31,7 @@ openraft-multi = { git = "https://github.com/databendlabs/openraft", tag = "v0.1
 futures = "0.3.31"
 tracing = "0.1.44"
 serde = { version = "1.0.228", features = ["derive"] }
-tokio = { version = "1.49.0", features = ["net", "io-util", "fs", "rt", "rt-multi-thread", "macros"] }
+tokio = { version = "1.49.0", features = ["net", "io-util", "fs", "rt", "rt-multi-thread", "macros", "io-uring"] }
 tokio-util = { version = "0.7.18", features = ["codec"] }
 bincode2 = "2.0.1"
 bytes = { version = "1", features = ["serde"] }

@@ -40,7 +40,6 @@ mod tests {
                 )
                 .await
                 .expect("write call failed");
-
             let r: GetRes = client
                 .call(
                     3,

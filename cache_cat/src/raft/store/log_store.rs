@@ -80,7 +80,6 @@ impl RaftLogReader<TypeConfig> for LogStore {
         &mut self,
         range: RB,
     ) -> Result<Vec<<TypeConfig as RaftTypeConfig>::Entry>, io::Error> {
-        let start_time = Instant::now();
         let mut start = match range.start_bound() {
             Bound::Included(&n) => n,
             Bound::Excluded(&n) => n + 1, // 排除转换为包含
@@ -107,7 +106,6 @@ impl RaftLogReader<TypeConfig> for LogStore {
         self.engine
             .fetch_entries_to::<MessageExtTyped>(self.group_id as u64, start, end, None, &mut res)
             .unwrap();
-        tracing::debug!("try_get_log_entries cost: {:?}", start_time.elapsed());
         Ok(res)
     }
 
@@ -170,7 +168,6 @@ impl RaftLogStorage<TypeConfig> for LogStore {
     where
         I: IntoIterator<Item = EntryOf<TypeConfig>> + Send,
     {
-        let start = Instant::now();
         let mut batch = LogBatch::with_capacity(256);
         let x: Vec<Entry<TypeConfig>> = entries.into_iter().collect();
         batch
@@ -192,8 +189,6 @@ impl RaftLogStorage<TypeConfig> for LogStore {
         let _hand = tokio::task::spawn_blocking(move || {
             let res = engine.sync().map(|_| ()).map_err(io::Error::other);
             callback.io_completed(res);
-            let elapsed = start.elapsed();
-            tracing::debug!("raft-engine append elapsed: {:?}", elapsed);
         })
         .instrument(tracing::debug_span!("raft-engine-sync"));
         // Return now, and the callback will be invoked later when IO is done.
