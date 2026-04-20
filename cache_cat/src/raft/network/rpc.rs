@@ -15,9 +15,9 @@ use tokio::fs;
 use tokio::fs::File;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
-use tokio::sync::mpsc;
 use tokio::sync::mpsc::UnboundedSender;
 use tokio::sync::oneshot::Sender;
+use tokio::sync::{mpsc, oneshot};
 use tokio_util::codec::{Framed, LengthDelimitedCodec};
 use tracing::{debug, error, info, warn};
 use uuid::Uuid;
@@ -153,18 +153,17 @@ async fn pipeline_mode(app: App, socket: TcpStream, peer_addr: SocketAddr) {
     while let Some(frame_result) = reader.next().await {
         match frame_result {
             Ok(frame_bytes) => {
-                let mut package = frame_bytes.freeze();
+                let package = frame_bytes.freeze();
                 let requests: Vec<Request> =
                     bincode2::deserialize(package.as_ref()).expect("Failed to deserialize");
                 let res = batch_write(app.clone(), requests).await;
                 let vec = bincode2::serialize(&res).expect("Failed to serialize");
-                writer
-                    .send(Bytes::from(vec))
-                    .await
-                    .expect("Failed to send write");
+                if let Err(e) = writer.send(Bytes::from(vec)).await {
+                    error!("写入 TCP 错误 ({}): {}", peer_addr, e);
+                }
             }
             Err(e) => {
-                eprintln!("读取帧失败 ({}): {}", peer_addr, e);
+                error!("读取帧失败 ({}): {}", peer_addr, e);
                 break;
             }
         }
@@ -186,7 +185,7 @@ async fn rpc_mode(app: App, socket: TcpStream, peer_addr: SocketAddr) {
         let mut writer = writer;
         while let Some(payload) = rx.recv().await {
             if let Err(e) = writer.send(payload).await {
-                eprintln!("写入 TCP 失败 ({}): {}", peer_addr, e);
+                error!("写入 TCP 失败 ({}): {}", peer_addr, e);
                 break;
             }
         }
@@ -202,12 +201,12 @@ async fn rpc_mode(app: App, socket: TcpStream, peer_addr: SocketAddr) {
 
                 tokio::spawn(async move {
                     if let Err(_) = hand(app, tx, package).await {
-                        eprintln!("处理请求失败 {}", peer_addr);
+                        error!("处理请求失败 {}", peer_addr);
                     }
                 });
             }
             Err(e) => {
-                eprintln!("读取帧失败 ({}): {}", peer_addr, e);
+                error!("读取帧失败 ({}): {}", peer_addr, e);
                 break;
             }
         }
@@ -221,10 +220,9 @@ async fn rpc_mode(app: App, socket: TcpStream, peer_addr: SocketAddr) {
 pub async fn hand(app: App, tx: UnboundedSender<Bytes>, mut package: Bytes) -> Result<(), ()> {
     // 安全解析：至少需要 8 bytes (request_id + func_id)
     if package.len() < 8 {
-        eprintln!("包长度不足：{}", package.len());
+        error!("包长度不足：{}", package.len());
         return Err(());
     }
-
     // 使用 bytes 库的内置方法，减少手动切片和拷贝
     let request_id = package.get_u32(); // 自动前进 4 字节
     let func_id = package.get_u32(); // 自动再前进 4 字节
@@ -337,7 +335,7 @@ impl RedisServer {
                         processed += consumed;
 
                         // Log the parsed command
-                        info!("Received command from {}: {:?}", peer_addr, value);
+                        debug!("Received command from {}: {:?}", peer_addr, value);
 
                         // Process the command and get response
                         let response = self.process_command(value).await;

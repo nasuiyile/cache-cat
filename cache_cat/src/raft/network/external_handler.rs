@@ -99,17 +99,22 @@ pub async fn batch_write(
     req: Vec<Request>,
 ) -> Result<Vec<Result<WriteResult<TypeConfig>, String>>, String> {
     let group = get_app(&app, 0);
-
-    let stream = group.raft.client_write_many(req).await.map_err(|e| {
+    let len = req.len();
+    let mut stream = group.raft.client_write_many(req).await.map_err(|e| {
         tracing::error!("write error: {:?}", e);
         e.to_string()
     })?;
 
-    // 映射错误类型并等待所有结果收集到 Vec 中
-    let results: Vec<Result<WriteResult<TypeConfig>, String>> = stream
-        .map(|res| res.map_err(|e| e.to_string()))
-        .collect() // 这里会异步等待流结束
-        .await;
+    let mut results = Vec::with_capacity(len);
+
+    // 使用 while let 逐个获取，确保所有响应都从 channel 中取出
+    while let Some(res) = stream.next().await {
+        results.push(res.map_err(|e| e.to_string()));
+    }
+
+    // 关键点：在返回结果前，显式 drop 掉 stream，或者
+    // 如果依然报错，可以考虑使用 tokio::spawn 处理收尾（不推荐，增加开销）
+    drop(stream);
 
     Ok(results)
 }

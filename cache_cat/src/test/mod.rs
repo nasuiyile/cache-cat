@@ -3,12 +3,13 @@ mod tests {
 
     use crate::raft::network::client::RpcMultiClient;
     use crate::raft::network::model::{GetReq, GetRes, PrintTestReq, PrintTestRes};
+    use crate::raft::network::pipeline_client::PipelineClient;
     use crate::raft::types::entry::bae_operation::{BaseOperation, SetReq};
     use crate::raft::types::entry::request::Request;
     use crate::raft::types::raft_types::TypeConfig;
     use openraft::RPCTypes::Vote;
     use openraft::error::Timeout;
-    use openraft::raft::ClientWriteResponse;
+    use openraft::raft::{ClientWriteResponse, WriteResult};
     use std::sync::Arc;
     use std::time::{Duration, Instant};
     use tokio::time;
@@ -109,5 +110,17 @@ mod tests {
 
         let avg_read = total_read / ITERATIONS;
         println!("读/RPC 平均耗时: {} 微秒", avg_read.as_micros());
+
+        let client = PipelineClient::connect("127.0.0.1:5001")
+            .await
+            .expect("connect failed");
+        let a = Request::Base(BaseOperation::Set(SetReq {
+            key: Arc::from(format!("test{}", 1).into_bytes()),
+            value: Arc::from(format!("test_value_{}", 1).into_bytes()),
+            ex_time: 0,
+        }));
+        let vec1 = vec![a];
+        let x: Vec<Result<WriteResult<TypeConfig>, String>> =
+            client.call(vec1).await.expect("write call failed");
     }
 }

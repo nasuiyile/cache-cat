@@ -16,4 +16,5 @@ r.ping()
 # 再获取
 # r.delete('name')
 
+print(r.get('test1'))
 print(r.get('name'))
