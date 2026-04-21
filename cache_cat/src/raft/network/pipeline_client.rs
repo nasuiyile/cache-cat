@@ -1,25 +1,26 @@
 use bincode2;
 use bytes::Bytes;
 use futures::{SinkExt, StreamExt};
-use serde::{de::DeserializeOwned, Serialize};
+use openraft::raft::ClientWriteResponse;
+use serde::{Serialize, de::DeserializeOwned};
 use std::error::Error;
+use tokio::io::AsyncWriteExt;
 use tokio::net::TcpStream;
 use tokio::sync::{mpsc, oneshot};
 use tokio_util::codec::{Framed, LengthDelimitedCodec};
-use tokio::io::AsyncWriteExt;
 
-// 这里的类型根据你的服务端定义进行匹配
-// Req -> Request
-// Res -> WriteResult<TypeConfig>
-pub struct PipelineClient<Req, Res> {
-    tx: mpsc::Sender<(Vec<Req>, oneshot::Sender<Result<Vec<Result<Res, String>>, String>>)>,
+// 按你的服务端实际类型导入
+use crate::raft::types::entry::request::Request;
+use crate::raft::types::raft_types::TypeConfig;
+
+pub struct PipelineClient {
+    tx: mpsc::Sender<(
+        Request,
+        oneshot::Sender<Result<ClientWriteResponse<TypeConfig>, String>>,
+    )>,
 }
 
-impl<Req, Res> PipelineClient<Req, Res>
-where
-    Req: Serialize + Send + 'static,
-    Res: DeserializeOwned + Send + 'static,
-{
+impl PipelineClient {
     pub async fn connect(addr: &str) -> Result<Self, Box<dyn Error + Send + Sync>> {
         let mut stream = TcpStream::connect(addr).await?;
         stream.set_nodelay(true)?;
@@ -27,24 +28,30 @@ where
         // 发送协议标识位 2
         stream.write_all(&[2u8]).await?;
 
-        let (mut sink, mut stream) = Framed::new(stream, LengthDelimitedCodec::new()).split();
+        let framed = Framed::new(stream, LengthDelimitedCodec::new());
+        let (mut writer, mut reader) = framed.split();
 
-        // 用于 call 与后台任务通信
-        let (tx, mut rx) = mpsc::channel::<(Vec<Req>, oneshot::Sender<Result<Vec<Result<Res, String>>, String>>)>(1024);
+        // 请求队列：一个请求对应一个响应
+        let (tx, mut rx) = mpsc::channel::<(
+            Request,
+            oneshot::Sender<Result<ClientWriteResponse<TypeConfig>, String>>,
+        )>(1024);
 
-        // 用于存放等待响应的回调队列 (FIFO)
-        let (cb_tx, mut cb_rx) = mpsc::channel::<oneshot::Sender<Result<Vec<Result<Res, String>>, String>>>(1024);
+        // 响应回调队列：严格 FIFO，对应服务端按顺序返回的帧
+        let (cb_tx, mut cb_rx) =
+            mpsc::channel::<oneshot::Sender<Result<ClientWriteResponse<TypeConfig>, String>>>(1024);
 
-        // --- 写任务 ---
+        // 写任务：序列化请求并发给服务端
         tokio::spawn(async move {
-            while let Some((reqs, cb)) = rx.recv().await {
-                match bincode2::serialize(&reqs) {
-                    Ok(bytes) => {
-                        if sink.send(Bytes::from(bytes)).await.is_err() {
-                            let _ = cb.send(Err("Send failed: Connection closed".to_string()));
+            while let Some((req, cb)) = rx.recv().await {
+                match bincode2::serialize(&req) {
+                    Ok(encoded) => {
+                        if let Err(e) = writer.send(Bytes::from(encoded)).await {
+                            let _ = cb.send(Err(format!("Send failed: {}", e)));
                             break;
                         }
-                        // 发送成功后，将回调加入队列，交给读任务处理
+
+                        // 请求已经成功写入，等待读任务按顺序消费对应响应
                         if cb_tx.send(cb).await.is_err() {
                             break;
                         }
@@ -56,20 +63,21 @@ where
             }
         });
 
-        // --- 读任务 ---
+        // 读任务：按服务端返回顺序消费响应帧
         tokio::spawn(async move {
             while let Some(cb) = cb_rx.recv().await {
-                match stream.next().await {
+                match reader.next().await {
                     Some(Ok(frame_bytes)) => {
-                        // 对应服务端的 Result<Vec<Result<Res, String>>, String>
-                        let res: Result<Vec<Result<Res, String>>, String> =
-                            bincode2::deserialize(&frame_bytes).unwrap_or_else(|e| {
-                                Err(format!("Deserialize error: {}", e))
-                            });
+                        let res: Result<ClientWriteResponse<TypeConfig>, String> =
+                            bincode2::deserialize(frame_bytes.as_ref()).expect("Deserialize error");
                         let _ = cb.send(res);
                     }
-                    _ => {
-                        let _ = cb.send(Err("Read failed: Connection closed".to_string()));
+                    Some(Err(e)) => {
+                        let _ = cb.send(Err(format!("Read failed: {}", e)));
+                        break;
+                    }
+                    None => {
+                        let _ = cb.send(Err("Connection closed".to_string()));
                         break;
                     }
                 }
@@ -79,10 +87,16 @@ where
         Ok(Self { tx })
     }
 
-    /// 发送一批请求并获得对应的一批结果
-    pub async fn call(&self, requests: Vec<Req>) -> Result<Vec<Result<Res, String>>, String> {
+    /// 发送一个请求，返回一个响应
+    pub async fn call(&self, request: Request) -> Result<ClientWriteResponse<TypeConfig>, String> {
         let (tx, rx) = oneshot::channel();
-        self.tx.send((requests, tx)).await.map_err(|_| "Client channel closed".to_string())?;
-        rx.await.map_err(|_| "Response channel closed".to_string())?
+
+        self.tx
+            .send((request, tx))
+            .await
+            .map_err(|_| "Client channel closed".to_string())?;
+
+        rx.await
+            .map_err(|_| "Response channel closed".to_string())?
     }
 }

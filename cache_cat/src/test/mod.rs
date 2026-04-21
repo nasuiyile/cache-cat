@@ -3,7 +3,7 @@ mod tests {
 
     use crate::raft::network::client::RpcMultiClient;
     use crate::raft::network::model::{GetReq, GetRes, PrintTestReq, PrintTestRes};
-    use crate::raft::network::pipeline_client::PipelineClient;
+    use crate::raft::network::pipeline_client::{PipelineClient};
     use crate::raft::types::entry::bae_operation::{BaseOperation, SetReq};
     use crate::raft::types::entry::request::Request;
     use crate::raft::types::raft_types::TypeConfig;
@@ -119,8 +119,6 @@ mod tests {
             value: Arc::from(format!("test_value_{}", 1).into_bytes()),
             ex_time: 0,
         }));
-        let vec1 = vec![a];
-        let x: Vec<Result<WriteResult<TypeConfig>, String>> =
-            client.call(vec1).await.expect("write call failed");
+        let x:  ClientWriteResponse<TypeConfig> = client.call(a).await.expect("write call failed");
     }
 }

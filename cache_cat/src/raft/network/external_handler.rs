@@ -86,7 +86,7 @@ async fn print_test(_app: App, d: PrintTestReq) -> Result<PrintTestRes, String> 
 }
 
 // 主节点才能成功调用这个方法，其他节点会失败
-async fn write(app: App, req: Request) -> Result<ClientWriteResponse<TypeConfig>, String> {
+pub async fn write(app: App, req: Request) -> Result<ClientWriteResponse<TypeConfig>, String> {
     let group = get_app(&app, req.get_group_id());
     group.raft.client_write(req).await.map_err(|e| {
         tracing::error!("write error: {:?}", e);
