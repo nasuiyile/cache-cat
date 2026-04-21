@@ -6,6 +6,7 @@ use crate::raft::types::core::response_value::Value;
 use crate::raft::types::entry::request::Request;
 use crate::raft::types::raft_types::{App, GroupId, TypeConfig, get_app};
 use bytes::{Buf, BufMut, Bytes, BytesMut};
+use futures::stream::FuturesOrdered;
 use futures::{SinkExt, StreamExt};
 use moka::future::FutureExt;
 use openraft::base::BoxFuture;
@@ -126,46 +127,56 @@ async fn handle_connection(
 }
 
 async fn pipeline_mode(app: App, socket: TcpStream, peer_addr: SocketAddr) {
-    let codec = LengthDelimitedCodec::new();
-    let framed = Framed::new(socket, codec);
-    let (mut writer, mut reader) = framed.split();
-    let (tx, mut rx): (
-        mpsc::Sender<BoxFuture<'static, Result<ClientWriteResponse<TypeConfig>, String>>>,
-        mpsc::Receiver<BoxFuture<'static, Result<ClientWriteResponse<TypeConfig>, String>>>,
-    ) = mpsc::channel(100);
-    // 写任务
-    tokio::spawn(async move {
-        while let Some(future) = rx.recv().await {
-            let res: Result<ClientWriteResponse<TypeConfig>, String> = future.await.map_err(|e| {
-                error!("write error: {:?}", e);
-                e.to_string()
-            });
-            let encoded: Vec<u8> = bincode2::serialize(&res).expect("Failed to serialize");
-            if let Err(e) = writer.send(Bytes::from(encoded)).await {
-                eprintln!("写入 TCP 失败 ({}): {}", peer_addr, e);
-                break;
-            }
-        }
-        debug!("写任务结束: {}", peer_addr);
-    });
+    use futures::StreamExt;
 
-    //读任务
-    while let Some(frame_result) = reader.next().await {
-        match frame_result {
-            Ok(frame_bytes) => {
-                let mut package = frame_bytes.freeze();
-                let request: Request =
-                    bincode2::deserialize(package.as_ref()).expect("Failed to deserialize");
-                let future = write(app.clone(), request).boxed();
-                tx.send(future).await.unwrap();
+    let codec = LengthDelimitedCodec::new();
+    let (mut writer, reader) = Framed::new(socket, codec).split();
+
+    // 核心逻辑：将 reader 映射为一个并发流
+    let mut request_stream = reader
+        .map(move |frame_res| {
+            let app = app.clone();
+            // 在这里直接 spawn，返回 JoinHandle
+            tokio::spawn(async move {
+                let frame_bytes = match frame_res {
+                    Ok(bytes) => bytes,
+                    Err(e) => {
+                        return Err(format!("Read error: {}", e));
+                    }
+                };
+                let request: Request = bincode2::deserialize(&frame_bytes)
+                    .map_err(|e| format!("Deserialize error: {}", e))?;
+
+                let res = write(app, request).await;
+
+                bincode2::serialize(&res)
+                    .map_err(|e| format!("Serialize error: {}", e))
+            })
+        })
+        // buffered(n) 会并行执行流中的前 n 个任务，但保证按顺序产出结果
+        .buffered(1000);
+
+    // 写回循环
+    while let Some(join_res) = request_stream.next().await {
+        match join_res {
+            Ok(Ok(encoded)) => {
+                if let Err(e) = writer.send(Bytes::from(encoded)).await {
+                    eprintln!("Failed to send response to {}: {}", peer_addr, e);
+                    break;
+                }
+            }
+            Ok(Err(e)) => {
+                // 这里捕获逻辑错误或读取错误
+                eprintln!("Pipeline error for {}: {}", peer_addr, e);
+                break; // 客户端断开或数据异常，停止流处理
             }
             Err(e) => {
-                eprintln!("读取帧失败 ({}): {}", peer_addr, e);
+                // 这里捕获 tokio::spawn 本身的 panic
+                eprintln!("Task panicked for {}: {}", peer_addr, e);
                 break;
             }
         }
     }
-    debug!("Pipeline mode ended for {}", peer_addr);
 }
 
 async fn rpc_mode(app: App, socket: TcpStream, peer_addr: SocketAddr) {
