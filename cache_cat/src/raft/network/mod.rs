@@ -4,3 +4,4 @@ pub mod model;
 pub mod pipeline_client;
 pub mod router;
 pub mod rpc;
+pub mod network;

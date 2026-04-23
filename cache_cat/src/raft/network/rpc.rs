@@ -4,7 +4,7 @@ use crate::raft::network::external_handler::{HANDLER_TABLE, batch_write, write};
 use crate::raft::store::snapshot::snapshot_handler::get_snapshot_file_name;
 use crate::raft::types::core::response_value::Value;
 use crate::raft::types::entry::request::Request;
-use crate::raft::types::raft_types::{CacheCatApp, GroupId, TypeConfig};
+use crate::raft::types::raft_types::{CacheCatApp, TypeConfig};
 use bytes::{Buf, BufMut, Bytes, BytesMut};
 use futures::stream::FuturesOrdered;
 use futures::{SinkExt, StreamExt};

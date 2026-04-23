@@ -3,14 +3,14 @@ use crate::error::{Error, Result};
 use crate::node::parsed_config::ParsedConfig;
 use crate::protocol::command::CommandFactory;
 use crate::raft::network::client::RpcClient;
-use crate::raft::network::router::{MultiNetworkFactory, Router};
+use crate::raft::network::network::NetworkFactory;
 use crate::raft::network::rpc::Server;
 use crate::raft::store::log_store::LogStore;
 use crate::raft::store::raft_engine::create_raft_engine;
 use crate::raft::store::statemachine::{StateMachineData, StateMachineStore};
 use crate::raft::types::entry::forward::{ForwardRequest, ForwardRequestBody};
 use crate::raft::types::entry::membership::JoinRequest;
-use crate::raft::types::raft_types::{CacheCatApp, GroupId, Node, NodeId, Raft, TypeConfig};
+use crate::raft::types::raft_types::{CacheCatApp, Node, NodeId, Raft, TypeConfig};
 use openraft::SnapshotPolicy::Never;
 use openraft::error::{InitializeError, RaftError};
 use openraft::raft::ClientWriteResponse;
@@ -54,10 +54,12 @@ impl RaftNode {
             ..Default::default()
         });
         let group_id = 0;
-        let router = Router::new(app_config.raft.address.clone(), dir.join(""), node_id);
-        let network = MultiNetworkFactory::new(router, group_id);
+        // let router = Router::new(app_config.raft.address.clone(), dir.join(""), node_id);
+
+        // let network = MultiNetworkFactory::new(router, group_id);
         let log_store = LogStore::new(group_id, engine.clone());
-        let sm_store = StateMachineStore::new(path.clone(), group_id, node_id).await?;
+        let sm_store = StateMachineStore::new(path.clone(), node_id).await?;
+        let network = NetworkFactory {};
         let raft = openraft::Raft::new(
             node_id,
             config.clone(),

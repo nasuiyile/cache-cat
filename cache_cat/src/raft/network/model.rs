@@ -1,6 +1,6 @@
 use crate::raft::types::endpoint::Endpoint;
 use crate::raft::types::file_operator::FileOperator;
-use crate::raft::types::raft_types::{GroupId, Node, NodeId, TypeConfig};
+use crate::raft::types::raft_types::{Node, NodeId, TypeConfig};
 use openraft::SnapshotMeta;
 use openraft::alias::VoteOf;
 use openraft::raft::{AppendEntriesRequest, VoteRequest};
@@ -47,12 +47,10 @@ pub struct ExistsRes {
 #[derive(Serialize, Deserialize, Debug)]
 pub struct AppendEntriesReq {
     pub append_entries: AppendEntriesRequest<TypeConfig>,
-    pub group_id: GroupId,
 }
 #[derive(Serialize, Deserialize, Debug)]
 pub struct VoteReq {
     pub vote: VoteRequest<TypeConfig>,
-    pub group_id: GroupId,
 }
 
 #[derive(Serialize, Deserialize, Debug, PartialEq)]
@@ -60,7 +58,6 @@ pub struct InstallFullSnapshotReq {
     pub vote: VoteOf<TypeConfig>,
     pub snapshot_meta: SnapshotMeta<TypeConfig>,
     pub snapshot: FileOperator,
-    pub group_id: GroupId,
 }
 
 #[derive(Serialize, Deserialize, Debug, PartialEq)]

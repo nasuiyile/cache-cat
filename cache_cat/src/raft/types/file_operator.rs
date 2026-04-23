@@ -1,4 +1,4 @@
-use crate::raft::types::raft_types::{GroupId, TypeConfig};
+use crate::raft::types::raft_types::{ TypeConfig};
 use openraft::SnapshotMeta;
 use serde::{Deserialize, Serialize};
 use std::error::Error;
@@ -19,7 +19,6 @@ const VERSION: u8 = 1;
 /// FileOperator可以直接在内部使用或发送给客户端，但是客户端收到后要修改file_path
 #[derive(Serialize, Deserialize, Debug, PartialEq, Default)]
 pub struct FileOperator {
-    group_id: GroupId,
     file_path: PathBuf,
     uuid: Uuid,
 }
@@ -28,19 +27,17 @@ impl FileOperator {
     /// - 如果原文件不存在，返回 Ok(None)
     /// - 否则创建硬链接并返回 Ok(Some(HardlinkSender))
     pub async fn new<P: AsRef<Path>>(
-        group_id: GroupId,
         file_path: P,
     ) -> Result<Option<Self>, io::Error> {
         let snapshot_path = file_path
             .as_ref()
             .join("snapshot")
-            .join(format!("snapshot_{}.bin", group_id));
+            .join("snapshot.bin");
         // println!("snapshot_path: {}", snapshot_path.display());
         // 1. 检查文件是否存在
         match fs::metadata(&snapshot_path).await {
             Ok(_) => {
                 let operator = Self {
-                    group_id,
                     file_path: file_path.as_ref().to_path_buf(),
                     uuid: Uuid::new_v4(),
                 };
@@ -56,14 +53,14 @@ impl FileOperator {
         }
     }
     pub fn get_hard_link_buf(&self) -> PathBuf {
-        let hardlink_filename = format!("hardlink_snapshot_{}_{}.tmp", self.uuid, self.group_id);
+        let hardlink_filename = format!("hardlink_snapshot_{}.tmp", self.uuid);
         let hardlink_path = self.file_path.join(hardlink_filename);
         hardlink_path
     }
 
     //在收到快照后从节点安装的时候会调用这个方法来获得新的硬链接路径
     pub fn get_local_hard_link_buf(&self, path: &PathBuf) -> PathBuf {
-        let hardlink_filename = format!("hardlink_snapshot_{}_{}.tmp", self.uuid, self.group_id);
+        let hardlink_filename = format!("hardlink_snapshot_{}.tmp", self.uuid);
         let hardlink_path = path.join("snapshot").join(hardlink_filename);
         hardlink_path
     }
@@ -72,7 +69,7 @@ impl FileOperator {
     /// 注意：这里不删除硬链接，删除由 Drop 完成（或手动调用 close）。
     pub async fn send_file(&self, addr: &str) -> Result<Uuid, Box<dyn Error + Send + Sync>> {
         let hardlink_path = self.get_hard_link_buf();
-        let uuid = send_file_once(addr, self.group_id as u32, hardlink_path, self.uuid).await?;
+        let uuid = send_file_once(addr, hardlink_path, self.uuid).await?;
         Ok(uuid)
     }
     pub async fn load_meta_data(&self) -> Result<Option<SnapshotMeta<TypeConfig>>, io::Error> {
@@ -115,7 +112,6 @@ where
 //发送的时候一定要转u32
 pub async fn send_file_once<P: AsRef<Path>>(
     addr: &str,
-    group_id: u32,
     file_path: P,
     uuid: Uuid,
 ) -> Result<Uuid, Box<dyn Error + Send + Sync>> {
@@ -127,8 +123,7 @@ pub async fn send_file_once<P: AsRef<Path>>(
     // 第一个字节：模式标识，服务端代码中 0 是 RPC，非 0 是 stream
     stream.write_all(&[1u8]).await?;
 
-    // 紧接着发送 4 字节 group_id（big-endian）
-    stream.write_all(&group_id.to_be_bytes()).await?;
+
     //发送uuid
     stream.write_all(uuid.as_bytes()).await?;
 

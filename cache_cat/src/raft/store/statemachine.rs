@@ -9,7 +9,7 @@ use crate::raft::types::core::value_object::ValueObject;
 use crate::raft::types::entry::bae_operation::{BaseOperation, SetReq};
 use crate::raft::types::entry::request::{AtomicRequest, Request};
 use crate::raft::types::file_operator::FileOperator;
-use crate::raft::types::raft_types::{GroupId, NodeId, TypeConfig};
+use crate::raft::types::raft_types::{ NodeId, TypeConfig};
 use crate::utils::now_ms;
 use futures::Stream;
 use futures::TryStreamExt;
@@ -51,7 +51,6 @@ pub struct StateMachineStore {
     pub path: PathBuf,
 
     pub node_id: NodeId,
-    group_id: GroupId,
 }
 
 #[derive(Debug, Clone)]
@@ -87,7 +86,7 @@ impl RaftSnapshotBuilder<TypeConfig> for StateMachineStore {
         .await?;
         //创建快照的硬链接
         //理论上这里读取的快照可能不是这里dump的快照了，因此这里返回的metadata需要重新load
-        let file = FileOperator::new(self.group_id, &self.path).await?;
+        let file = FileOperator::new(&self.path).await?;
         //正常情况不该为空如果为空就抛IO异常
         let file_operator =
             file.ok_or(io::Error::new(io::ErrorKind::Other, "snapshot is empty"))?;
@@ -104,11 +103,7 @@ impl RaftSnapshotBuilder<TypeConfig> for StateMachineStore {
 }
 
 impl StateMachineStore {
-    pub async fn new(
-        path: PathBuf,
-        group_id: GroupId,
-        node_id: NodeId,
-    ) -> Result<StateMachineStore, io::Error> {
+    pub async fn new(path: PathBuf, node_id: NodeId) -> Result<StateMachineStore, io::Error> {
         let cache = MyCache::new();
         let mut sm = Self {
             data: StateMachineData {
@@ -122,7 +117,6 @@ impl StateMachineStore {
             },
             node_id,
             path: path.clone(),
-            group_id,
         };
         let filename = get_snapshot_file_name();
         let res = load_cache_from_path(cache, path.join("snapshot").join(filename)).await?;
@@ -294,7 +288,7 @@ impl RaftStateMachine<TypeConfig> for StateMachineStore {
     }
 
     async fn get_current_snapshot(&mut self) -> Result<Option<Snapshot<TypeConfig>>, io::Error> {
-        let option = FileOperator::new(self.group_id, &self.path).await?;
+        let option = FileOperator::new(&self.path).await?;
         match option {
             None => Ok(None),
             Some(res) => {
