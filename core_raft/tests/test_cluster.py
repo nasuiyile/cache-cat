@@ -9,7 +9,7 @@ r = redis.Redis(
 )
 
 # 设置 key，1 秒后过期
-r.set('name', 'hello', ex=1)
+r.set('name', 1, ex=1)
 r.ping()
 # 等 5 秒
 # time.sleep(5)

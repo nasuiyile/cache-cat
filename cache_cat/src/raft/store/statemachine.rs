@@ -3,13 +3,13 @@ use crate::protocol::string::set::{Expiration, SetMode, SetParams};
 use crate::raft::store::snapshot::snapshot_handler::{
     dump_cache_to_path, get_snapshot_file_name, load_cache_from_path,
 };
-use crate::raft::types::core::moka::{MyCache, UpdateType};
+use crate::raft::types::core::cache::moka::{MyCache, UpdateType};
 use crate::raft::types::core::response_value::Value;
 use crate::raft::types::core::value_object::ValueObject;
 use crate::raft::types::entry::bae_operation::{BaseOperation, SetReq};
 use crate::raft::types::entry::request::{AtomicRequest, Request};
 use crate::raft::types::file_operator::FileOperator;
-use crate::raft::types::raft_types::{ NodeId, TypeConfig};
+use crate::raft::types::raft_types::{NodeId, TypeConfig};
 use crate::utils::now_ms;
 use futures::Stream;
 use futures::TryStreamExt;
@@ -182,6 +182,12 @@ impl RaftStateMachine<TypeConfig> for StateMachineStore {
                                         .await;
                                     res
                                 }
+                                BaseOperation::Incr(incr) => {
+                                    let res = st
+                                        .incr(incr, UpdateType::Snapshot(&mut operation_queue))
+                                        .await;
+                                    res
+                                }
                             }
                         }
                         Request::RedisSet(set) => {
@@ -219,6 +225,10 @@ impl RaftStateMachine<TypeConfig> for StateMachineStore {
                                 }
                                 BaseOperation::Del(del) => {
                                     let res = st.del(del, UpdateType::None).await;
+                                    res
+                                }
+                                BaseOperation::Incr(incr) => {
+                                    let res = st.incr(incr, UpdateType::None).await;
                                     res
                                 }
                             }
@@ -279,6 +289,12 @@ impl RaftStateMachine<TypeConfig> for StateMachineStore {
                     self.data
                         .kvs
                         .del(del_req, UpdateType::CAS(atomic_request.version))
+                        .await;
+                }
+                BaseOperation::Incr(incr_req) => {
+                    self.data
+                        .kvs
+                        .incr(incr_req, UpdateType::CAS(atomic_request.version))
                         .await;
                 }
             }

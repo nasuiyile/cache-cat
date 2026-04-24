@@ -7,8 +7,21 @@ pub enum BaseOperation {
     Set(SetReq),
     LPush(LPushReq),
     Del(DelReq),
+    Incr(IncrReq),
 }
-
+#[derive(Serialize, Deserialize, Debug, PartialEq, Clone)]
+pub struct IncrReq {
+    pub key: Arc<Vec<u8>>,
+}
+impl fmt::Display for IncrReq {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(
+            f,
+            "IncrReq {{ key: {} }}",
+            String::from_utf8_lossy(&self.key)
+        )
+    }
+}
 #[derive(Serialize, Deserialize, Debug, PartialEq, Clone)]
 pub struct SetReq {
     pub key: Arc<Vec<u8>>,

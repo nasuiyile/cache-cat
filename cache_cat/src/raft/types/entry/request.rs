@@ -18,6 +18,7 @@ impl fmt::Display for Request {
                 BaseOperation::Set(req) => write!(f, "Set: {}", req),
                 BaseOperation::LPush(req) => write!(f, "LPush: {}", req),
                 BaseOperation::Del(req) => write!(f, "DEL: {}", req),
+                BaseOperation::Incr(req) => write!(f, "Incr: {}", req),
             },
 
             Request::RedisSet(req) => write!(f, "RedisSet: {}", req),

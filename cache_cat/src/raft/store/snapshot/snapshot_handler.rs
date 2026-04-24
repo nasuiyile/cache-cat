@@ -1,8 +1,8 @@
-use crate::raft::types::core::moka::{MyCache, MyValue};
+use crate::raft::store::statemachine::RaftMetaData;
+use crate::raft::types::core::cache::moka::{MyCache, MyValue};
 use crate::raft::types::core::value_object::ValueObject;
 use crate::raft::types::entry::request::AtomicRequest;
-use crate::raft::types::raft_types::{ TypeConfig};
-use crate::raft::store::statemachine::RaftMetaData;
+use crate::raft::types::raft_types::TypeConfig;
 use openraft::SnapshotMeta;
 use std::io::SeekFrom;
 use std::path::Path;
@@ -268,8 +268,8 @@ async fn test_dump_and_load_with_data() {
     }
 
     // 验证数据完整性
-    let loaded_value1 = new_cache.get(&key1).await;
-    let loaded_value2 = new_cache.get(&key2).await;
+    let loaded_value1 = new_cache.cache.get(&key1).await;
+    let loaded_value2 = new_cache.cache.get(&key2).await;
 
     assert!(loaded_value1.is_some(), "key1 should exist");
     assert!(loaded_value2.is_some(), "key2 should exist");

@@ -8,6 +8,7 @@ use crate::raft::types::core::response_value::Value;
 use async_trait::async_trait;
 use std::collections::HashMap;
 use tracing::warn;
+use crate::protocol::string::incr::IncrCommand;
 
 #[async_trait]
 pub trait Command: Send + Sync {
@@ -42,6 +43,8 @@ impl CommandFactory {
         factory.register("SET", SetCommand);
         factory.register("DEL", DelCommand);
         factory.register("PING", PingCommand);
+        factory.register("INCR", IncrCommand);
+
         factory
     }
 
