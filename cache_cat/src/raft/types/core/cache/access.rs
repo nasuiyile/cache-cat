@@ -12,11 +12,11 @@ use tokio::io;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 
 impl MyCache {
-    pub async fn del(&self, del_req: DelReq, queue: UpdateType<'_>) -> Value {
+    pub async fn del(&self, del_req: DelReq, update: UpdateType<'_>) -> Value {
         let keys = (*del_req.keys).clone();
         let mut deleted = 0;
 
-        match queue {
+        match update {
             UpdateType::None => {
                 for key in keys {
                     let existed = self.cache.remove(&key).await;
@@ -64,7 +64,7 @@ impl MyCache {
             }
         }
     }
-    pub async fn set(&self, set_req: SetReq, queue: UpdateType<'_>) {
+    pub async fn set(&self, set_req: SetReq, update: UpdateType<'_>) {
         let mut value = match parse_i64(&set_req.value) {
             None => MyValue {
                 data: ValueObject::String(set_req.value.clone()),
@@ -77,7 +77,7 @@ impl MyCache {
                 version: 0,
             },
         };
-        match queue {
+        match update {
             UpdateType::None => {
                 self.cache.insert(set_req.key.clone(), value).await;
             }
@@ -132,45 +132,130 @@ impl MyCache {
         }
     }
 
-    pub async fn incr(&self, incr_req: IncrReq, queue: UpdateType<'_>) -> Value {
-        let key = incr_req.key;
+    pub async fn incr(&self, incr_req: IncrReq, update: UpdateType<'_>) -> Value {
+        let key = incr_req.key.clone();
         let delta = incr_req.value;
-        let result = self
-            .cache
-            .entry(key)
-            .and_compute_with(|maybe_entry| async move {
-                match maybe_entry {
-                    Some(entry) => {
-                        let mut value = entry.into_value();
-                        match &mut value.data {
-                            ValueObject::Int(n) => {
-                                *n += delta;
-                                Op::Put(value)
-                            }
-                            ValueObject::String(s) => {
-                                let num = match parse_i64(s) {
-                                    None => {
-                                        return Op::Nop;
+        let result = match update {
+            UpdateType::None => {
+                self.cache
+                    .entry(key)
+                    .and_compute_with(|maybe_entry| async move {
+                        match maybe_entry {
+                            Some(entry) => {
+                                let mut value = entry.into_value();
+                                match &mut value.data {
+                                    ValueObject::Int(n) => {
+                                        *n += delta;
+                                        Op::Put(value)
                                     }
-                                    Some(v) => v,
+                                    ValueObject::String(s) => {
+                                        let num = match parse_i64(s) {
+                                            None => {
+                                                return Op::Nop;
+                                            }
+                                            Some(v) => v,
+                                        };
+                                        value.data = ValueObject::Int(num + delta);
+                                        Op::Put(value)
+                                    }
+                                    _ => Op::Nop,
+                                }
+                            }
+                            None => {
+                                let value = MyValue {
+                                    data: ValueObject::Int(delta),
+                                    expires_at: 0,
+                                    version: 0,
                                 };
-                                value.data = ValueObject::Int(num + delta);
                                 Op::Put(value)
                             }
-                            _ => Op::Nop,
                         }
-                    }
-                    None => {
-                        let value = MyValue {
-                            data: ValueObject::Int(delta),
-                            expires_at: 0,
-                            version: 0,
-                        };
-                        Op::Put(value)
-                    }
-                }
-            })
-            .await;
+                    })
+                    .await
+            }
+            UpdateType::Snapshot(queue) => {
+                self.cache
+                    .entry(key)
+                    .and_compute_with(|maybe_entry| async move {
+                        match maybe_entry {
+                            Some(entry) => {
+                                let mut value = entry.into_value();
+                                queue.push(AtomicRequest {
+                                    request: BaseOperation::Incr(incr_req.clone()),
+                                    version: value.version + 1,
+                                });
+                                match &mut value.data {
+                                    ValueObject::Int(n) => {
+                                        *n += delta;
+                                        Op::Put(value)
+                                    }
+                                    ValueObject::String(s) => {
+                                        let num = match parse_i64(s) {
+                                            None => {
+                                                return Op::Nop;
+                                            }
+                                            Some(v) => v,
+                                        };
+                                        value.data = ValueObject::Int(num + delta);
+                                        Op::Put(value)
+                                    }
+                                    _ => Op::Nop,
+                                }
+                            }
+                            None => {
+                                let value = MyValue {
+                                    data: ValueObject::Int(delta),
+                                    expires_at: 0,
+                                    version: 0,
+                                };
+                                Op::Put(value)
+                            }
+                        }
+                    })
+                    .await
+            }
+            UpdateType::CAS(version) => {
+                self.cache
+                    .entry(key)
+                    .and_compute_with(|maybe_entry| async move {
+                        match maybe_entry {
+                            Some(entry) => {
+                                let mut value = entry.into_value();
+                                if value.version != version {
+                                    return Op::Nop;
+                                }
+                                value.version += 1;
+                                match &mut value.data {
+                                    ValueObject::Int(n) => {
+                                        *n += delta;
+                                        Op::Put(value)
+                                    }
+                                    ValueObject::String(s) => {
+                                        let num = match parse_i64(s) {
+                                            None => {
+                                                return Op::Nop;
+                                            }
+                                            Some(v) => v,
+                                        };
+                                        value.data = ValueObject::Int(num + delta);
+                                        Op::Put(value)
+                                    }
+                                    _ => Op::Nop,
+                                }
+                            }
+                            None => {
+                                let value = MyValue {
+                                    data: ValueObject::Int(delta),
+                                    expires_at: 0,
+                                    version: 0,
+                                };
+                                Op::Put(value)
+                            }
+                        }
+                    })
+                    .await
+            }
+        };
 
         match result {
             CompResult::Inserted(entry)
@@ -193,7 +278,7 @@ impl MyCache {
                         let mut value = entry.into_value();
                         match &mut value.data {
                             ValueObject::List(data) => {
-                                value.version += 1;
+                                value.version;
                                 data.push_front(l_push.value);
                                 Op::Put(value)
                             }
