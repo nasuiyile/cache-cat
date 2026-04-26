@@ -27,7 +27,6 @@ impl Display for Node {
         write!(f, "{}={}", self.node_id, self.endpoint)
     }
 }
-pub const GROUP_NUM: u16 = 1;
 
 pub type GroupId = u16;
 
@@ -44,30 +43,11 @@ pub struct CacheCatApp {
     pub node_id: NodeId,
     pub addr: String,
     pub raft: Raft,
-    pub group_id: GroupId,
     pub state_machine: StateMachineStore,
     pub path: PathBuf,
 }
 
-// app 初始化后就不会变了
-pub type App = Arc<Vec<Arc<CacheCatApp>>>;
-pub fn get_app(app: &App, group_id: GroupId) -> &CacheCatApp {
-    app.iter().find(|app| app.group_id == group_id).unwrap()
-}
-pub fn get_group(app: &App, hash_code: u64) -> &CacheCatApp {
-    let usize = hash_code % app.len() as u64;
-    get_app(app, usize as GroupId)
-}
-pub fn get_group_by_key<'a>(app: &'a App, key: &Vec<u8>) -> &'a CacheCatApp {
-    let mut hasher = DefaultHasher::new();
-    key.hash(&mut hasher);
-    get_group(app, hasher.finish())
-}
-pub fn get_group_id_by_key(key: &Vec<u8>) -> GroupId {
-    let mut hasher = DefaultHasher::new();
-    key.hash(&mut hasher);
-    (hasher.finish() % GROUP_NUM as u64) as GroupId
-}
+
 
 pub type Entry = openraft::Entry<TypeConfig>;
 pub type LogState = openraft::storage::LogState<TypeConfig>;

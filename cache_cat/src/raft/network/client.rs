@@ -222,7 +222,7 @@ impl RpcClient {
         let table_reader = slot_table.clone();
         let table_writer = slot_table.clone();
 
-        let (tx_writer, mut rx_writer) = mpsc::channel::<BytesMut>(2048);
+        let (tx_writer, mut rx_writer) = mpsc::channel::<BytesMut>(4096);
 
         // 写任务：任何写失败都说明连接不可用了
         tokio::spawn(async move {

@@ -2,6 +2,7 @@ use clap::Parser;
 
 use cache_cat::raft::network::client::RpcMultiClient;
 use cache_cat::raft::network::model::{PrintTestReq, PrintTestRes};
+use cache_cat::raft::network::pipeline_client::PipelineMultiClient;
 use cache_cat::raft::types::entry::bae_operation::{BaseOperation, SetReq};
 use cache_cat::raft::types::entry::request::Request;
 use cache_cat::raft::types::raft_types::TypeConfig;
@@ -21,7 +22,7 @@ struct Args {
     #[arg(short = 'm', long, default_value = "throughput")]
     mode: String,
 
-    #[arg(short = 'o', long, default_value = "write")]
+    #[arg(short = 'o', long, default_value = "pwrite")]
     op: String,
 
     #[arg(short = 'c', long, default_value_t = 100)]
@@ -58,6 +59,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             .expect("连接失败，请检查端点是否可用"),
     );
 
+    let pipeline_client = if args.op == "pwrite" {
+        Some(Arc::new(
+            PipelineMultiClient::connect(&args.endpoints, max_connections)
+                .await
+                .expect("pipeline 连接失败，请检查端点是否可用"),
+        ))
+    } else {
+        None
+    };
+
     if args.mode == "latency" {
         println!(">>> 延迟测试 - 请求数: {} <<<", args.count);
     } else {
@@ -69,6 +80,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
         run_engine(
             Arc::clone(&client),
+            pipeline_client.clone(),
             args.clients,
             args.warmup,
             args.op.clone(),
@@ -84,10 +96,19 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     );
 
     if args.mode == "latency" {
-        run_engine(Arc::clone(&client), 1, args.count, args.op, false).await;
+        run_engine(
+            Arc::clone(&client),
+            pipeline_client.clone(),
+            1,
+            args.count,
+            args.op,
+            false,
+        )
+        .await;
     } else {
         run_engine(
             Arc::clone(&client),
+            pipeline_client.clone(),
             args.clients,
             args.total,
             args.op,
@@ -101,6 +122,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 async fn run_engine(
     client: Arc<RpcMultiClient>,
+    pipeline_client: Option<Arc<PipelineMultiClient>>,
     client_num: usize,
     total_tasks: usize,
     op_type: String,
@@ -160,8 +182,9 @@ async fn run_engine(
     for _cid in 0..client_num {
         let latencies_c = Arc::clone(&final_latencies);
         let ops_c = Arc::clone(&ops);
-        let dur_c = Arc::clone(&total_dur_us); // 克隆原子变量引用
+        let dur_c = Arc::clone(&total_dur_us);
         let client_c = Arc::clone(&client);
+        let pipeline_client_c = pipeline_client.clone();
 
         let op = op_type.clone();
         let mode = if client_num == 1 {
@@ -187,6 +210,19 @@ async fn run_engine(
                                 ex_time: 0,
                             })),
                         )
+                        .await;
+                    success = res.is_ok();
+                } else if op == "pwrite" {
+                    let pipeline_client = pipeline_client_c
+                        .as_ref()
+                        .expect("pwrite 模式需要 pipeline client");
+
+                    let res: Result<ClientWriteResponse<TypeConfig>, _> = pipeline_client
+                        .call(Request::Base(BaseOperation::Set(SetReq {
+                            key: Arc::from(format!("test{}", i).into_bytes()),
+                            value: Arc::from(format!("test_value_{}", i).into_bytes()),
+                            ex_time: 0,
+                        })))
                         .await;
                     success = res.is_ok();
                 } else {

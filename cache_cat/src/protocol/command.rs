@@ -1,16 +1,20 @@
+use crate::error::CacheCatError;
 use crate::protocol::connection::ping::PingCommand;
 use crate::protocol::key::del::DelCommand;
 use crate::protocol::string::get::GetCommand;
 use crate::protocol::string::set::SetCommand;
-use crate::raft::network::rpc::{RedisServer};
+use crate::raft::network::rpc::RedisServer;
 use crate::raft::types::core::response_value::Value;
 use async_trait::async_trait;
 use std::collections::HashMap;
+use tracing::warn;
+use crate::protocol::string::incr::IncrCommand;
+use crate::protocol::string::incrby::IncrByCommand;
 
 #[async_trait]
 pub trait Command: Send + Sync {
     /// Execute the command with given RESP items and server context
-    async fn execute(&self, items: &[Value], server: &RedisServer) -> Value;
+    async fn execute(&self, items: &[Value], server: &RedisServer) -> Result<Value, CacheCatError>;
 }
 
 /// Command factory for creating and executing commands
@@ -40,6 +44,10 @@ impl CommandFactory {
         factory.register("SET", SetCommand);
         factory.register("DEL", DelCommand);
         factory.register("PING", PingCommand);
+        factory.register("INCR", IncrCommand);
+        factory.register("INCRBY", IncrByCommand);
+
+
         factory
     }
 
@@ -56,7 +64,13 @@ impl CommandFactory {
 
                 // Find and execute command
                 match self.commands.get(&cmd_name) {
-                    Some(cmd) => cmd.execute(&items, server).await,
+                    Some(cmd) => match cmd.execute(&items, server).await {
+                        Ok(v) => v,
+                        Err(e) => {
+                            warn!("Command '{}' error: {}", cmd_name, e);
+                            e.into() // Error → Value::Error
+                        }
+                    },
                     None => Value::error(format!("unknown command '{}'", cmd_name)),
                 }
             }

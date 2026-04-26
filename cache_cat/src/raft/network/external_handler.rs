@@ -1,25 +1,26 @@
 use crate::raft::network::model::{
-    AddNodeReq, AppendEntriesReq, GetReq, GetRes, InstallFullSnapshotReq, PrintTestReq,
-    PrintTestRes, VoteReq,
+    AppendEntriesReq, GetReq, GetRes, InstallFullSnapshotReq, PrintTestReq, PrintTestRes, VoteReq,
 };
-use crate::raft::types::core::moka::MyValue;
 use crate::raft::types::core::value_object::ValueObject;
 use crate::raft::types::entry::membership::JoinRequest;
 use crate::raft::types::entry::request::Request;
-use crate::raft::types::raft_types::{App, Node, NodeId, TypeConfig, get_app, get_group_by_key};
+use crate::raft::types::raft_types::{
+     CacheCatApp, Node, TypeConfig,
+};
 use async_trait::async_trait;
 use bytes::Bytes;
+use futures::StreamExt;
 use openraft::ReadPolicy::LeaseRead;
-use openraft::async_runtime::WatchReceiver;
-use openraft::error::RaftError;
-use openraft::raft::{AppendEntriesResponse, ClientWriteResponse, SnapshotResponse, VoteResponse};
+use openraft::raft::{
+    AppendEntriesResponse, ClientWriteResponse, SnapshotResponse, VoteResponse, WriteResult,
+};
 use openraft::{ChangeMembers, Snapshot};
 use serde::Serialize;
 use serde::de::DeserializeOwned;
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 use std::hash::{DefaultHasher, Hash, Hasher};
 use std::sync::Arc;
-use std::time::Instant;
+use tracing::info;
 
 pub type HandlerEntry = (u32, fn() -> Box<dyn RpcHandler>);
 
@@ -39,6 +40,7 @@ pub static HANDLER_TABLE: &[HandlerEntry] = &[
         })
     }),
     (9, || Box::new(RpcMethod { func: add_node })),
+    (10, || Box::new(RpcMethod { func: batch_write })),
 ];
 fn hash_string(s: &str) -> u64 {
     let mut hasher = DefaultHasher::new();
@@ -49,7 +51,7 @@ fn hash_string(s: &str) -> u64 {
 #[async_trait]
 pub trait RpcHandler: Send + Sync {
     // 将 app 改为 Arc 传递，更符合异步环境下的生命周期要求
-    async fn internal_call(&self, app: App, data: Bytes) -> Bytes;
+    async fn internal_call(&self, app: Arc<CacheCatApp>, data: Bytes) -> Bytes;
 }
 
 // 修改函数指针定义，使其支持异步返回 Future
@@ -60,7 +62,7 @@ where
 {
     // 注意：Rust 的纯函数指针 fn 不能直接是 async 的
     // 我们这里让 func 返回一个 Future
-    func: fn(App, Req) -> Fut,
+    func: fn(Arc<CacheCatApp>, Req) -> Fut,
 }
 
 #[async_trait]
@@ -70,7 +72,7 @@ where
     Res: Send + 'static + Serialize,
     Fut: Future<Output = Res> + Send + 'static,
 {
-    async fn internal_call(&self, app: App, data: Bytes) -> Bytes {
+    async fn internal_call(&self, app: Arc<CacheCatApp>, data: Bytes) -> Bytes {
         // 反序列化
         let req: Req = bincode2::deserialize(data.as_ref()).expect("Failed to deserialize");
         // 执行异步业务函数
@@ -82,27 +84,47 @@ where
 }
 
 // --- 业务函数全部改为 async ---
-async fn print_test(_app: App, d: PrintTestReq) -> Result<PrintTestRes, String> {
+async fn print_test(_app: Arc<CacheCatApp>, d: PrintTestReq) -> Result<PrintTestRes, String> {
     // sleep(std::time::Duration::from_secs(10));
     Ok(PrintTestRes { message: d.message })
 }
 
 // 主节点才能成功调用这个方法，其他节点会失败
-async fn write(app: App, req: Request) -> Result<ClientWriteResponse<TypeConfig>, String> {
-    let group = get_app(&app, req.get_group_id());
-    group.raft.client_write(req).await.map_err(|e| {
+pub async fn write(
+    app: Arc<CacheCatApp>,
+    req: Request,
+) -> Result<ClientWriteResponse<TypeConfig>, String> {
+    app.raft.client_write(req).await.map_err(|e| {
         tracing::error!("write error: {:?}", e);
         e.to_string()
     })
 }
-async fn read(app: App, get_req: GetReq) -> Result<GetRes, String> {
-    let group = get_group_by_key(&app, &get_req.key);
-    let ret = group.raft.get_read_linearizer(LeaseRead).await;
+
+pub async fn batch_write(
+    app: Arc<CacheCatApp>,
+    req: Vec<Request>,
+) -> Result<Vec<Result<WriteResult<TypeConfig>, String>>, String> {
+    let stream = app.raft.client_write_many(req).await.map_err(|e| {
+        tracing::error!("write error: {:?}", e);
+        e.to_string()
+    })?;
+
+    // 映射错误类型并等待所有结果收集到 Vec 中
+    let results: Vec<Result<WriteResult<TypeConfig>, String>> = stream
+        .map(|res| res.map_err(|e| e.to_string()))
+        .collect() // 这里会异步等待流结束
+        .await;
+
+    Ok(results)
+}
+
+async fn read(app: Arc<CacheCatApp>, get_req: GetReq) -> Result<GetRes, String> {
+    let ret = app.raft.get_read_linearizer(LeaseRead).await;
 
     let value = match ret {
         Ok(linearizer) => {
-            linearizer.await_ready(&group.raft).await.unwrap();
-            group.state_machine.data.kvs.cache.get(&get_req.key).await
+            linearizer.await_ready(&app.raft).await.unwrap();
+            app.state_machine.data.kvs.cache.get(&get_req.key).await
         }
         Err(e) => return Err(e.to_string()),
     };
@@ -115,10 +137,9 @@ async fn read(app: App, get_req: GetReq) -> Result<GetRes, String> {
     }
 }
 
-async fn vote(app: App, req: VoteReq) -> Result<VoteResponse<TypeConfig>, String> {
+async fn vote(app: Arc<CacheCatApp>, req: VoteReq) -> Result<VoteResponse<TypeConfig>, String> {
     // openraft 的 vote 是异步的
-    let group = get_app(&app, req.group_id);
-    group.raft.vote(req.vote).await.map_err(|e| {
+    app.raft.vote(req.vote).await.map_err(|e| {
         tracing::error!("vote error: {:?}", e);
         e.to_string()
     })
@@ -126,10 +147,10 @@ async fn vote(app: App, req: VoteReq) -> Result<VoteResponse<TypeConfig>, String
 
 //理论上只有从节点会被调用这个方法
 async fn append_entries(
-    app: App,
+    app: Arc<CacheCatApp>,
     req: AppendEntriesReq,
 ) -> Result<AppendEntriesResponse<TypeConfig>, String> {
-    let res = get_app(&app, req.group_id)
+    let res = app
         .raft
         .append_entries(req.append_entries)
         .await
@@ -139,41 +160,39 @@ async fn append_entries(
 
 // 从节点收到数据 在这里序列化到磁盘 后续install_full_snapshot会从磁盘中反序列化
 async fn install_full_snapshot(
-    app: App,
+    app: Arc<CacheCatApp>,
     req: InstallFullSnapshotReq,
 ) -> Result<SnapshotResponse<TypeConfig>, String> {
     let snapshot = Snapshot {
         meta: req.snapshot_meta,
         snapshot: req.snapshot,
     };
-    get_app(&app, req.group_id)
-        .raft
+    app.raft
         .install_full_snapshot(req.vote, snapshot)
         .await
         .map_err(|e| e.to_string())
 }
 
-async fn add_node(app: App, req: JoinRequest) -> Result<(), String> {
-    for app in app.iter() {
-        let node = Node {
-            node_id: req.node_id,
-            endpoint: req.endpoint.clone(),
-        };
-        // 已经存在就不继续加入
-        let existed = app.raft.voter_ids().any(|id| id == node.node_id);
-        if existed {
-            continue;
-        }
-        let _ = app.raft.add_learner(node.node_id, node.clone(), true).await;
-        // 使用 AddVoters 而不是传入完整集合
-        // 这会自动计算并添加到现有成员中
-        let mut map = BTreeMap::new();
-        map.insert(node.node_id, node.clone());
-        let changes = ChangeMembers::AddVoters(map);
-        app.raft
-            .change_membership(changes, true)
-            .await
-            .map_err(|e| e.to_string())?;
+async fn add_node(app: Arc<CacheCatApp>, req: JoinRequest) -> Result<(), String> {
+    let node = Node {
+        node_id: req.node_id,
+        endpoint: req.endpoint.clone(),
+    };
+    // 已经存在就不继续加入
+    let existed = app.raft.voter_ids().any(|id| id == node.node_id);
+    if existed {
+        info!("node {} already exists", node.node_id);
+        return Ok(());
     }
+    let _ = app.raft.add_learner(node.node_id, node.clone(), true).await;
+    // 使用 AddVoters 而不是传入完整集合
+    // 这会自动计算并添加到现有成员中
+    let mut map = BTreeMap::new();
+    map.insert(node.node_id, node.clone());
+    let changes = ChangeMembers::AddVoters(map);
+    app.raft
+        .change_membership(changes, true)
+        .await
+        .map_err(|e| e.to_string())?;
     Ok(())
 }

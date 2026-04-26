@@ -1,8 +1,8 @@
-use crate::raft::types::core::moka::{MyCache, MyValue};
+use crate::raft::store::statemachine::RaftMetaData;
+use crate::raft::types::core::cache::moka::{MyCache, MyValue};
 use crate::raft::types::core::value_object::ValueObject;
 use crate::raft::types::entry::request::AtomicRequest;
-use crate::raft::types::raft_types::{GroupId, TypeConfig};
-use crate::raft::store::statemachine::RaftMetaData;
+use crate::raft::types::raft_types::TypeConfig;
 use openraft::SnapshotMeta;
 use std::io::SeekFrom;
 use std::path::Path;
@@ -21,13 +21,12 @@ const VERSION: u8 = 1;
 
 pub const TEMP_PATH: &str = r"E:\tmp\raft\raft-engine";
 pub const SNAPSHOT_FILE_NAME: &str = "snapshot";
-pub fn get_snapshot_file_name(group_id: GroupId) -> String {
-    format!("{}_{}.bin", SNAPSHOT_FILE_NAME, group_id)
+pub fn get_snapshot_file_name() -> String {
+    format!("{}.bin", SNAPSHOT_FILE_NAME)
 }
 pub async fn dump_cache_to_path<P>(
     cache: MyCache,
     path: P,
-    group_id: GroupId,
     raft_meta: Arc<Mutex<RaftMetaData>>,
     queue: Arc<Mutex<Vec<AtomicRequest>>>,
 ) -> Result<(), io::Error>
@@ -40,8 +39,8 @@ where
     fs::create_dir_all(&snapshot_dir).await?;
 
     // 创建临时文件名
-    let temp_filename = format!("snapshot_from_mem_{}_{}.tmp", Uuid::new_v4(), group_id);
-    let final_filename = get_snapshot_file_name(group_id as GroupId);
+    let temp_filename = format!("snapshot_from_mem_{}.tmp", Uuid::new_v4());
+    let final_filename = get_snapshot_file_name();
 
     let temp_path = snapshot_dir.join(&temp_filename);
     let final_path = snapshot_dir.join(&final_filename);
@@ -247,7 +246,6 @@ async fn test_dump_and_load_with_data() {
     dump_cache_to_path(
         cache.clone(),
         path.clone(),
-        1,
         Default::default(),
         Default::default(),
     )
@@ -258,7 +256,7 @@ async fn test_dump_and_load_with_data() {
     let new_cache = MyCache::new();
     match load_cache_from_path(
         new_cache.clone(),
-        path.join("snapshot").join(get_snapshot_file_name(1)),
+        path.join("snapshot").join(get_snapshot_file_name()),
     )
     .await
     {
@@ -270,8 +268,8 @@ async fn test_dump_and_load_with_data() {
     }
 
     // 验证数据完整性
-    let loaded_value1 = new_cache.get(&key1).await;
-    let loaded_value2 = new_cache.get(&key2).await;
+    let loaded_value1 = new_cache.cache.get(&key1).await;
+    let loaded_value2 = new_cache.cache.get(&key2).await;
 
     assert!(loaded_value1.is_some(), "key1 should exist");
     assert!(loaded_value2.is_some(), "key2 should exist");

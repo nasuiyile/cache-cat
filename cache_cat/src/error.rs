@@ -9,6 +9,8 @@ use std::fmt::Display;
 use std::fmt::Formatter;
 use std::io;
 use std::result::Result as StdResult;
+use crate::error::ErrorKind::{Internal, InvalidConfig, Protocol, Retryable, Storage};
+use crate::raft::types::core::response_value::Value;
 
 /// Public error type for RockRaft operations
 ///
@@ -103,7 +105,7 @@ impl StdError for Error {
 }
 
 /// Error classification - tells users how to handle the error
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum ErrorKind {
     /// Temporary error that may resolve on retry
     ///
@@ -122,6 +124,93 @@ pub enum ErrorKind {
     /// Examples: serialization failure, storage corruption,
     /// invariant violation
     Internal(String),
+
+    #[error(transparent)]
+    Protocol(#[from] ProtocolError),
+
+    /// Storage-level error
+    #[error(transparent)]
+    Storage(#[from] StorageError),
+}
+
+/// Storage-related errors (Raft, RocksDB operations)
+#[derive(thiserror::Error, Clone, Debug, PartialEq, Eq)]
+pub enum StorageError {
+    /// Raft consensus error
+    #[error("raft error: {0}")]
+    Raft(String),
+
+    /// Key not found
+    #[error("key not found")]
+    KeyNotFound,
+
+    /// Failed to read from storage
+    #[error("read failed: {0}")]
+    ReadFailed(String),
+
+    /// Failed to write to storage
+    #[error("write failed: {0}")]
+    WriteFailed(String),
+
+    /// Failed to delete from storage
+    #[error("delete failed: {0}")]
+    DeleteFailed(String),
+}
+/// Protocol-related errors (RESP parsing, command validation)
+#[derive(thiserror::Error, Clone, Debug, PartialEq, Eq)]
+pub enum ProtocolError {
+    /// Invalid RESP format
+    #[error("invalid RESP format: {0}")]
+    InvalidFormat(String),
+
+    /// Unknown command
+    #[error("unknown command '{0}'")]
+    UnknownCommand(String),
+
+    /// Wrong number of arguments for a command
+    #[error("ERR wrong number of arguments for '{0}' command")]
+    WrongArgCount(&'static str),
+
+    /// Invalid argument value
+    #[error("ERR invalid {0}")]
+    InvalidArgument(&'static str),
+
+    /// Syntax error in command
+    #[error("ERR syntax error")]
+    SyntaxError,
+
+    /// WRONGTYPE - operation against a key holding the wrong kind of value
+    #[error("WRONGTYPE Operation against a key holding the wrong kind of value")]
+    WrongType,
+
+    /// Value is not a valid integer
+    #[error("ERR value is not an integer or out of range")]
+    NotAnInteger,
+
+    /// Numeric overflow on increment/decrement
+    #[error("ERR increment or decrement would overflow")]
+    Overflow,
+
+    /// Custom error with full Redis error message
+    #[error("{0}")]
+    Custom(&'static str),
+}
+impl From<ProtocolError> for Error {
+    fn from(err: ProtocolError) -> Self {
+        Self {
+            kind: ErrorKind::from(err), // 利用 #[from]
+            source: None,
+        }
+    }
+}
+
+impl From<StorageError> for Error {
+    fn from(err: StorageError) -> Self {
+        Self {
+            kind: ErrorKind::from(err), // 利用 #[from]
+            source: None,
+        }
+    }
 }
 
 impl Display for ErrorKind {
@@ -130,6 +219,8 @@ impl Display for ErrorKind {
             ErrorKind::Retryable { reason } => write!(f, "retryable error: {}", reason),
             ErrorKind::InvalidConfig(msg) => write!(f, "configuration error: {}", msg),
             ErrorKind::Internal(msg) => write!(f, "internal error: {}", msg),
+            ErrorKind::Protocol(err) => write!(f, "protocol error: {}", err),
+            ErrorKind::Storage(err) => write!(f, "storage error: {}", err),
         }
     }
 }
@@ -205,6 +296,18 @@ impl From<ApiError> for Error {
 // =============================================================================
 // Conversions from external error types
 // =============================================================================
+impl From<CacheCatError> for Value {
+    fn from(err: CacheCatError) -> Self {
+        match &err.kind {
+            Protocol(e) => Value::error(e.to_string()),
+            // Protocol errors already contain the correct Redis error prefix
+            Storage(e) => Value::error(format!("ERR {}", e)),
+            Internal(e) => Value::error(format!("ERR {}", e)),
+            InvalidConfig(e) => Value::error(format!("ERR {}", e)),
+            Retryable { reason: e } => Value::error(format!("ERR {}", e)),
+        }
+    }
+}
 
 impl From<io::Error> for Error {
     fn from(e: io::Error) -> Self {

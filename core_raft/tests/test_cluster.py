@@ -9,11 +9,12 @@ r = redis.Redis(
 )
 
 # 设置 key，1 秒后过期
-r.set('name', 'hello', ex=1)
-r.ping()
+# r.set('name', 1, ex=10)
+# r.ping()
 # 等 5 秒
 # time.sleep(5)
 # 再获取
 # r.delete('name')
-
+r.incr('name')
+print(r.get('test1'))
 print(r.get('name'))

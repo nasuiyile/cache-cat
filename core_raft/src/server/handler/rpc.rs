@@ -181,7 +181,7 @@ async fn run_stream_mode(
     let mut buf = vec![0u8; 64 * 1024];
 
     loop {
-        let n = socket.read(&mut buf).await?;
+        let n = socket.read(&mut buf).await?;   
         if n == 0 {
             break; // 正常关闭
         }
@@ -261,18 +261,8 @@ pub async fn hand(app: App, tx: UnboundedSender<Bytes>, mut package: Bytes) -> R
     }
 
     // 读取 request_id 和 func_id（网络字节序 big-endian）
-    let request_id = {
-        let mut b = [0u8; 4];
-        b.copy_from_slice(&package[0..4]);
-        u32::from_be_bytes(b)
-    };
-    let func_id = {
-        let mut b = [0u8; 4];
-        b.copy_from_slice(&package[4..8]);
-        u32::from_be_bytes(b)
-    };
-    // 前进 8 字节，留下 body
-    package.advance(8);
+    let request_id = package.get_u32();
+    let func_id = package.get_u32();
 
     // 查找 handler 并调用
     let handler = HANDLER_TABLE

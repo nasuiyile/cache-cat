@@ -1,114 +1,22 @@
+use crate::raft::types::core::cache::moka::{MyCache, MyValue, UpdateType};
 use crate::raft::types::core::response_value::Value;
 use crate::raft::types::core::value_object::ValueObject;
-use crate::raft::types::entry::bae_operation::{BaseOperation, DelReq, LPushReq, SetReq};
+use crate::raft::types::entry::bae_operation::{BaseOperation, DelReq, IncrReq, LPushReq, SetReq};
 use crate::raft::types::entry::request::AtomicRequest;
-use moka::Expiry;
-use moka::future::Cache;
+use crate::utils::parse_i64;
+use moka::Entry;
 use moka::ops::compute::{CompResult, Op};
-use serde::{Deserialize, Serialize, Serializer};
-use std::collections::{BTreeMap, HashMap, HashSet, LinkedList};
-use std::mem::size_of;
-use std::option::Option;
+use std::collections::LinkedList;
 use std::sync::Arc;
-use std::time::{Duration, Instant};
 use tokio::io;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
-use crate::utils::now_ms;
-
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct MyValue {
-    pub version: u32, //在快照期间每一次更新都会增加version 默认为1
-    pub data: ValueObject,
-    pub expires_at: u64, //绝对时间  这里 假设不同节点的时钟偏移是有界的
-}
-
-// =====================
-// 内存估算相关常量
-// =====================
-
-const MY_VALUE_SIZE: usize = size_of::<MyValue>();
-const ARC_COUNTER_SIZE: usize = 2 * size_of::<usize>(); // strong + weak
-const VEC_SIZE: usize = size_of::<Vec<u8>>();
-
-impl MyValue {
-    pub fn estimated_memory_usage(&self) -> usize {
-        // MY_VALUE_SIZE + ARC_COUNTER_SIZE + VEC_SIZE + self.data.capacity()
-        0
-    }
-}
-
-// =====================
-// 自定义 Expiry
-// =====================
-
-struct MyExpiry;
-
-impl Expiry<Arc<Vec<u8>>, MyValue> for MyExpiry {
-    //创建或更新后的定时删除逻辑
-    fn expire_after_create(
-        &self,
-        _key: &Arc<Vec<u8>>,
-        value: &MyValue,
-        _created_at: Instant,
-    ) -> Option<Duration> {
-        if value.expires_at == 0 {
-            None
-        } else {
-            let now = now_ms();
-            if value.expires_at <= now {
-                Some(Duration::from_millis(0))
-            } else {
-                Some(Duration::from_millis(value.expires_at - now))
-            }
-        }
-    }
-
-    fn expire_after_update(
-        &self,
-        _key: &Arc<Vec<u8>>,
-        value: &MyValue,
-        _updated_at: Instant,
-        _duration_until_expiry: Option<Duration>,
-    ) -> Option<Duration> {
-        if value.expires_at == 0 {
-            None
-        } else {
-            let now = now_ms();
-            if value.expires_at <= now {
-                Some(Duration::from_millis(0))
-            } else {
-                Some(Duration::from_millis(value.expires_at - now))
-            }
-        }
-    }
-}
-
-#[derive(Debug, Clone)]
-pub struct MyCache {
-    // 内部 Cache的Clone成本是低廉的
-    pub cache: Cache<Arc<Vec<u8>>, MyValue>,
-}
-pub enum UpdateType<'a> {
-    None,
-    Snapshot(&'a mut Vec<AtomicRequest>),
-    CAS(u32),
-}
 
 impl MyCache {
-    /// 创建 MyCache 时自动初始化内部 Cache
-    pub fn new() -> Self {
-        let cache = Cache::builder()
-            // .max_capacity(max_capacity)
-            .expire_after(MyExpiry)
-            .build();
-        Self { cache }
-    }
-
-    pub async fn del(&self, del_req: DelReq, queue: UpdateType<'_>) -> Value {
+    pub async fn del(&self, del_req: DelReq, update: UpdateType<'_>) -> Value {
         let keys = (*del_req.keys).clone();
         let mut deleted = 0;
 
-        match queue {
+        match update {
             UpdateType::None => {
                 for key in keys {
                     let existed = self.cache.remove(&key).await;
@@ -156,13 +64,20 @@ impl MyCache {
             }
         }
     }
-    pub async fn set(&self, set_req: SetReq, queue: UpdateType<'_>) {
-        let mut value = MyValue {
-            data: ValueObject::String(set_req.value.clone()),
-            expires_at: set_req.ex_time,
-            version: 0,
+    pub async fn set(&self, set_req: SetReq, update: UpdateType<'_>) {
+        let mut value = match parse_i64(&set_req.value) {
+            None => MyValue {
+                data: ValueObject::String(set_req.value.clone()),
+                expires_at: set_req.ex_time,
+                version: 0,
+            },
+            Some(v) => MyValue {
+                data: ValueObject::Int(v),
+                expires_at: set_req.ex_time,
+                version: 0,
+            },
         };
-        match queue {
+        match update {
             UpdateType::None => {
                 self.cache.insert(set_req.key.clone(), value).await;
             }
@@ -217,18 +132,142 @@ impl MyCache {
         }
     }
 
-    pub fn invalidate_all(&self) {
-        self.cache.invalidate_all();
-    }
+    pub async fn incr(&self, incr_req: IncrReq, update: UpdateType<'_>) -> Value {
+        let key = incr_req.key.clone();
+        let delta = incr_req.value;
+        let result = match update {
+            UpdateType::None => {
+                self.cache
+                    .entry(key)
+                    .and_compute_with(|maybe_entry| async move {
+                        match maybe_entry {
+                            Some(entry) => {
+                                let mut value = entry.into_value();
+                                match &mut value.data {
+                                    ValueObject::Int(n) => {
+                                        *n += delta;
+                                        Op::Put(value)
+                                    }
+                                    ValueObject::String(s) => {
+                                        let num = match parse_i64(s) {
+                                            None => {
+                                                return Op::Nop;
+                                            }
+                                            Some(v) => v,
+                                        };
+                                        value.data = ValueObject::Int(num + delta);
+                                        Op::Put(value)
+                                    }
+                                    _ => Op::Nop,
+                                }
+                            }
+                            None => {
+                                let value = MyValue {
+                                    data: ValueObject::Int(delta),
+                                    expires_at: 0,
+                                    version: 0,
+                                };
+                                Op::Put(value)
+                            }
+                        }
+                    })
+                    .await
+            }
+            UpdateType::Snapshot(queue) => {
+                self.cache
+                    .entry(key)
+                    .and_compute_with(|maybe_entry| async move {
+                        match maybe_entry {
+                            Some(entry) => {
+                                let mut value = entry.into_value();
+                                queue.push(AtomicRequest {
+                                    request: BaseOperation::Incr(incr_req.clone()),
+                                    version: value.version + 1,
+                                });
+                                match &mut value.data {
+                                    ValueObject::Int(n) => {
+                                        *n += delta;
+                                        Op::Put(value)
+                                    }
+                                    ValueObject::String(s) => {
+                                        let num = match parse_i64(s) {
+                                            None => {
+                                                return Op::Nop;
+                                            }
+                                            Some(v) => v,
+                                        };
+                                        value.data = ValueObject::Int(num + delta);
+                                        Op::Put(value)
+                                    }
+                                    _ => Op::Nop,
+                                }
+                            }
+                            None => {
+                                let value = MyValue {
+                                    data: ValueObject::Int(delta),
+                                    expires_at: 0,
+                                    version: 0,
+                                };
+                                Op::Put(value)
+                            }
+                        }
+                    })
+                    .await
+            }
+            UpdateType::CAS(version) => {
+                self.cache
+                    .entry(key)
+                    .and_compute_with(|maybe_entry| async move {
+                        match maybe_entry {
+                            Some(entry) => {
+                                let mut value = entry.into_value();
+                                if value.version != version {
+                                    return Op::Nop;
+                                }
+                                value.version += 1;
+                                match &mut value.data {
+                                    ValueObject::Int(n) => {
+                                        *n += delta;
+                                        Op::Put(value)
+                                    }
+                                    ValueObject::String(s) => {
+                                        let num = match parse_i64(s) {
+                                            None => {
+                                                return Op::Nop;
+                                            }
+                                            Some(v) => v,
+                                        };
+                                        value.data = ValueObject::Int(num + delta);
+                                        Op::Put(value)
+                                    }
+                                    _ => Op::Nop,
+                                }
+                            }
+                            None => {
+                                let value = MyValue {
+                                    data: ValueObject::Int(delta),
+                                    expires_at: 0,
+                                    version: 0,
+                                };
+                                Op::Put(value)
+                            }
+                        }
+                    })
+                    .await
+            }
+        };
 
-    /// 获取值
-    pub async fn get(&self, key: &Arc<Vec<u8>>) -> Option<MyValue> {
-        self.cache.get(key).await
+        match result {
+            CompResult::Inserted(entry)
+            | CompResult::ReplacedWith(entry)
+            | CompResult::Unchanged(entry) => match entry.into_value().data {
+                ValueObject::Int(n) => Value::Integer(n),
+                _ => Value::Error("Key exists but is not an Integer".to_string()),
+            },
+            CompResult::StillNone(_) => Value::Error("Unexpected: key not found".to_string()),
+            CompResult::Removed(_) => Value::Error("Unexpected: value removed".to_string()),
+        }
     }
-    pub fn count(&self) -> u64 {
-        self.cache.entry_count()
-    }
-    //成功就返回链表长度 失败返回错误内容 不存在就创建一个list
     pub async fn l_push(&self, l_push: LPushReq) -> Value {
         let result = self
             .cache
@@ -239,7 +278,7 @@ impl MyCache {
                         let mut value = entry.into_value();
                         match &mut value.data {
                             ValueObject::List(data) => {
-                                value.version += 1;
+                                value.version;
                                 data.push_front(l_push.value);
                                 Op::Put(value)
                             }
@@ -480,20 +519,5 @@ impl MyCache {
         }
 
         Ok(())
-    }
-}
-
-impl Serialize for MyCache {
-    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: Serializer,
-    {
-        let entries: Vec<(Vec<u8>, MyValue)> = self
-            .cache
-            .iter()
-            .map(|(k, v)| ((**k).clone(), v.clone()))
-            .collect();
-
-        entries.serialize(serializer)
     }
 }

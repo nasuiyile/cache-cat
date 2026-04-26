@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum ValueObject {
-    Int(i32),
+    Int(i64),
 
     String(Arc<Vec<u8>>),
     List(LinkedList<Arc<Vec<u8>>>),

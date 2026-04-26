@@ -1,8 +1,8 @@
+use crate::error::{CacheCatError, ProtocolError, StorageError};
 use crate::protocol::command::Command;
-use crate::raft::network::rpc::{RedisServer, Server};
+use crate::raft::network::rpc::RedisServer;
 use crate::raft::types::core::response_value::Value;
 use crate::raft::types::entry::request::Request;
-use crate::raft::types::raft_types::get_group_by_key;
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use std::fmt::Display;
@@ -79,22 +79,22 @@ impl SetParams {
 
     /// Parse SET command parameters from RESP array items
     /// Format: SET key value [NX | XX] [GET] [EX seconds | PX milliseconds | EXAT timestamp | PXAT milliseconds-timestamp | KEEPTTL]
-    fn parse(items: &[Value]) -> Option<Self> {
+    fn parse(items: &[Value]) -> Result<Self, ProtocolError> {
         // Minimum: SET key value
         if items.len() < 3 {
-            return None;
+            return Err(ProtocolError::WrongArgCount("set"));
         }
 
         let key: Vec<u8> = match &items[1] {
             Value::BulkString(Some(data)) => data.clone(),
             Value::SimpleString(s) => s.as_bytes().to_vec(),
-            _ => return None,
+            _ => return Err(ProtocolError::InvalidArgument("key")),
         };
 
         let value = match &items[2] {
             Value::BulkString(Some(data)) => data.clone(),
             Value::SimpleString(s) => s.as_bytes().to_vec(),
-            _ => return None,
+            _ => return Err(ProtocolError::InvalidArgument("value")),
         };
 
         let mut params = SetParams::new(key, value);
@@ -105,20 +105,20 @@ impl SetParams {
             let arg = match &items[i] {
                 Value::BulkString(Some(data)) => String::from_utf8_lossy(data).to_uppercase(),
                 Value::SimpleString(s) => s.to_uppercase(),
-                _ => return None,
+                _ => return Err(ProtocolError::SyntaxError),
             };
 
             match arg.as_str() {
                 "NX" => {
                     if params.mode.is_some() {
-                        return None; // NX and XX are mutually exclusive
+                        return Err(ProtocolError::SyntaxError);
                     }
                     params.mode = Some(SetMode::Nx);
                     i += 1;
                 }
                 "XX" => {
                     if params.mode.is_some() {
-                        return None; // NX and XX are mutually exclusive
+                        return Err(ProtocolError::SyntaxError);
                     }
                     params.mode = Some(SetMode::Xx);
                     i += 1;
@@ -129,7 +129,7 @@ impl SetParams {
                 }
                 "EX" => {
                     if params.expiration.is_some() || i + 1 >= items.len() {
-                        return None;
+                        return Err(ProtocolError::SyntaxError);
                     }
                     let seconds = parse_u64(&items[i + 1])?;
                     params.expiration = Some(Expiration::Ex(seconds));
@@ -137,7 +137,7 @@ impl SetParams {
                 }
                 "PX" => {
                     if params.expiration.is_some() || i + 1 >= items.len() {
-                        return None;
+                        return Err(ProtocolError::SyntaxError);
                     }
                     let milliseconds = parse_u64(&items[i + 1])?;
                     params.expiration = Some(Expiration::Px(milliseconds));
@@ -145,7 +145,7 @@ impl SetParams {
                 }
                 "EXAT" => {
                     if params.expiration.is_some() || i + 1 >= items.len() {
-                        return None;
+                        return Err(ProtocolError::SyntaxError);
                     }
                     let timestamp = parse_u64(&items[i + 1])?;
                     params.expiration = Some(Expiration::ExAt(timestamp));
@@ -153,7 +153,7 @@ impl SetParams {
                 }
                 "PXAT" => {
                     if params.expiration.is_some() || i + 1 >= items.len() {
-                        return None;
+                        return Err(ProtocolError::SyntaxError);
                     }
                     let timestamp = parse_u64(&items[i + 1])?;
                     params.expiration = Some(Expiration::PxAt(timestamp));
@@ -161,26 +161,28 @@ impl SetParams {
                 }
                 "KEEPTTL" => {
                     if params.expiration.is_some() {
-                        return None;
+                        return Err(ProtocolError::SyntaxError);
                     }
                     params.expiration = Some(Expiration::KeepTTL);
                     i += 1;
                 }
-                _ => return None, // Unknown option
+                _ => return Err(ProtocolError::SyntaxError),
             }
         }
 
-        Some(params)
+        Ok(params)
     }
 }
 
 /// Parse a Value as u64
-fn parse_u64(value: &Value) -> Option<u64> {
+fn parse_u64(value: &Value) -> Result<u64, ProtocolError> {
     match value {
-        Value::BulkString(Some(data)) => String::from_utf8_lossy(data).parse::<u64>().ok(),
-        Value::SimpleString(s) => s.parse::<u64>().ok(),
-        Value::Integer(i) if *i >= 0 => Some(*i as u64),
-        _ => None,
+        Value::BulkString(Some(data)) => String::from_utf8_lossy(data)
+            .parse::<u64>()
+            .map_err(|_| ProtocolError::NotAnInteger),
+        Value::SimpleString(s) => s.parse::<u64>().map_err(|_| ProtocolError::NotAnInteger),
+        Value::Integer(i) if *i >= 0 => Ok(*i as u64),
+        _ => Err(ProtocolError::NotAnInteger),
     }
 }
 
@@ -189,23 +191,16 @@ pub struct SetCommand;
 
 #[async_trait]
 impl Command for SetCommand {
-    async fn execute(&self, items: &[Value], server: &RedisServer) -> Value {
-        let params = match SetParams::parse(items) {
-            Some(params) => params,
-            None => return Value::error("ERR wrong number of arguments for 'set' command"),
-        };
+    async fn execute(&self, items: &[Value], server: &RedisServer) -> Result<Value, CacheCatError> {
+        let params = SetParams::parse(items)?;
 
-        let group = get_group_by_key(&server.app, &params.key);
         let get = params.get;
-        match group.raft.client_write(Request::RedisSet(params)).await {
-            Ok(res) => {
-                if get {
-                    res.data
-                } else {
-                    Value::ok()
-                }
-            }
-            Err(e) => Value::error(format!("ERR {}", e)),
-        }
+        let res = server
+            .app
+            .raft
+            .client_write(Request::RedisSet(params))
+            .await
+            .map_err(|e| StorageError::WriteFailed(e.to_string()))?;
+        if get { Ok(res.data) } else { Ok(Value::ok()) }
     }
 }
