@@ -3,12 +3,14 @@ use crate::raft::types::entry::bae_operation::BaseOperation;
 use serde::{Deserialize, Serialize};
 use std::fmt;
 use std::hash::{DefaultHasher, Hash, Hasher};
+use crate::protocol::string::mset::MsetParams;
 
 /// A request to the KV store.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum Request {
     Base(BaseOperation),
     RedisSet(SetParams),
+    RedisMset(MsetParams)
 }
 
 impl fmt::Display for Request {
@@ -20,8 +22,8 @@ impl fmt::Display for Request {
                 BaseOperation::Del(req) => write!(f, "DEL: {}", req),
                 BaseOperation::Incr(req) => write!(f, "Incr: {}", req),
             },
-
             Request::RedisSet(req) => write!(f, "RedisSet: {}", req),
+            Request::RedisMset(req) => write!(f, "RedisMset: {}", req),
         }
     }
 }

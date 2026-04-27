@@ -64,7 +64,7 @@ impl MyCache {
             }
         }
     }
-    pub async fn set(&self, set_req: SetReq, update: UpdateType<'_>) {
+    pub async fn set(&self, set_req: SetReq, update: &mut UpdateType<'_>) {
         let mut value = match parse_i64(&set_req.value) {
             None => MyValue {
                 data: ValueObject::String(set_req.value.clone()),
@@ -111,7 +111,7 @@ impl MyCache {
                         if let Some(entry) = maybe_entry {
                             let current_val = entry.value();
                             // 核心逻辑：只有传入的 version 与缓存中的 version 相同时才允许更新
-                            if version == current_val.version {
+                            if *version == current_val.version {
                                 value
                             } else {
                                 // 版本不匹配，直接返回旧值（即不更新）

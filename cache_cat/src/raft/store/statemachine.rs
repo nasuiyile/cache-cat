@@ -1,4 +1,5 @@
 use crate::protocol::NO_EXPIRATION;
+use crate::protocol::string::mset::MsetParams;
 use crate::protocol::string::set::{Expiration, SetMode, SetParams};
 use crate::raft::store::snapshot::snapshot_handler::{
     dump_cache_to_path, get_snapshot_file_name, load_cache_from_path,
@@ -167,7 +168,7 @@ impl RaftStateMachine<TypeConfig> for StateMachineStore {
                             match base {
                                 BaseOperation::Set(set) => {
                                     // 使用结构体的字段名来访问成员
-                                    st.set(set, UpdateType::Snapshot(&mut operation_queue))
+                                    st.set(set, &mut UpdateType::Snapshot(&mut operation_queue))
                                         .await;
                                     Value::SimpleString("OK".to_string())
                                 }
@@ -194,6 +195,10 @@ impl RaftStateMachine<TypeConfig> for StateMachineStore {
                             redis_set_hand(st, set, UpdateType::Snapshot(&mut operation_queue))
                                 .await
                         }
+                        Request::RedisMset(mset) => {
+                            redis_mset_hand(st, mset, UpdateType::Snapshot(&mut operation_queue))
+                                .await
+                        }
                     },
                     EntryPayload::Membership(mem) => {
                         raft_meta.last_membership =
@@ -216,7 +221,7 @@ impl RaftStateMachine<TypeConfig> for StateMachineStore {
                             match base {
                                 BaseOperation::Set(set) => {
                                     // 使用结构体的字段名来访问成员
-                                    st.set(set, UpdateType::None).await;
+                                    st.set(set, &mut UpdateType::None).await;
                                     Value::SimpleString("OK".to_string())
                                 }
                                 BaseOperation::LPush(l_push) => {
@@ -234,6 +239,9 @@ impl RaftStateMachine<TypeConfig> for StateMachineStore {
                             }
                         }
                         Request::RedisSet(set) => redis_set_hand(st, set, UpdateType::None).await,
+                        Request::RedisMset(mset) => {
+                            redis_mset_hand(st, mset, UpdateType::None).await
+                        }
                     },
                     EntryPayload::Membership(mem) => {
                         raft_meta.last_membership =
@@ -276,7 +284,7 @@ impl RaftStateMachine<TypeConfig> for StateMachineStore {
                 BaseOperation::Set(set_req) => {
                     self.data
                         .kvs
-                        .set(set_req, UpdateType::CAS(atomic_request.version))
+                        .set(set_req, &mut UpdateType::CAS(atomic_request.version))
                         .await;
                 }
                 BaseOperation::LPush(l_push_req) => {
@@ -320,10 +328,27 @@ impl RaftStateMachine<TypeConfig> for StateMachineStore {
         }
     }
 }
+
+pub async fn redis_mset_hand(
+    cache: &MyCache,
+    params: MsetParams,
+    mut update_type: UpdateType<'_>,
+) -> Value {
+    for pair in params.pairs {
+        let set = SetReq {
+            key: Arc::from(pair.0),
+            value: Arc::from(pair.1),
+            ex_time: 0,
+        };
+        cache.set(set, &mut update_type).await;
+    }
+    Value::ok()
+}
+
 pub async fn redis_set_hand(
     cache: &MyCache,
     params: SetParams,
-    update_type: UpdateType<'_>,
+    mut update_type: UpdateType<'_>,
 ) -> Value {
     // Get current timestamp once for all expiration calculations
     let now = now_ms();
@@ -404,7 +429,7 @@ pub async fn redis_set_hand(
         value: Arc::from(params.value),
         ex_time: expires_at,
     };
-    cache.set(set, update_type).await;
+    cache.set(set, &mut update_type).await;
     if params.get {
         // Store the old value for GET option before we overwrite
         match existing_key {
