@@ -24,17 +24,6 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, RwLock};
 use tokio::sync::Mutex;
 
-pub struct FileStore {
-    pub path: String,
-}
-impl Drop for FileStore {
-    fn drop(&mut self) {
-        //销毁的时候如果文件存在，则删除文件
-        if Path::new(&self.path).exists() {
-            let _ = std::fs::remove_file(&self.path);
-        }
-    }
-}
 #[derive(Debug, Clone, Default)]
 pub struct RaftMetaData {
     //快照状态 true为开始 false为结束
@@ -175,20 +164,11 @@ impl RaftStateMachine<TypeConfig> for StateMachineStore {
                             BaseOperation::Set(set) => {
                                 // 使用结构体的字段名来访问成员
                                 st.set(set, update_type).await;
-                                Value::SimpleString("OK".to_string())
+                                Value::ok()
                             }
-                            BaseOperation::LPush(l_push) => {
-                                let res = st.l_push(l_push, update_type).await;
-                                res
-                            }
-                            BaseOperation::Del(del) => {
-                                let res = st.del(del, update_type).await;
-                                res
-                            }
-                            BaseOperation::Incr(incr) => {
-                                let res = st.incr(incr, update_type).await;
-                                res
-                            }
+                            BaseOperation::LPush(l_push) => st.l_push(l_push, update_type).await,
+                            BaseOperation::Del(del) => st.del(del, update_type).await,
+                            BaseOperation::Incr(incr) => st.incr(incr, update_type).await,
                         }
                     }
                     Request::RedisSet(set) => redis_set_hand(st, set, update_type).await,
@@ -222,7 +202,7 @@ impl RaftStateMachine<TypeConfig> for StateMachineStore {
         _meta: &SnapshotMeta<TypeConfig>,
         snapshot: <TypeConfig as RaftTypeConfig>::SnapshotData,
     ) -> Result<(), io::Error> {
-        tracing::warn!("node {} snapshot start!!!!", self.node_id);
+        tracing::info!("node {} snapshot start!!!!", self.node_id);
         let path_buf = snapshot.get_local_hard_link_buf(&self.path);
         //理论上快照一定会存在
         let res = load_cache_from_path(self.data.kvs.clone(), &path_buf)

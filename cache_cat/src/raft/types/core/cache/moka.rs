@@ -1,9 +1,9 @@
 use crate::raft::types::core::value_object::ValueObject;
 use crate::raft::types::entry::request::AtomicRequest;
-use crate::utils::{now_ms};
+use crate::utils::now_ms;
 use moka::Expiry;
 use moka::future::Cache;
-use serde::{Deserialize, Serialize, Serializer};
+use serde::{Deserialize, Serialize};
 use std::option::Option;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -15,7 +15,6 @@ pub struct MyValue {
     pub data: ValueObject,
     pub expires_at: u64, //绝对时间  这里 假设不同节点的时钟偏移是有界的
 }
-
 
 impl MyValue {
     pub fn estimated_memory_usage(&self) -> usize {
