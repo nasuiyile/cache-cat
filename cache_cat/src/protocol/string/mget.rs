@@ -86,7 +86,6 @@ impl Command for MgetCommand {
                 }
             }
         }
-
         Ok(Value::Array(Some(results)))
     }
 }

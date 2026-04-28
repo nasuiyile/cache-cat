@@ -157,105 +157,53 @@ impl RaftStateMachine<TypeConfig> for StateMachineStore {
     {
         let mut raft_meta = self.data.raft_meta_data.lock().await;
         let _lock = self.data.kvs.batch_lock.lock().await;
-        if raft_meta.snapshot_state {
-            let mut operation_queue = self.data.incremental_operation_queue.lock().await;
-            while let Some((entry, responder)) = entries.try_next().await? {
-                raft_meta.last_applied_log_id = Some(entry.log_id);
-                let st = &self.data.kvs;
-                let response = match entry.payload {
-                    EntryPayload::Blank => Value::ok(),
-                    EntryPayload::Normal(req) => match req {
-                        Request::Base(base) => {
-                            match base {
-                                BaseOperation::Set(set) => {
-                                    // 使用结构体的字段名来访问成员
-                                    st.set(set, &mut UpdateType::Snapshot(&mut operation_queue))
-                                        .await;
-                                    Value::SimpleString("OK".to_string())
-                                }
-                                BaseOperation::LPush(l_push) => {
-                                    let res =
-                                        st.l_push_snapshot(l_push, &mut operation_queue).await;
-                                    res
-                                }
-                                BaseOperation::Del(del) => {
-                                    let res = st
-                                        .del(del, UpdateType::Snapshot(&mut operation_queue))
-                                        .await;
-                                    res
-                                }
-                                BaseOperation::Incr(incr) => {
-                                    let res = st
-                                        .incr(incr, UpdateType::Snapshot(&mut operation_queue))
-                                        .await;
-                                    res
-                                }
-                            }
-                        }
-                        Request::RedisSet(set) => {
-                            redis_set_hand(st, set, UpdateType::Snapshot(&mut operation_queue))
-                                .await
-                        }
-                        Request::RedisMset(mset) => {
-                            redis_mset_hand(st, mset, UpdateType::Snapshot(&mut operation_queue))
-                                .await
-                        }
-                    },
-                    EntryPayload::Membership(mem) => {
-                        raft_meta.last_membership =
-                            StoredMembership::new(Some(entry.log_id.clone()), mem.clone());
-                        Value::ok()
-                    }
-                };
-                if let Some(responder) = responder {
-                    responder.send(response);
-                }
-            }
+        let mut guard;
+        let update_type = if raft_meta.snapshot_state {
+            guard = self.data.incremental_operation_queue.lock().await;
+            &mut UpdateType::Snapshot(&mut guard)
         } else {
-            while let Some((entry, responder)) = entries.try_next().await? {
-                raft_meta.last_applied_log_id = Some(entry.log_id);
-                let st = &self.data.kvs;
-                let response = match entry.payload {
-                    EntryPayload::Blank => Value::ok(),
-                    EntryPayload::Normal(req) => match req {
-                        Request::Base(base) => {
-                            match base {
-                                BaseOperation::Set(set) => {
-                                    // 使用结构体的字段名来访问成员
-                                    st.set(set, &mut UpdateType::None).await;
-                                    Value::SimpleString("OK".to_string())
-                                }
-                                BaseOperation::LPush(l_push) => {
-                                    let res = st.l_push(l_push).await;
-                                    res
-                                }
-                                BaseOperation::Del(del) => {
-                                    let res = st.del(del, UpdateType::None).await;
-                                    res
-                                }
-                                BaseOperation::Incr(incr) => {
-                                    let res = st.incr(incr, UpdateType::None).await;
-                                    res
-                                }
+            &mut UpdateType::None
+        };
+        while let Some((entry, responder)) = entries.try_next().await? {
+            raft_meta.last_applied_log_id = Some(entry.log_id);
+            let st = &self.data.kvs;
+            let response = match entry.payload {
+                EntryPayload::Blank => Value::ok(),
+                EntryPayload::Normal(req) => match req {
+                    Request::Base(base) => {
+                        match base {
+                            BaseOperation::Set(set) => {
+                                // 使用结构体的字段名来访问成员
+                                st.set(set, update_type).await;
+                                Value::SimpleString("OK".to_string())
+                            }
+                            BaseOperation::LPush(l_push) => {
+                                let res = st.l_push(l_push, update_type).await;
+                                res
+                            }
+                            BaseOperation::Del(del) => {
+                                let res = st.del(del, update_type).await;
+                                res
+                            }
+                            BaseOperation::Incr(incr) => {
+                                let res = st.incr(incr, update_type).await;
+                                res
                             }
                         }
-                        Request::RedisSet(set) => redis_set_hand(st, set, UpdateType::None).await,
-                        Request::RedisMset(mset) => {
-                            redis_mset_hand(st, mset, UpdateType::None).await
-                        }
-                    },
-                    EntryPayload::Membership(mem) => {
-                        raft_meta.last_membership =
-                            StoredMembership::new(Some(entry.log_id.clone()), mem.clone());
-                        Value::ok()
                     }
-                };
-                if let Some(responder) = responder {
-                    responder.send(response);
+                    Request::RedisSet(set) => redis_set_hand(st, set, update_type).await,
+                    Request::RedisMset(mset) => redis_mset_hand(st, mset, update_type).await,
+                },
+                EntryPayload::Membership(mem) => {
+                    raft_meta.last_membership =
+                        StoredMembership::new(Some(entry.log_id.clone()), mem.clone());
+                    Value::ok()
                 }
+            };
+            if let Some(responder) = responder {
+                responder.send(response);
             }
         }
-
         Ok(())
     }
 
@@ -291,19 +239,19 @@ impl RaftStateMachine<TypeConfig> for StateMachineStore {
                 BaseOperation::LPush(l_push_req) => {
                     self.data
                         .kvs
-                        .l_push_cas(l_push_req, atomic_request.version)
+                        .l_push(l_push_req, &mut UpdateType::CAS(atomic_request.version))
                         .await;
                 }
                 BaseOperation::Del(del_req) => {
                     self.data
                         .kvs
-                        .del(del_req, UpdateType::CAS(atomic_request.version))
+                        .del(del_req, &mut UpdateType::CAS(atomic_request.version))
                         .await;
                 }
                 BaseOperation::Incr(incr_req) => {
                     self.data
                         .kvs
-                        .incr(incr_req, UpdateType::CAS(atomic_request.version))
+                        .incr(incr_req, &mut UpdateType::CAS(atomic_request.version))
                         .await;
                 }
             }
@@ -333,7 +281,7 @@ impl RaftStateMachine<TypeConfig> for StateMachineStore {
 pub async fn redis_mset_hand(
     cache: &MyCache,
     params: MsetParams,
-    mut update_type: UpdateType<'_>,
+    update_type: &mut UpdateType<'_>,
 ) -> Value {
     for pair in params.pairs {
         let set = SetReq {
@@ -341,7 +289,7 @@ pub async fn redis_mset_hand(
             value: Arc::from(pair.1),
             ex_time: 0,
         };
-        cache.set(set, &mut update_type).await;
+        cache.set(set, update_type).await;
     }
     Value::ok()
 }
@@ -349,7 +297,7 @@ pub async fn redis_mset_hand(
 pub async fn redis_set_hand(
     cache: &MyCache,
     params: SetParams,
-    mut update_type: UpdateType<'_>,
+    update_type: &mut UpdateType<'_>,
 ) -> Value {
     // Get current timestamp once for all expiration calculations
     let now = now_ms();
@@ -430,7 +378,7 @@ pub async fn redis_set_hand(
         value: Arc::from(params.value),
         ex_time: expires_at,
     };
-    cache.set(set, &mut update_type).await;
+    cache.set(set, update_type).await;
     if params.get {
         // Store the old value for GET option before we overwrite
         match existing_key {
