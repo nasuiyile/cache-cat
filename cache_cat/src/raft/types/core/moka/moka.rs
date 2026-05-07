@@ -78,8 +78,8 @@ pub struct MyCache {
     pub write_lock: Arc<Mutex<()>>, //单key写
     pub read_lock: Arc<Mutex<()>>,  //单key读
 
-    pub read_logic_clock: Arc<AtomicU64>,  //读逻辑时钟
-    pub write_logic_clock: Arc<AtomicU64>, //写逻辑时钟
+    read_logic_clock: Arc<AtomicU64>,  //读逻辑时钟
+    write_logic_clock: Arc<AtomicU64>, //写逻辑时钟
 }
 
 impl MyCache {
@@ -132,15 +132,6 @@ impl MyCache {
             read_logic_clock: Arc::new(AtomicU64::new(0)),
             write_logic_clock,
         }
-    }
-
-    pub fn invalidate_all(&self) {
-        self.cache.invalidate_all();
-    }
-
-    /// 获取值
-    pub fn count(&self) -> u64 {
-        self.cache.entry_count()
     }
 
     pub fn get_value_with_read_clock(&self, key: &Vec<u8>) -> Option<MyValue> {

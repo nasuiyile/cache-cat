@@ -1,8 +1,9 @@
 use crate::raft::store::statemachine::RaftMetaData;
-use crate::raft::types::core::moka::moka::{MyCache};
+use crate::raft::types::core::moka::moka::MyCache;
 use crate::raft::types::entry::request::AtomicRequest;
 use crate::raft::types::raft_types::TypeConfig;
 use openraft::SnapshotMeta;
+use serde::{Deserialize, Serialize};
 use std::io::SeekFrom;
 use std::path::Path;
 use std::sync::Arc;
@@ -18,11 +19,21 @@ const CACHE_MAGIC_NUM: &[u8; 4] = b"MCDC";
 
 const VERSION: u8 = 1;
 
-pub const TEMP_PATH: &str = r"E:\tmp\raft\raft-engine";
+// 预填充占位符
+const PLACEHOLDER_LENGTH: usize = 300;
+
 pub const SNAPSHOT_FILE_NAME: &str = "snapshot";
+
 pub fn get_snapshot_file_name() -> String {
     format!("{}.bin", SNAPSHOT_FILE_NAME)
 }
+
+#[derive(Serialize, Deserialize)]
+struct CacheCatSnapshotMeta {
+    pub meta: SnapshotMeta<TypeConfig>,
+    pub write_clock: u64,
+}
+
 pub async fn dump_cache_to_path<P>(
     cache: MyCache,
     path: P,
@@ -52,7 +63,7 @@ where
     writer.write_all(CACHE_MAGIC_NUM).await?;
     writer.write_u8(VERSION).await?;
     //给meta预留300byte空间方便回填
-    writer.write_all(&[0u8; 300]).await?;
+    writer.write_all(&[0u8; PLACEHOLDER_LENGTH]).await?;
 
     cache.dump_cache_to_writer(&mut writer).await?;
     //将所有期间的操作写入
@@ -66,7 +77,11 @@ where
         last_membership: raft_meta_data.last_membership.clone(),
         snapshot_id: "".into(),
     };
-    let result = bincode2::serialize(&snapshot_meta)
+    let cache_cat_snapshot_meta = CacheCatSnapshotMeta {
+        meta: snapshot_meta,
+        write_clock: cache.get_write_clock(),
+    };
+    let result = bincode2::serialize(&cache_cat_snapshot_meta)
         .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
     drop(raft_meta_data);
     //写入增量操作队列。
@@ -92,7 +107,7 @@ where
     P: AsRef<Path>,
 {
     //先将缓存清空
-    cache.invalidate_all();
+    cache.cache.invalidate_all();
     let path = path.as_ref();
     let f = match File::open(path).await {
         Ok(f) => f,
@@ -107,24 +122,29 @@ where
     if &magic != CACHE_MAGIC_NUM {
         return Err(io::Error::new(io::ErrorKind::Other, "invalid file magic"));
     }
-    let mut version = [0u8; 1];
-    reader.read_exact(&mut version).await?;
-    if version[0] != VERSION {
+
+    let version = reader.read_u8().await?;
+    if version != VERSION {
         return Err(io::Error::new(io::ErrorKind::Other, "unsupported version"));
     }
+
     let meta_len = reader.read_u32().await? as usize;
     let mut meta_buf = vec![0u8; meta_len];
     reader.read_exact(&mut meta_buf).await?;
     reader
-        .seek(SeekFrom::Current((300 - (4 + meta_len)) as i64))
+        .seek(SeekFrom::Current(
+            (PLACEHOLDER_LENGTH - (4 + meta_len)) as i64,
+        ))
         .await?;
     //解压快照数据
     cache.load_cache_from_reader(&mut reader).await?;
+    //加载缓存下来的队列操作，但是不立即执行
     let queue = load_operation_queue_from_reader(&mut reader).await?;
 
-    let meta: SnapshotMeta<TypeConfig> = bincode2::deserialize(&meta_buf)
+    let meta: CacheCatSnapshotMeta = bincode2::deserialize(&meta_buf)
         .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
-    Ok(Some((meta, queue)))
+    cache.set_write_clock(meta.write_clock);
+    Ok(Some((meta.meta, queue)))
 }
 pub async fn dump_operation_queue_to_writer<W>(
     writer: &mut W,
@@ -173,44 +193,11 @@ where
     Ok(list)
 }
 
-pub async fn load_meta_from_path<P>(path: P) -> Result<Option<SnapshotMeta<TypeConfig>>, io::Error>
-where
-    P: AsRef<Path>,
-{
-    let path = path.as_ref();
-
-    let f = match File::open(path).await {
-        Ok(f) => f,
-        //文件不存在
-        Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(None),
-        Err(e) => return Err(e),
-    };
-
-    let mut reader = BufReader::new(f);
-    let mut magic = [0u8; 4];
-    reader.read_exact(&mut magic).await?;
-    if &magic != CACHE_MAGIC_NUM {
-        return Err(io::Error::new(io::ErrorKind::Other, "invalid file magic"));
-    }
-    let mut version = [0u8; 1];
-    reader.read_exact(&mut version).await?;
-    if version[0] != VERSION {
-        return Err(io::Error::new(io::ErrorKind::Other, "unsupported version"));
-    }
-
-    let meta_len = reader.read_u32().await? as usize;
-    let mut meta_buf = vec![0u8; meta_len];
-    reader.read_exact(&mut meta_buf).await?;
-    let meta: SnapshotMeta<TypeConfig> = bincode2::deserialize(&meta_buf)
-        .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
-
-    Ok(Some(meta))
-}
-
 #[tokio::test]
 async fn test_dump_and_load_with_data() {
-    use crate::raft::types::core::value_object::ValueObject;
+    pub const TEMP_PATH: &str = r"E:\tmp\raft\raft-engine";
     use crate::raft::types::core::moka::moka::MyValue;
+    use crate::raft::types::core::value_object::ValueObject;
     let cache = MyCache::new();
 
     // 插入测试数据
@@ -250,8 +237,8 @@ async fn test_dump_and_load_with_data() {
         Default::default(),
         Default::default(),
     )
-        .await
-        .expect("dump cache should succeed");
+    .await
+    .expect("dump cache should succeed");
 
     // 创建新缓存并加载数据
     let new_cache = MyCache::new();
@@ -259,7 +246,7 @@ async fn test_dump_and_load_with_data() {
         new_cache.clone(),
         path.join("snapshot").join(get_snapshot_file_name()),
     )
-        .await
+    .await
     {
         Ok(v) => println!("load ok: {:?}", v.unwrap().1),
         Err(e) => {

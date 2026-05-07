@@ -54,7 +54,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
     Ok(())
 }
 async fn benchmark_requests(apps: Arc<CacheCatApp>) {
-    sleep(std::time::Duration::from_secs(5)).await;
+    sleep(std::time::Duration::from_secs(3)).await;
     info!("Starting benchmark...");
     let start_time = std::time::Instant::now();
     let mut handles = Vec::new();
@@ -74,7 +74,6 @@ async fn benchmark_requests(apps: Arc<CacheCatApp>) {
                         ex_time: 0,
                     }),
                 );
-                //往第一个group发送请求
                 apps_clone.raft.client_write(request).await.unwrap();
             }
         });
