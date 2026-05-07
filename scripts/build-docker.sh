@@ -8,5 +8,5 @@ TARGET_IMAGE="cache-cat-test:latest"
 
 docker buildx build --load \
     --platform $(echo $DOCKER_TARGETS| tr ' ' ',') \
-    -t cache-cat:latest \
+    -t ${PUSH_IMAGE:-cache-cat:latest} \
     .
