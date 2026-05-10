@@ -5,7 +5,6 @@ use crate::raft::types::core::value_object::ValueObject;
 use crate::raft::types::entry::bae_operation::{AppendReq, BaseOperation, IncrReq, SetReq};
 use crate::raft::types::entry::request::AtomicRequest;
 use crate::utils::parse_i64;
-use moka::sync::Cache;
 use std::sync::Arc;
 
 impl ComputeCommand for IncrReq {

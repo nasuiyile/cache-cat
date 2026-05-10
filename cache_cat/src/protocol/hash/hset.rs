@@ -9,13 +9,12 @@
 //! Note: This command uses atomic batch write to ensure all fields and metadata
 //! are written together as a single atomic operation.
 
-use crate::error::{CacheCatError, ProtocolError, StorageError};
+use crate::error::{CacheCatError, ProtocolError};
 use crate::protocol::command::Command;
 use crate::raft::network::redis_server::RedisServer;
 use crate::raft::types::core::response_value::Value;
 use crate::raft::types::entry::bae_operation::BaseOperation::HSet;
 use crate::raft::types::entry::bae_operation::HSetReq;
-use crate::raft::types::entry::request::Request;
 use async_trait::async_trait;
 use std::sync::Arc;
 

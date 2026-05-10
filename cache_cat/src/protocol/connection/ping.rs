@@ -8,7 +8,6 @@ use crate::protocol::command::Command;
 use crate::raft::network::redis_server::RedisServer;
 use crate::raft::types::core::response_value::Value;
 use async_trait::async_trait;
-use std::sync::atomic::AtomicU16;
 
 /// PING command handler
 pub struct PingCommand;
@@ -17,7 +16,7 @@ pub struct PingCommand;
 impl Command for PingCommand {
     async fn execute(
         &self,
-        db_number: &mut u16,
+        _db_number: &mut u16,
         items: &[Value],
         _server: &RedisServer,
     ) -> Result<Value, CacheCatError> {

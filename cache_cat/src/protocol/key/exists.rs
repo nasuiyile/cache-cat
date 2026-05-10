@@ -3,13 +3,11 @@
 //! EXISTS key [key ...]
 //! Returns the number of keys that exist from those specified as arguments.
 
-use crate::error::{CacheCatError, ProtocolError, StorageError};
+use crate::error::{CacheCatError, ProtocolError};
 use crate::protocol::command::Command;
 use crate::raft::network::redis_server::RedisServer;
 use crate::raft::types::core::response_value::Value;
 use async_trait::async_trait;
-use openraft::ReadPolicy::LeaseRead;
-use std::sync::atomic::AtomicU16;
 
 /// EXISTS command parameters
 #[derive(Debug, Clone, PartialEq)]

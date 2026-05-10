@@ -1,4 +1,3 @@
-use crate::config::config::Config;
 use crate::error::{Error, Result};
 use crate::node::parsed_config::ParsedConfig;
 use crate::raft::network::client::RpcClient;
@@ -9,7 +8,6 @@ use crate::raft::store::raft_engine::create_raft_engine;
 use crate::raft::store::statemachine::StateMachineStore;
 use crate::raft::types::entry::membership::JoinRequest;
 use crate::raft::types::raft_types::{CacheCatApp, Node, NodeId};
-use openraft::SnapshotPolicy::LogsSinceLast;
 use openraft::error::{InitializeError, RaftError};
 use parking_lot::Mutex;
 use std::collections::BTreeMap;

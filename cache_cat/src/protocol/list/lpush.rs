@@ -11,13 +11,12 @@
 //! Note: Elements are inserted one after the other from leftmost to rightmost.
 //! `LPUSH mylist a b c` results in `[c, b, a]`.
 
-use crate::error::{CacheCatError, ProtocolError, StorageError};
+use crate::error::{CacheCatError, ProtocolError};
 use crate::protocol::command::Command;
 use crate::raft::network::redis_server::RedisServer;
 use crate::raft::types::core::response_value::Value;
 use crate::raft::types::entry::bae_operation::BaseOperation::LPush;
-use crate::raft::types::entry::bae_operation::{BaseOperation, LPushReq};
-use crate::raft::types::entry::request::{RedisOperation, Request};
+use crate::raft::types::entry::bae_operation::LPushReq;
 use async_trait::async_trait;
 use std::sync::Arc;
 

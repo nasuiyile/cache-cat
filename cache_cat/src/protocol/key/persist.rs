@@ -10,16 +10,14 @@
 //! - `1` if the timeout was removed
 //! - `0` if the key does not exist or does not have an associated timeout
 
-use crate::error::{CacheCatError, ProtocolError, StorageError};
+use crate::error::{CacheCatError, ProtocolError};
 use crate::protocol::command::Command;
 use crate::raft::network::redis_server::RedisServer;
 use crate::raft::types::core::response_value::Value;
-use crate::raft::types::entry::bae_operation::BaseOperation::{Expire, Persist};
+use crate::raft::types::entry::bae_operation::BaseOperation::Persist;
 use crate::raft::types::entry::bae_operation::PersistReq;
-use crate::raft::types::entry::request::Request;
 use async_trait::async_trait;
 use std::sync::Arc;
-use std::sync::atomic::AtomicU16;
 
 /// PERSIST command parameters
 #[derive(Debug, Clone, PartialEq)]

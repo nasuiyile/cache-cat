@@ -1,5 +1,5 @@
 use crate::raft::types::core::moka::cas::ComputeCommand;
-use crate::raft::types::core::moka::moka::{MyCache, MyValue, Update, UpdateType};
+use crate::raft::types::core::moka::moka::{MyCache, MyValue, Update};
 use crate::raft::types::core::response_value::Value;
 use crate::raft::types::core::value_object::ValueObject::ZSet;
 use crate::raft::types::core::value_object::{SortedSet, ValueObject};

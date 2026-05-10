@@ -1,11 +1,9 @@
-use crate::error::{CacheCatError, CacheCatResult, ProtocolError, StorageError};
+use crate::error::{CacheCatError, ProtocolError};
 use crate::protocol::command::Command;
 use crate::raft::network::redis_server::RedisServer;
-use crate::raft::types::core::moka::moka::MyValue;
 use crate::raft::types::core::response_value::Value;
 use crate::raft::types::core::value_object::ValueObject;
 use async_trait::async_trait;
-use openraft::ReadPolicy::LeaseRead;
 
 /// Parameters for GET command
 #[derive(Debug, Clone, PartialEq)]

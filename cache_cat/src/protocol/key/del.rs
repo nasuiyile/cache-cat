@@ -7,14 +7,13 @@
 //! - The number of keys that were removed
 //! - 0 if none of the specified keys existed
 
-use crate::error::{CacheCatError, ProtocolError, StorageError};
+use crate::error::{CacheCatError, ProtocolError};
 use crate::protocol::command::Command;
 use crate::raft::network::redis_server::RedisServer;
 use crate::raft::types::core::response_value::Value;
 use crate::raft::types::entry::bae_operation::BaseOperation::Del;
 use crate::raft::types::entry::bae_operation::DelReq;
 use crate::raft::types::entry::request::RedisOperation::RedisDel;
-use crate::raft::types::entry::request::Request;
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use std::fmt::{Display, Formatter};

@@ -5,17 +5,14 @@
 //! Renames `key` to `newkey`. If `newkey` already exists it is overwritten.
 //! Returns an error if the source key does not exist.
 
-use crate::error::{CacheCatError, ProtocolError, StorageError};
+use crate::error::{CacheCatError, ProtocolError};
 use crate::protocol::command::Command;
 use crate::raft::network::redis_server::RedisServer;
 use crate::raft::types::core::response_value::Value;
-use crate::raft::types::entry::bae_operation::BaseOperation::Expire;
-use crate::raft::types::entry::request::Request::Redis;
-use crate::raft::types::entry::request::{RedisOperation, Request};
+use crate::raft::types::entry::request::RedisOperation;
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use std::fmt::{Display, Formatter};
-use std::sync::atomic::AtomicU16;
 
 /// RENAME command parameters
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

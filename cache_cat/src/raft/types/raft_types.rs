@@ -4,7 +4,6 @@ use crate::raft::store::statemachine::StateMachineStore;
 use crate::raft::types::core::moka::moka::MyValue;
 use crate::raft::types::core::response_value::Value;
 use crate::raft::types::entry::bae_operation::BaseOperation;
-use crate::raft::types::entry::request::RedisOperation::RedisSet;
 use crate::raft::types::entry::request::{RedisOperation, Request};
 use crate::raft::types::file_operator::FileOperator;
 use openraft::ReadPolicy::LeaseRead;

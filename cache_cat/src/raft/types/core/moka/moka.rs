@@ -3,7 +3,6 @@ use crate::raft::types::core::response_value::Value;
 use crate::raft::types::core::value_object::ValueObject;
 use crate::raft::types::entry::request::AtomicRequest;
 use crate::utils::now_ms;
-use futures::TryFutureExt;
 use moka::Expiry;
 use moka::sync::Cache;
 use serde::{Deserialize, Serialize};
@@ -140,7 +139,7 @@ impl MyCache {
                 .expire_after(MyExpiry {
                     write_logic_clock: write_logic_clock.clone(),
                 })
-                .eviction_listener(move |k, v, cause| {
+                .eviction_listener(move |_k, _v, _cause| {
                     //如果有缓存数据被删除
                     deleted.store(true, Ordering::Release)
                 })

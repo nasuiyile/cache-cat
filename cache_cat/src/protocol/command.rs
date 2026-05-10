@@ -28,8 +28,6 @@ use crate::raft::network::redis_server::RedisServer;
 use crate::raft::types::core::response_value::Value;
 use async_trait::async_trait;
 use std::collections::HashMap;
-use std::sync::Arc;
-use std::sync::atomic::{AtomicU16, Ordering};
 use tracing::warn;
 
 #[async_trait]

@@ -3,7 +3,6 @@ use crate::raft::types::core::response_value::Value;
 use crate::raft::types::core::response_value::Value::Integer;
 use crate::raft::types::core::value_object::ValueObject;
 use crate::raft::types::entry::bae_operation::BaseOperation;
-use crate::raft::types::entry::bae_operation::BaseOperation::Empty;
 use crate::raft::types::entry::request::AtomicRequest;
 use moka::ops::compute::{CompResult, Op};
 use std::sync::Arc;

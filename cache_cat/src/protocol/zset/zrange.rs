@@ -12,13 +12,12 @@
 //! - Empty array if key does not exist
 //! - WRONGTYPE error if key exists but is not a sorted set
 
-use crate::error::{CacheCatError, ProtocolError, StorageError};
+use crate::error::{CacheCatError, ProtocolError};
 use crate::protocol::command::Command;
 use crate::raft::network::redis_server::RedisServer;
 use crate::raft::types::core::response_value::Value;
 use crate::raft::types::core::value_object::ValueObject;
 use async_trait::async_trait;
-use openraft::ReadPolicy::LeaseRead;
 
 /// ZRANGE command handler
 pub struct ZRangeCommand;

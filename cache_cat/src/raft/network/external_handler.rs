@@ -9,7 +9,6 @@ use crate::raft::types::raft_types::{CacheCatApp, Node, TypeConfig};
 use async_trait::async_trait;
 use bytes::Bytes;
 use futures::StreamExt;
-use openraft::ReadPolicy::LeaseRead;
 use openraft::raft::{
     AppendEntriesResponse, ClientWriteResponse, SnapshotResponse, VoteResponse, WriteResult,
 };
@@ -17,7 +16,6 @@ use openraft::{ChangeMembers, Snapshot};
 use serde::Serialize;
 use serde::de::DeserializeOwned;
 use std::collections::BTreeMap;
-use std::hash::{DefaultHasher, Hash, Hasher};
 use std::sync::Arc;
 use tracing::info;
 
@@ -41,12 +39,6 @@ pub static HANDLER_TABLE: &[HandlerEntry] = &[
     (9, || Box::new(RpcMethod { func: add_node })),
     (10, || Box::new(RpcMethod { func: batch_write })),
 ];
-fn hash_string(s: &str) -> u64 {
-    let mut hasher = DefaultHasher::new();
-    s.hash(&mut hasher);
-    hasher.finish()
-}
-
 #[async_trait]
 pub trait RpcHandler: Send + Sync {
     // 将 app 改为 Arc 传递，更符合异步环境下的生命周期要求

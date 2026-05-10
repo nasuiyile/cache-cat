@@ -7,8 +7,6 @@ use futures::{FutureExt, SinkExt, StreamExt, future::BoxFuture, stream::FuturesO
 use std::io::Result as IoResult;
 use std::net::SocketAddr;
 use std::sync::Arc;
-use std::sync::atomic::AtomicU16;
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 use tokio_util::codec::{Decoder, Encoder, Framed};
 use tracing::{debug, error, info, warn};

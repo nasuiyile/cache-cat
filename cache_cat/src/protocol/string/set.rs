@@ -1,14 +1,11 @@
-use crate::error::{CacheCatError, ProtocolError, StorageError};
+use crate::error::{CacheCatError, ProtocolError};
 use crate::protocol::command::Command;
 use crate::raft::network::redis_server::RedisServer;
 use crate::raft::types::core::response_value::Value;
-use crate::raft::types::core::value_object::ValueObject::Set;
 use crate::raft::types::entry::request::RedisOperation::RedisSet;
-use crate::raft::types::entry::request::Request;
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use std::fmt::Display;
-use std::sync::atomic::{AtomicU16, Ordering};
 
 /// Expiration time options for SET command
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
