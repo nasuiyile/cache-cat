@@ -9,6 +9,7 @@ use crate::error::{CacheCatError, ProtocolError, StorageError};
 use crate::protocol::command::Command;
 use crate::raft::network::redis_server::RedisServer;
 use crate::raft::types::core::response_value::Value;
+use crate::raft::types::entry::bae_operation::BaseOperation::Expire;
 use crate::raft::types::entry::request::Request::Redis;
 use crate::raft::types::entry::request::{RedisOperation, Request};
 use async_trait::async_trait;
@@ -69,16 +70,10 @@ impl Command for RenameCommand {
         server: &RedisServer,
     ) -> Result<Value, CacheCatError> {
         let params = RenameParams::parse(items)?;
-        let write_clock = server.app.state_machine.data.kvs.get_new_write_clock();
-
-        let request =
-            Request::new_redis(write_clock, *db_number, RedisOperation::RedisRename(params));
-        let res = server
+        let value = server
             .app
-            .raft
-            .client_write(request)
-            .await
-            .map_err(|e| StorageError::WriteFailed(e.to_string()))?;
-        Ok(res.data)
+            .write_redis(RedisOperation::RedisRename(params), *db_number)
+            .await?;
+        Ok(value)
     }
 }

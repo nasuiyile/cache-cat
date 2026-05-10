@@ -159,33 +159,27 @@ impl ZAddCommand {
 
 #[async_trait]
 impl Command for ZAddCommand {
-    async fn execute(&self,db_number: &mut u16, items: &[Value], server: &RedisServer) -> Result<Value, CacheCatError> {
+    async fn execute(
+        &self,
+        db_number: &mut u16,
+        items: &[Value],
+        server: &RedisServer,
+    ) -> Result<Value, CacheCatError> {
         let params = Self::parse_params(items)?;
         let mut elements = Vec::new();
         for v in params.members {
             elements.push((Arc::new(v.0), v.1));
         }
-        let write_clock = server.app.state_machine.data.kvs.get_new_write_clock();
-
-        let request = Request::new_base(
-            write_clock,
-            *db_number,
-            ZAdd(ZAddReq {
-                key: Arc::from(params.key),
-                nx: params.nx,
-                xx: params.xx,
-                gt: params.gt,
-                lt: params.lt,
-                ch: params.ch,
-                members: elements,
-            }),
-        );
-        let res = server
-            .app
-            .raft
-            .client_write(request)
-            .await
-            .map_err(|e| StorageError::WriteFailed(e.to_string()))?;
-        Ok(res.data)
+        let operation = ZAdd(ZAddReq {
+            key: Arc::from(params.key),
+            nx: params.nx,
+            xx: params.xx,
+            gt: params.gt,
+            lt: params.lt,
+            ch: params.ch,
+            members: elements,
+        });
+        let value = server.app.write_base(operation, *db_number).await?;
+        Ok(value)
     }
 }

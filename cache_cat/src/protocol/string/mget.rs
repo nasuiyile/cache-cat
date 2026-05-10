@@ -1,10 +1,9 @@
-use crate::error::{CacheCatError, CacheCatResult, ProtocolError, StorageError};
+use crate::error::{CacheCatError, ProtocolError};
 use crate::protocol::command::Command;
 use crate::raft::network::redis_server::RedisServer;
 use crate::raft::types::core::response_value::Value;
 use crate::raft::types::core::value_object::ValueObject;
 use async_trait::async_trait;
-use openraft::ReadPolicy::LeaseRead;
 
 /// Parameters for MGET command
 #[derive(Debug, Clone, PartialEq)]
@@ -31,33 +30,6 @@ impl MgetParams {
         Ok(MgetParams { keys })
     }
 }
-
-/// Get a value from the server
-/// Returns None if key not found or expired.
-async fn get_value(
-    server: &RedisServer,
-    key: &Vec<u8>,
-    db_number: u16,
-) -> CacheCatResult<Option<Vec<u8>>> {
-    let value = server
-        .app
-        .state_machine
-        .data
-        .kvs
-        .get_value_with_read_clock(key, db_number)?;
-    match value {
-        None => Ok(None),
-        Some(v) => match v.data {
-            ValueObject::Int(int_value) => {
-                //转换为字符串
-                Ok(Some(int_value.to_string().into_bytes()))
-            }
-            ValueObject::String(string_value) => Ok(Some(string_value.as_ref().clone())),
-            _ => Err(CacheCatError::from(ProtocolError::WrongType)),
-        },
-    }
-}
-
 /// MGET command executor
 pub struct MgetCommand;
 
@@ -70,30 +42,22 @@ impl Command for MgetCommand {
         server: &RedisServer,
     ) -> Result<Value, CacheCatError> {
         let params = MgetParams::parse(items)?;
-        let raft = &server.app.raft;
-        let linearizer = raft
-            .get_read_linearizer(LeaseRead)
-            .await
-            .map_err(|e| StorageError::ReadFailed(e.to_string()))?;
-        linearizer
-            .await_ready(&raft)
-            .await
-            .map_err(|e| StorageError::WriteFailed(e.to_string()))?;
-        let mut results = Vec::with_capacity(params.keys.len());
-        let _shard_lock = server.app.state_machine.data.kvs.write_lock.lock();
-        let _exclusive_lock = server.app.state_machine.data.kvs.read_lock.lock();
-        for key in &params.keys {
-            let value = get_value(server, key, *db_number).await;
-            match value {
-                Ok(Some(value)) => {
-                    results.push(Value::BulkString(Some(value)));
-                }
-                Ok(None) => {
+        let values = server.app.multi_read(params.keys, *db_number).await?;
+        let mut results = Vec::with_capacity(values.len());
+        for my_value in values {
+            match my_value {
+                None => {
                     results.push(Value::BulkString(None));
                 }
-                Err(e) => {
-                    return Err(e);
-                }
+                Some(v) => match v.data {
+                    ValueObject::Int(int_value) => {
+                        results.push(Value::BulkString(Some(int_value.to_string().into_bytes())));
+                    }
+                    ValueObject::String(str_value) => {
+                        results.push(Value::BulkString(Some(str_value.as_ref().clone())));
+                    }
+                    _ => return Err(CacheCatError::from(ProtocolError::WrongType)),
+                },
             }
         }
         Ok(Value::Array(Some(results)))

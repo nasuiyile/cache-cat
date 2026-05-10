@@ -193,17 +193,19 @@ impl RaftStateMachine<TypeConfig> for StateMachineStore {
                     }
                     Value::ok()
                 }
-                EntryPayload::Normal(req) => match req {
-                    Request::Base(time, base) => {
-                        let write_clock = st.set_write_clock(time);
-                        match update.update_type {
-                            UpdateType::Snapshot(_, count) => {
-                                // 直接修改 count（因为匹配到的 count 是可变的）
-                                *count = write_clock;
-                            }
-                            _ => {}
+                EntryPayload::Normal(req) => {
+                    let (time, db_number) = req.split_u64();
+                    let write_clock = st.set_write_clock(time);
+                    match update.update_type {
+                        UpdateType::Snapshot(_, count) => {
+                            // 直接修改 count（因为匹配到的 count 是可变的）
+                            *count = write_clock;
                         }
-                        match base {
+                        _ => {}
+                    }
+                    update.db_number = db_number;
+                    match req {
+                        Request::Base(_, base) => match base {
                             BaseOperation::Empty => Value::ok(),
                             BaseOperation::Set(set) => {
                                 st.set(set, &mut update);
@@ -220,11 +222,8 @@ impl RaftStateMachine<TypeConfig> for StateMachineStore {
                             BaseOperation::SAdd(s_add) => st.s_add(s_add, &mut update),
                             BaseOperation::Persist(persist) => st.persist(persist, &mut update),
                             BaseOperation::Insert(insert) => st.insert(insert, &mut update),
-                        }
-                    }
-                    Request::Redis(time, redis) => {
-                        let write_clock = st.set_write_clock(time);
-                        match redis {
+                        },
+                        Request::Redis(_, redis) => match redis {
                             RedisOperation::RedisDel(del) => {
                                 redis_del_hand(st, del, &mut update).await
                             }
@@ -237,9 +236,9 @@ impl RaftStateMachine<TypeConfig> for StateMachineStore {
                             RedisOperation::RedisRename(rename) => {
                                 redis_rename_hand(st, rename, &mut update).await
                             }
-                        }
+                        },
                     }
-                },
+                }
                 EntryPayload::Membership(mem) => {
                     raft_meta.last_membership =
                         StoredMembership::new(Some(entry.log_id.clone()), mem.clone());

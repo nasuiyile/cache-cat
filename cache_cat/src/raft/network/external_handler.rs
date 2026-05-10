@@ -104,14 +104,7 @@ pub async fn write(
     mut req: Request,
 ) -> Result<ClientWriteResponse<TypeConfig>, String> {
     let write_clock = app.state_machine.data.kvs.get_new_write_clock();
-    match req {
-        Request::Base(ref mut time, _) => {
-            *time = write_clock;
-        }
-        Request::Redis(ref mut time, _) => {
-            *time = write_clock;
-        }
-    }
+    req.set_write_clock(write_clock);
     app.raft.client_write(req).await.map_err(|e| {
         tracing::error!("write error: {:?}", e);
         e.to_string()
@@ -137,19 +130,11 @@ pub async fn batch_write(
 }
 
 async fn read(app: Arc<CacheCatApp>, get_req: GetReq) -> Result<GetRes, String> {
-    let ret = app.raft.get_read_linearizer(LeaseRead).await;
+    let value = app
+        .read(get_req.key, get_req.db_number)
+        .await
+        .map_err(|e| e.to_string())?;
 
-    let value = match ret {
-        Ok(linearizer) => {
-            linearizer
-                .await_ready(&app.raft)
-                .await
-                .map_err(|e| e.to_string())?;
-            let cache = app.state_machine.data.kvs.get_cache(0).unwrap();
-            cache.get(&get_req.key)
-        }
-        Err(e) => return Err(e.to_string()),
-    };
     match value {
         None => Ok(GetRes { value: None }),
         Some(v) => match v.data {

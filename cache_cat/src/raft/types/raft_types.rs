@@ -1,8 +1,13 @@
 use super::endpoint::Endpoint;
+use crate::error::{CacheCatError, StorageError};
 use crate::raft::store::statemachine::StateMachineStore;
+use crate::raft::types::core::moka::moka::MyValue;
 use crate::raft::types::core::response_value::Value;
-use crate::raft::types::entry::request::Request;
+use crate::raft::types::entry::bae_operation::BaseOperation;
+use crate::raft::types::entry::request::RedisOperation::RedisSet;
+use crate::raft::types::entry::request::{RedisOperation, Request};
 use crate::raft::types::file_operator::FileOperator;
+use openraft::ReadPolicy::LeaseRead;
 use serde::Deserialize;
 use serde::Serialize;
 use std::fmt::Display;
@@ -46,10 +51,87 @@ pub struct CacheCatApp {
 }
 
 impl CacheCatApp {
-    
+    pub async fn write_redis(
+        &self,
+        op: RedisOperation,
+        db_number: u16,
+    ) -> Result<Value, CacheCatError> {
+        let write_clock = self.state_machine.data.kvs.get_new_write_clock();
+        let request = Request::new_redis(write_clock, db_number, op);
+        let res = self
+            .raft
+            .client_write(request)
+            .await
+            .map_err(|e| StorageError::WriteFailed(e.to_string()))?;
+        Ok(res.data)
+    }
+
+    pub async fn write_base(
+        &self,
+        op: BaseOperation,
+        db_number: u16,
+    ) -> Result<Value, CacheCatError> {
+        let write_clock = self.state_machine.data.kvs.get_new_write_clock();
+        let request = Request::new_base(write_clock, db_number, op);
+        let res = self
+            .raft
+            .client_write(request)
+            .await
+            .map_err(|e| StorageError::WriteFailed(e.to_string()))?;
+        Ok(res.data)
+    }
+    pub async fn read(
+        &self,
+        key: Vec<u8>,
+        db_number: u16,
+    ) -> Result<Option<MyValue>, CacheCatError> {
+        let linearizer = self
+            .raft
+            .get_read_linearizer(LeaseRead)
+            .await
+            .map_err(|e| StorageError::ReadFailed(e.to_string()))?;
+        linearizer
+            .await_ready(&self.raft)
+            .await
+            .map_err(|e| StorageError::WriteFailed(e.to_string()))?;
+        let read_lock = self.state_machine.data.kvs.read_lock.lock().await;
+        let my_value = self
+            .state_machine
+            .data
+            .kvs
+            .get_value_with_read_clock(&key, db_number)?;
+        drop(read_lock);
+        Ok(my_value)
+    }
+
+    pub async fn multi_read(
+        &self,
+        keys: Vec<Vec<u8>>,
+        db_number: u16,
+    ) -> Result<Vec<Option<MyValue>>, CacheCatError> {
+        let linearizer = self
+            .raft
+            .get_read_linearizer(LeaseRead)
+            .await
+            .map_err(|e| StorageError::ReadFailed(e.to_string()))?;
+        linearizer
+            .await_ready(&self.raft)
+            .await
+            .map_err(|e| StorageError::WriteFailed(e.to_string()))?;
+        let _read_lock = self.state_machine.data.kvs.read_lock.lock().await;
+        let _write_lock = self.state_machine.data.kvs.write_lock.lock().await;
+        let mut vec = Vec::new();
+        for key in keys {
+            let my_value = self
+                .state_machine
+                .data
+                .kvs
+                .get_value_with_read_clock(&key, db_number)?;
+            vec.push(my_value);
+        }
+        Ok(vec)
+    }
 }
-
-
 
 pub type Entry = openraft::Entry<TypeConfig>;
 pub type LogState = openraft::storage::LogState<TypeConfig>;

@@ -14,7 +14,7 @@ use crate::error::{CacheCatError, ProtocolError, StorageError};
 use crate::protocol::command::Command;
 use crate::raft::network::redis_server::RedisServer;
 use crate::raft::types::core::response_value::Value;
-use crate::raft::types::entry::bae_operation::BaseOperation::Persist;
+use crate::raft::types::entry::bae_operation::BaseOperation::{Expire, Persist};
 use crate::raft::types::entry::bae_operation::PersistReq;
 use crate::raft::types::entry::request::Request;
 use async_trait::async_trait;
@@ -57,21 +57,10 @@ impl Command for PersistCommand {
         server: &RedisServer,
     ) -> Result<Value, CacheCatError> {
         let params = PersistParams::parse(items)?;
-        let write_clock = server.app.state_machine.data.kvs.get_new_write_clock();
-
-        let request = Request::new_base(
-            write_clock,
-            *db_number,
-            Persist(PersistReq {
-                key: Arc::from(params.key),
-            }),
-        );
-        let res = server
-            .app
-            .raft
-            .client_write(request)
-            .await
-            .map_err(|e| StorageError::WriteFailed(e.to_string()))?;
-        Ok(res.data)
+        let operation = Persist(PersistReq {
+            key: Arc::from(params.key),
+        });
+        let value = server.app.write_base(operation, *db_number).await?;
+        Ok(value)
     }
 }

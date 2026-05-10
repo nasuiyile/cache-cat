@@ -32,13 +32,13 @@ print(r.save())
 sleep(0.99)
 print(r.get('test8'))
 
-
 r.set('test11', 'test')
 r = redis.Redis(
-    db=1,
+    db=15,
     host='localhost',
     port=6379,
     decode_responses=True
 )
-
-r.get('test11')
+r.set('test12', 'test')
+print(r.get('test12'))
+print(r.echo('test13'))

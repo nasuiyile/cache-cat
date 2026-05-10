@@ -6,7 +6,6 @@ use crate::raft::types::entry::bae_operation::BaseOperation;
 use crate::utils::merge_u64;
 use serde::{Deserialize, Serialize};
 use std::fmt;
-use std::sync::atomic::{AtomicU16, Ordering};
 
 /// A request to the KV store.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -26,6 +25,15 @@ impl Request {
     }
 
     #[inline]
+    pub fn set_write_clock(&mut self, high_bits: u64) {
+        let masked = high_bits << 16; // 高48位移到高位
+        match self {
+            Request::Base(val, _) | Request::Redis(val, _) => {
+                *val = (*val & 0xFFFF) | (masked & 0xFFFFFFFFFFFF0000);
+            }
+        }
+    }
+    #[inline]
     pub fn split_u64(&self) -> (u64, u16) {
         let value = match self {
             Request::Base(value, _) => value,
@@ -34,6 +42,14 @@ impl Request {
         let high_48: u64 = value >> 16; // 取高 48 位 作为当前时间戳毫秒值
         let low_16: u16 = (value & 0xFFFF) as u16; // 取低 16 位 作为数据库编号
         (high_48, low_16)
+    }
+    #[inline]
+    pub fn get_db_number(&self) -> u16 {
+        let value = match self {
+            Request::Base(value, _) => value,
+            Request::Redis(value, _) => value,
+        };
+        (value >> 16) as u16
     }
 }
 

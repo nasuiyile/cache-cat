@@ -84,27 +84,13 @@ impl Command for HIncrByCommand {
     ) -> Result<Value, CacheCatError> {
         // Parse arguments
         let params = Self::parse_args(items)?;
-        let write_clock = server.app.state_machine.data.kvs.get_new_write_clock();
-        let req = Request::new_base(
-            write_clock,
-            *db_number,
-            HIncr(HIncrReq {
-                key: Arc::from(params.key),
-                field: Arc::from(params.field),
-                value: params.increment,
-            }),
-        );
-        let res = server
-            .app
-            .raft
-            .client_write(req)
-            .await
-            .map_err(|e| StorageError::WriteFailed(e.to_string()))?;
-        match res.data {
-            Value::Integer(i) => Ok(Value::Integer(i)),
-            _ => Err(CacheCatError::from(StorageError::WriteFailed(
-                "ERR unexpected response".to_string(),
-            ))),
-        }
+        let operation = HIncr(HIncrReq {
+            key: Arc::from(params.key),
+            field: Arc::from(params.field),
+            value: params.increment,
+        });
+        let value = server.app.write_base(operation, *db_number).await?;
+        Ok(value)
+
     }
 }

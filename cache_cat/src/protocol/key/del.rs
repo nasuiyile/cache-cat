@@ -19,7 +19,6 @@ use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use std::fmt::{Display, Formatter};
 use std::sync::Arc;
-use std::sync::atomic::AtomicU16;
 
 /// DEL command parameters
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -67,30 +66,14 @@ impl Command for DelCommand {
         server: &RedisServer,
     ) -> Result<Value, CacheCatError> {
         let params = DelParams::parse(items)?;
-        let write_clock = server.app.state_machine.data.kvs.get_new_write_clock();
-
-        let request = if params.keys.len() == 1 {
-            Request::new_base(
-                write_clock,
-                *db_number,
-                Del(DelReq {
-                    key: Arc::new(params.keys[0].clone()),
-                }),
-            )
+        let value = if params.keys.len() == 1 {
+            let operation = Del(DelReq {
+                key: Arc::new(params.keys[0].clone()),
+            });
+            server.app.write_base(operation, *db_number).await?
         } else {
-            Request::new_redis(write_clock, *db_number, RedisDel(params))
+            server.app.write_redis(RedisDel(params), *db_number).await?
         };
-        let res = server
-            .app
-            .raft
-            .client_write(request)
-            .await
-            .map_err(|e| StorageError::WriteFailed(e.to_string()))?;
-        match res.data {
-            Value::Integer(i) => Ok(Value::Integer(i)),
-            _ => Err(CacheCatError::from(StorageError::WriteFailed(
-                "ERR unexpected response".to_string(),
-            ))),
-        }
+        Ok(value)
     }
 }

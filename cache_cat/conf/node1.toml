@@ -2,6 +2,7 @@ node_id = 1
 redis_addr = "127.0.0.1:6379"
 #在没有请求到来时 多少秒进行一次key的清理 0表示不清理
 cleaning_interval = 100
+databases = 16
 [raft]
 address = "127.0.0.1:5001"
 advertise_host = "127.0.0.1"

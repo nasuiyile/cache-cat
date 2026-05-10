@@ -56,23 +56,11 @@ impl Command for IncrByCommand {
         server: &RedisServer,
     ) -> Result<Value, CacheCatError> {
         let params = IncrByParams::parse(items)?;
-        let req = IncrReq {
+        let operation = Incr(IncrReq {
             key: Arc::from(params.key),
             value: params.increment,
-        };
-        let write_clock = server.app.state_machine.data.kvs.get_new_write_clock();
-
-        let res = server
-            .app
-            .raft
-            .client_write(Request::new_base(write_clock, *db_number, Incr(req)))
-            .await
-            .map_err(|e| StorageError::WriteFailed(e.to_string()))?;
-        match res.data {
-            Value::Integer(i) => Ok(Value::Integer(i)),
-            _ => Err(CacheCatError::from(StorageError::WriteFailed(
-                "ERR unexpected response".to_string(),
-            ))),
-        }
+        });
+        let value = server.app.write_base(operation, *db_number).await?;
+        Ok(value)
     }
 }

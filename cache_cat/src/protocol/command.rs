@@ -1,5 +1,6 @@
 use crate::error::CacheCatError;
 use crate::protocol::connection::bgsave::BgsaveCommand;
+use crate::protocol::connection::echo::EchoCommand;
 use crate::protocol::connection::ping::PingCommand;
 use crate::protocol::connection::save::SaveCommand;
 use crate::protocol::connection::select::SelectCommand;
@@ -89,6 +90,7 @@ impl CommandFactory {
         factory.register("BGSAVE", BgsaveCommand);
         factory.register("SAVE", SaveCommand);
         factory.register("SELECT", SelectCommand);
+        factory.register("ECHO", EchoCommand);
         factory
     }
 

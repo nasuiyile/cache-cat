@@ -1,6 +1,7 @@
 use crate::error::{CacheCatError, CacheCatResult, ProtocolError, StorageError};
 use crate::protocol::command::Command;
 use crate::raft::network::redis_server::RedisServer;
+use crate::raft::types::core::moka::moka::MyValue;
 use crate::raft::types::core::response_value::Value;
 use crate::raft::types::core::value_object::ValueObject;
 use async_trait::async_trait;
@@ -29,43 +30,6 @@ impl GetParams {
     }
 }
 
-/// Get a value from the server
-/// Returns (value, expired) where `expired` is true if the key was expired and deleted.
-async fn get_value(
-    server: &RedisServer,
-    key: &Vec<u8>,
-    db_number: u16,
-) -> CacheCatResult<Option<Vec<u8>>> {
-    let raft = &server.app.raft;
-    let linearizer = raft
-        .get_read_linearizer(LeaseRead)
-        .await
-        .map_err(|e| StorageError::ReadFailed(e.to_string()))?;
-    linearizer
-        .await_ready(&raft)
-        .await
-        .map_err(|e| StorageError::WriteFailed(e.to_string()))?;
-    let lock = server.app.state_machine.data.kvs.write_lock.lock().await;
-    let value = server
-        .app
-        .state_machine
-        .data
-        .kvs
-        .get_value_with_read_clock(key, db_number)?;
-    drop(lock);
-    match value {
-        None => Ok(None),
-        Some(v) => match v.data {
-            ValueObject::Int(int_value) => {
-                //转换为字符串
-                Ok(Some(int_value.to_string().into_bytes()))
-            }
-            ValueObject::String(string_value) => Ok(Some(string_value.as_ref().clone())),
-            _ => Err(CacheCatError::from(ProtocolError::WrongType)),
-        },
-    }
-}
-
 /// GET command executor
 pub struct GetCommand;
 
@@ -78,10 +42,18 @@ impl Command for GetCommand {
         server: &RedisServer,
     ) -> Result<Value, CacheCatError> {
         let params = GetParams::parse(items)?;
-
-        match get_value(server, &params.key, *db_number).await? {
-            Some(data) => Ok(Value::BulkString(Some(data))),
-            None => Ok(Value::BulkString(None)), // Key not found or expired
+        let values = server.app.read(params.key, *db_number).await?;
+        match values {
+            None => Ok(Value::BulkString(None)),
+            Some(v) => match v.data {
+                ValueObject::Int(int_value) => {
+                    Ok(Value::BulkString(Some(int_value.to_string().into_bytes())))
+                }
+                ValueObject::String(str_value) => {
+                    Ok(Value::BulkString(Some(str_value.as_ref().clone())))
+                }
+                _ => Err(CacheCatError::from(ProtocolError::WrongType)),
+            },
         }
     }
 }

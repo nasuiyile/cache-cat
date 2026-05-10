@@ -49,7 +49,7 @@ impl RaftNodeBuilder {
                     let result = back
                         .app
                         .raft
-                        .client_write(Request::Base(0, BaseOperation::Empty))
+                        .client_write(Request::new_base(write_clock, 0, BaseOperation::Empty))
                         .await;
                     match result {
                         Err(err) => {

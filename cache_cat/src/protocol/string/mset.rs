@@ -2,6 +2,7 @@ use crate::error::{CacheCatError, ProtocolError, StorageError};
 use crate::protocol::command::Command;
 use crate::raft::network::redis_server::RedisServer;
 use crate::raft::types::core::response_value::Value;
+use crate::raft::types::entry::request::RedisOperation::RedisSet;
 use crate::raft::types::entry::request::{RedisOperation, Request};
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
@@ -57,25 +58,15 @@ pub struct MsetCommand;
 
 #[async_trait]
 impl Command for MsetCommand {
-    async fn execute(&self, db_number: &mut u16, items: &[Value], server: &RedisServer) -> Result<Value, CacheCatError> {
+    async fn execute(
+        &self,
+        db_number: &mut u16,
+        items: &[Value],
+        server: &RedisServer,
+    ) -> Result<Value, CacheCatError> {
         let params = MsetParams::parse(items)?;
-        let write_clock = server.app.state_machine.data.kvs.get_new_write_clock();
-
-        let res = server
-            .app
-            .raft
-            .client_write(Request::new_redis(
-                write_clock,
-                *db_number,
-                RedisOperation::RedisMset(params),
-            ))
-            .await
-            .map_err(|e| StorageError::WriteFailed(e.to_string()))?;
-        match res.data {
-            Value::SimpleString(s) => Ok(Value::SimpleString(s)),
-            _ => Err(CacheCatError::from(StorageError::WriteFailed(
-                "ERR unexpected response".to_string(),
-            ))),
-        }
+        let operation = RedisOperation::RedisMset(params);
+        let value = server.app.write_redis(operation, *db_number).await?;
+        Ok(value)
     }
 }

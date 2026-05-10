@@ -104,17 +104,8 @@ impl Command for ExpireCommand {
             expires_at: params.seconds * 1000 + write_clock,
             condition: params.condition,
         };
-        let res = server
-            .app
-            .raft
-            .client_write(Request::new_base(write_clock, *db_number, Expire(req)))
-            .await
-            .map_err(|e| StorageError::WriteFailed(e.to_string()))?;
-        match res.data {
-            Value::Integer(i) => Ok(Value::Integer(i)),
-            _ => Err(CacheCatError::from(StorageError::WriteFailed(
-                "ERR unexpected response".to_string(),
-            ))),
-        }
+        let value = server.app.write_base(Expire(req), *db_number).await?;
+
+        Ok(value)
     }
 }

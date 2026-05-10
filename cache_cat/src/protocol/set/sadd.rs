@@ -55,22 +55,11 @@ impl Command for SAddCommand {
         for v in params.members {
             elements.push(Arc::new(v));
         }
-        let write_clock = server.app.state_machine.data.kvs.get_new_write_clock();
-
-        let request = Request::new_base(
-            write_clock,
-            *db_number,
-            SAdd(SAddReq {
-                key: Arc::from(params.key),
-                elements,
-            }),
-        );
-        let res = server
-            .app
-            .raft
-            .client_write(request)
-            .await
-            .map_err(|e| StorageError::WriteFailed(e.to_string()))?;
-        Ok(res.data)
+        let operation = SAdd(SAddReq {
+            key: Arc::from(params.key),
+            elements,
+        });
+        let value = server.app.write_base(operation, *db_number).await?;
+        Ok(value)
     }
 }

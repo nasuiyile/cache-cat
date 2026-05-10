@@ -17,6 +17,8 @@ pub struct Config {
     /// 在没有请求到来时 多少秒进行一次key的清理 0表示不清理
     pub cleaning_interval: u64,
 
+    pub databases: u16,
+
     #[serde(default = "default_raft_config")]
     pub raft: RaftConfig,
 }

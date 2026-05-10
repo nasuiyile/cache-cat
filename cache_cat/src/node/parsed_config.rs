@@ -3,7 +3,6 @@ use crate::error::Result;
 use crate::raft::types::endpoint::Endpoint;
 use crate::raft::types::raft_types::NodeId;
 use openraft::SnapshotPolicy;
-use serde::{Deserialize, Serialize};
 use std::cmp::max;
 
 #[derive(Clone)]
@@ -60,7 +59,7 @@ impl ParsedConfig {
             snapshot_policy,
             replication_lag_threshold: config.raft.replication_lag_threshold,
             cleaning_interval: config.cleaning_interval,
-            db_number: 16,
+            db_number: config.databases,
         })
     }
 }

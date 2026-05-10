@@ -52,27 +52,10 @@ impl Command for ExistsCommand {
         server: &RedisServer,
     ) -> Result<Value, CacheCatError> {
         let params = ExistsParams::parse(items)?;
-        let raft = &server.app.raft;
-        let linearizer = raft
-            .get_read_linearizer(LeaseRead)
-            .await
-            .map_err(|e| StorageError::ReadFailed(e.to_string()))?;
-        linearizer
-            .await_ready(&raft)
-            .await
-            .map_err(|e| StorageError::WriteFailed(e.to_string()))?;
         let mut counter = 0;
-        let _shard_lock = server.app.state_machine.data.kvs.write_lock.lock();
-        let _exclusive_lock = server.app.state_machine.data.kvs.read_lock.lock();
-        for key in &params.keys {
-            if server
-                .app
-                .state_machine
-                .data
-                .kvs
-                .get_value_with_read_clock(key, *db_number)?
-                .is_some()
-            {
+        let values = server.app.multi_read(params.keys, *db_number).await?;
+        for my_value in values {
+            if my_value.is_some() {
                 counter += 1;
             }
         }

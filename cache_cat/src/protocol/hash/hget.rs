@@ -33,24 +33,7 @@ impl Command for HGetCommand {
             Value::SimpleString(s) => s.as_bytes().to_vec(),
             _ => return Err(ProtocolError::InvalidArgument("field").into()),
         };
-
-        let raft = &server.app.raft;
-        let linearizer = raft
-            .get_read_linearizer(LeaseRead)
-            .await
-            .map_err(|e| StorageError::ReadFailed(e.to_string()))?;
-        linearizer
-            .await_ready(&raft)
-            .await
-            .map_err(|e| StorageError::WriteFailed(e.to_string()))?;
-        let read_lock = server.app.state_machine.data.kvs.read_lock.lock().await;
-        let my_value = server
-            .app
-            .state_machine
-            .data
-            .kvs
-            .get_value_with_read_clock(&key, *db_number)?;
-        drop(read_lock);
+        let my_value = server.app.read(key, *db_number).await?;
 
         match my_value {
             None => Ok(Value::BulkString(None)),

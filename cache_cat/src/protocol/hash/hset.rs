@@ -18,7 +18,6 @@ use crate::raft::types::entry::bae_operation::HSetReq;
 use crate::raft::types::entry::request::Request;
 use async_trait::async_trait;
 use std::sync::Arc;
-use std::sync::atomic::AtomicU16;
 
 /// Parsed HSET arguments
 #[derive(Debug)]
@@ -89,23 +88,11 @@ impl Command for HSetCommand {
         for v in params.fields {
             vec.push((Arc::new(v.0), Arc::new(v.1)));
         }
-        let req = HSetReq {
+        let operation = HSet(HSetReq {
             key: Arc::from(params.key),
             elements: vec,
-        };
-        let write_clock = server.app.state_machine.data.kvs.get_new_write_clock();
-
-        let res = server
-            .app
-            .raft
-            .client_write(Request::new_base(write_clock, *db_number, HSet(req)))
-            .await
-            .map_err(|e| StorageError::WriteFailed(e.to_string()))?;
-        match res.data {
-            Value::Integer(i) => Ok(Value::Integer(i)),
-            _ => Err(CacheCatError::from(StorageError::WriteFailed(
-                "ERR unexpected response".to_string(),
-            ))),
-        }
+        });
+        let value = server.app.write_base(operation, *db_number).await?;
+        Ok(value)
     }
 }

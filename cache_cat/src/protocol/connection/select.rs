@@ -17,7 +17,6 @@ impl Command for SelectCommand {
         if items.len() > 2 {
             return Err(ProtocolError::WrongArgCount("select").into());
         }
-
         let mut num: u16 = 0;
         if items.len() == 2 {
             match &items[1] {
@@ -26,13 +25,17 @@ impl Command for SelectCommand {
                     num = s.parse::<u16>().map_err(|_| ProtocolError::SyntaxError)?;
                 }
                 Value::BulkString(Some(bytes)) => {
-                    let num = std::str::from_utf8(&bytes)
+                    num = std::str::from_utf8(&bytes)
                         .map_err(|_| ProtocolError::WrongArgCount("select"))?
                         .parse::<u16>()
                         .map_err(|_| ProtocolError::WrongArgCount("select"))?;
                 }
                 _ => return Err(CacheCatError::from(ProtocolError::SyntaxError)),
             }
+        }
+        let len = server.app.state_machine.data.kvs.cache.len();
+        if num >= len as u16 {
+            return Err(ProtocolError::DbNotExist.into());
         }
         *db_number = num;
         Ok(Value::ok())

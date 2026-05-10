@@ -1,6 +1,5 @@
 #[cfg(test)]
 mod tests {
-
     use crate::raft::network::client::RpcMultiClient;
     use crate::raft::network::model::{GetReq, GetRes, PrintTestReq, PrintTestRes};
     use crate::raft::network::pipeline_client::{PipelineClient, PipelineMultiClient};
@@ -34,8 +33,9 @@ mod tests {
             let r: ClientWriteResponse<TypeConfig> = client
                 .call(
                     2,
-                    Request::Base(
-                        now_ms(),
+                    Request::new_base(
+                        0,
+                        0,
                         BaseOperation::Set(SetReq {
                             key: Arc::from(format!("test_{}", i).into_bytes()),
                             value: Arc::from(format!("test_value_{}", i).into_bytes()),
@@ -58,17 +58,6 @@ mod tests {
 
             total_write += start.elapsed();
         }
-
-        // let l_push_res: ClientWriteResponse<TypeConfig> = client
-        //     .call(
-        //         2,
-        //         Request::Base(BaseOperation::LPush(LPushReq {
-        //             key: Arc::from(format!("tes1t_{}", 1).into_bytes()),
-        //             value: Arc::from(format!("test_value_{}", 1).into_bytes()),
-        //         })),
-        //     )
-        //     .await
-        //     .expect("write call failed");
 
         let avg_write = total_write / ITERATIONS;
         println!("写入平均耗时: {} 微秒", avg_write.as_micros());
@@ -119,8 +108,9 @@ mod tests {
         let client = PipelineMultiClient::connect("127.0.0.1:5001", 3)
             .await
             .expect("connect failed");
-        let a = Request::Base(
-            now_ms(),
+        let a = Request::new_base(
+            0,
+            0,
             BaseOperation::Set(SetReq {
                 key: Arc::from(format!("test{}", 1).into_bytes()),
                 value: Arc::from(format!("test_value_{}", 1).into_bytes()),

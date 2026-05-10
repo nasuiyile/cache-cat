@@ -16,8 +16,8 @@ use crate::protocol::command::Command;
 use crate::raft::network::redis_server::RedisServer;
 use crate::raft::types::core::response_value::Value;
 use crate::raft::types::entry::bae_operation::BaseOperation::LPush;
-use crate::raft::types::entry::bae_operation::LPushReq;
-use crate::raft::types::entry::request::Request;
+use crate::raft::types::entry::bae_operation::{BaseOperation, LPushReq};
+use crate::raft::types::entry::request::{RedisOperation, Request};
 use async_trait::async_trait;
 use std::sync::Arc;
 
@@ -75,21 +75,11 @@ impl Command for LPushCommand {
         for v in params.elements {
             elements.push(Arc::new(v));
         }
-        let write_clock = server.app.state_machine.data.kvs.get_new_write_clock();
-        let request = Request::new_base(
-            write_clock,
-            *db_number,
-            LPush(LPushReq {
-                key: Arc::from(params.key),
-                elements,
-            }),
-        );
-        let res = server
-            .app
-            .raft
-            .client_write(request)
-            .await
-            .map_err(|e| StorageError::WriteFailed(e.to_string()))?;
-        Ok(res.data)
+        let operation = LPush(LPushReq {
+            key: Arc::from(params.key),
+            elements,
+        });
+        let value = server.app.write_base(operation, *db_number).await?;
+        Ok(value)
     }
 }
