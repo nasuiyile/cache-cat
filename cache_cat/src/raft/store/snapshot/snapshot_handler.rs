@@ -216,8 +216,12 @@ async fn test_dump_and_load_with_data() {
         expires_at: 0, // 永不过期
     };
 
-    cache.cache[0].insert(key1.clone(), value1.clone());
-    cache.cache[0].insert(key2.clone(), value2.clone());
+    cache.databases[0]
+        .cache
+        .insert(key1.clone(), value1.clone());
+    cache.databases[0]
+        .cache
+        .insert(key2.clone(), value2.clone());
     // let req = SetReq {
     //     key: Vec::from("xxx").into(),
     //     value: Vec::from("xxx").into(),
@@ -257,8 +261,8 @@ async fn test_dump_and_load_with_data() {
     }
 
     // 验证数据完整性
-    let loaded_value1 = new_cache.cache[0].get(&key1);
-    let loaded_value2 = new_cache.cache[0].get(&key2);
+    let loaded_value1 = new_cache.databases[0].cache.get(&key1);
+    let loaded_value2 = new_cache.databases[0].cache.get(&key2);
 
     assert!(loaded_value1.is_some(), "key1 should exist");
     assert!(loaded_value2.is_some(), "key2 should exist");

@@ -25,6 +25,7 @@ use crate::protocol::string::set::SetCommand;
 use crate::protocol::zset::zadd::ZAddCommand;
 use crate::protocol::zset::zrange::ZRangeCommand;
 use crate::raft::network::redis_server::RedisServer;
+use crate::raft::types::core::moka::moka::Database;
 use crate::raft::types::core::response_value::Value;
 use async_trait::async_trait;
 use std::collections::HashMap;
@@ -35,10 +36,25 @@ pub trait Command: Send + Sync {
     /// Execute the command with given RESP items and server context
     async fn execute(
         &self,
-        db_number: &mut u16,
+        client: &mut Client,
         items: &[Value],
         server: &RedisServer,
     ) -> Result<Value, CacheCatError>;
+}
+
+#[derive(Debug)]
+pub struct Client {
+    pub db_number: u16,
+    pub watch_flag: bool, //产生变更为true
+    pub watched_keys: HashMap<Vec<u8>, u16>,
+}
+
+impl Client {
+    pub fn watch(&mut self, keys: Vec<Vec<u8>>, db: u16) {
+        for key in keys {
+            self.watched_keys.insert(key, db);
+        }
+    }
 }
 
 /// Command factory for creating and executing commands
@@ -93,7 +109,12 @@ impl CommandFactory {
     }
 
     /// Execute a RESP command on the given server
-    pub async fn execute(&self, db_number: &mut u16, value: Value, server: &RedisServer) -> Value {
+    pub async fn execute(
+        &self,
+        client: &mut Client,
+        value: Value,
+        server: &RedisServer,
+    ) -> Value {
         match value {
             Value::Array(Some(items)) if !items.is_empty() => {
                 // Extract command name
@@ -104,7 +125,7 @@ impl CommandFactory {
                 };
                 // Find and execute command
                 match self.commands.get(&cmd_name) {
-                    Some(cmd) => match cmd.execute(db_number, &items, server).await {
+                    Some(cmd) => match cmd.execute(client, &items, server).await {
                         Ok(v) => v,
                         Err(e) => {
                             warn!("Command '{}' error: {}", cmd_name, e);

@@ -28,8 +28,8 @@ impl RaftNodeBuilder {
             let mut interval = time::interval(Duration::from_secs(duration));
             loop {
                 interval.tick().await;
-                for cache in &back.app.state_machine.data.kvs.cache {
-                    cache.run_pending_tasks()
+                for db in &back.app.state_machine.data.kvs.databases {
+                    db.cache.run_pending_tasks()
                 }
                 let write_clock = back.app.state_machine.data.kvs.get_write_clock();
                 let have_deleted = back

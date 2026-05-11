@@ -1,7 +1,7 @@
 //! Save command implementation
 
 use crate::error::{CacheCatError, ProtocolError};
-use crate::protocol::command::Command;
+use crate::protocol::command::{Client, Command};
 use crate::raft::network::redis_server::RedisServer;
 use crate::raft::types::core::response_value::Value;
 use async_trait::async_trait;
@@ -14,7 +14,7 @@ pub struct BgsaveCommand;
 impl Command for BgsaveCommand {
     async fn execute(
         &self,
-        _db_number: &mut u16,
+        client: &mut Client,
         items: &[Value],
         server: &RedisServer,
     ) -> Result<Value, CacheCatError> {

@@ -1,4 +1,5 @@
 use crate::error::ProtocolError;
+use crate::protocol::command::Client;
 use crate::raft::types::core::response_value::Value;
 use crate::raft::types::core::value_object::ValueObject;
 use crate::raft::types::entry::request::AtomicRequest;
@@ -7,24 +8,18 @@ use moka::Expiry;
 use moka::sync::Cache;
 use serde::{Deserialize, Serialize};
 use std::cmp::max;
+use std::collections::HashMap;
 use std::option::Option;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::time::{Duration, Instant};
-use tokio::sync::Mutex;
+use tokio::sync::{Mutex, RwLock};
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct MyValue {
     pub version: u32, //在快照期间每一次更新都会增加version 默认为1
     pub data: ValueObject,
     pub expires_at: u64, //绝对时间  这里 假设不同节点的时钟偏移是有界的
-}
-
-impl MyValue {
-    pub fn estimated_memory_usage(&self) -> usize {
-        // MY_VALUE_SIZE + ARC_COUNTER_SIZE + VEC_SIZE + self.data.capacity()
-        0
-    }
 }
 
 // 自定义 Expiry
@@ -71,18 +66,30 @@ impl Expiry<Arc<Vec<u8>>, MyValue> for MyExpiry {
         }
     }
 }
+#[derive(Debug)]
+pub struct Database {
+    pub cache: Cache<Arc<Vec<u8>>, MyValue>,
+    pub watched_keys: HashMap<Arc<Vec<u8>>, ()>,
+}
+impl Clone for Database {
+    fn clone(&self) -> Self {
+        Self {
+            cache: self.cache.clone(),
+            // clone 时忽略 watched_keys
+            watched_keys: HashMap::new(),
+        }
+    }
+}
 
 #[derive(Debug, Clone)]
 pub struct MyCache {
     // 在固定间隔内是否发生过删除操作
     pub have_deleted: Arc<AtomicBool>,
 
-    // 内部 Cache的Clone成本是低廉的
-    pub cache: Vec<Cache<Arc<Vec<u8>>, MyValue>>,
-
+    pub databases: Vec<Database>,
     // 这俩把锁是为了保证每条指令的原子性 多key写，多key读需要同时获取俩把锁 同时获取俩把锁时 先加write_lock
     pub write_lock: Arc<Mutex<()>>, //单key写
-    pub read_lock: Arc<Mutex<()>>,  //单key读
+    pub read_lock: Arc<RwLock<()>>, //单key读
 
     read_logic_clock: Arc<AtomicU64>,  //读逻辑时钟
     write_logic_clock: Arc<AtomicU64>, //写逻辑时钟
@@ -90,9 +97,9 @@ pub struct MyCache {
 
 impl MyCache {
     pub fn get_cache(&self, db_number: u16) -> Result<&Cache<Arc<Vec<u8>>, MyValue>, Value> {
-        match self.cache.get(db_number as usize) {
+        match self.databases.get(db_number as usize) {
             None => Err(Value::error("db not exist")),
-            Some(v) => Ok(v),
+            Some(v) => Ok(&v.cache),
         }
     }
 
@@ -144,16 +151,19 @@ impl MyCache {
                     deleted.store(true, Ordering::Release)
                 })
                 .build();
-            vec.push(cache);
+            let db = Database {
+                cache,
+                watched_keys: HashMap::new(),
+            };
+            vec.push(db);
         }
-
         Self {
-            cache: vec,
             have_deleted,
-            write_lock: Arc::new(Mutex::new(())),
-            read_lock: Arc::new(Mutex::new(())),
             read_logic_clock: Arc::new(AtomicU64::new(0)),
             write_logic_clock,
+            databases: vec,
+            write_lock: Arc::new(Default::default()),
+            read_lock: Arc::new(Default::default()),
         }
     }
 
@@ -164,11 +174,11 @@ impl MyCache {
         db_number: u16,
     ) -> Result<Option<MyValue>, ProtocolError> {
         let cache = self
-            .cache
+            .databases
             .get(db_number as usize)
             .ok_or(ProtocolError::DbNotExist)?;
         let read_clock = self.get_and_update_read_clock();
-        match cache.get(key) {
+        match cache.cache.get(key) {
             None => {
                 //用写逻辑时钟也获取不到 可能会产生写逻辑时钟在此刻推进了导致读不到数据。但这是符合预期的。
                 Ok(None)
@@ -184,8 +194,8 @@ impl MyCache {
     }
 
     pub fn invalidate_all(&self) {
-        for cache in &self.cache {
-            cache.invalidate_all();
+        for db in &self.databases {
+            db.cache.invalidate_all();
         }
     }
 }

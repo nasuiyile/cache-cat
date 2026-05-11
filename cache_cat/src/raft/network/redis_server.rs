@@ -1,9 +1,10 @@
-use crate::protocol::command::CommandFactory;
+use crate::protocol::command::{Client, CommandFactory};
 use crate::protocol::resp::Parser;
 use crate::raft::types::core::response_value::Value;
 use crate::raft::types::raft_types::CacheCatApp;
 use bytes::{Buf, BytesMut};
 use futures::{FutureExt, SinkExt, StreamExt, future::BoxFuture, stream::FuturesOrdered};
+use std::collections::HashMap;
 use std::io::Result as IoResult;
 use std::net::SocketAddr;
 use std::sync::Arc;
@@ -45,7 +46,7 @@ impl Encoder<Value> for RespCodec {
 
 impl RedisServer {
     #[inline(always)]
-    async fn process_command(&self, db_number: &mut u16, value: Value) -> Value {
+    async fn process_command(&self, db_number: &mut Client, value: Value) -> Value {
         self.cmd_factory.execute(db_number, value, &self).await
     }
 
@@ -56,13 +57,17 @@ impl RedisServer {
     ) -> IoResult<()> {
         let framed = Framed::new(stream, RespCodec);
         let (mut writer, mut reader) = framed.split();
-        let mut db_number = 0;
+        let mut client = Client {
+            db_number: 0,
+            watch_flag: false,
+            watched_keys: HashMap::new(),
+        };
         while let Some(frame_result) = reader.next().await {
             match frame_result {
                 Ok(value) => {
                     debug!("Received command from {}: {:?}", peer_addr, value);
                     // 串行执行：等待完成
-                    let resp = self.process_command(&mut db_number, value).await;
+                    let resp = self.process_command(&mut client, value).await;
                     // 再写回
                     if let Err(e) = writer.send(resp).await {
                         warn!("Failed to send response to {}: {}", peer_addr, e);
@@ -100,7 +105,11 @@ impl RedisServer {
             if peer_closed && inflight == 0 {
                 break;
             }
-            let mut db_number = 0;
+            let mut client = Client {
+                db_number: 0,
+                watch_flag: false,
+                watched_keys: HashMap::new(),
+            };
             tokio::select! {
                 // 1) 继续读命令，只要队列没满
                 frame_result = reader.next(), if !peer_closed && inflight < MAX_INFLIGHT => {
@@ -110,7 +119,7 @@ impl RedisServer {
 
                             let server = Arc::clone(&self);
                             let fut = async move {
-                                server.process_command(&mut db_number,value).await
+                                server.process_command(&mut client,value).await
                             }.boxed();
 
                             pending.push_back(fut);

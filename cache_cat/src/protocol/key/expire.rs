@@ -1,5 +1,5 @@
 use crate::error::{CacheCatError, ProtocolError};
-use crate::protocol::command::Command;
+use crate::protocol::command::{Client, Command};
 use crate::raft::network::redis_server::RedisServer;
 use crate::raft::types::core::response_value::Value;
 use crate::raft::types::entry::bae_operation::BaseOperation::Expire;
@@ -90,7 +90,7 @@ pub struct ExpireCommand;
 impl Command for ExpireCommand {
     async fn execute(
         &self,
-        db_number: &mut u16,
+        client: &mut Client,
         items: &[Value],
         server: &RedisServer,
     ) -> Result<Value, CacheCatError> {
@@ -101,7 +101,7 @@ impl Command for ExpireCommand {
             expires_at: params.seconds * 1000 + write_clock,
             condition: params.condition,
         };
-        let value = server.app.write_base(Expire(req), *db_number).await?;
+        let value = server.app.write_base(Expire(req), client.db_number).await?;
 
         Ok(value)
     }

@@ -4,7 +4,7 @@
 //! Returns the number of keys that exist from those specified as arguments.
 
 use crate::error::{CacheCatError, ProtocolError};
-use crate::protocol::command::Command;
+use crate::protocol::command::{Client, Command};
 use crate::raft::network::redis_server::RedisServer;
 use crate::raft::types::core::response_value::Value;
 use async_trait::async_trait;
@@ -45,13 +45,13 @@ pub struct ExistsCommand;
 impl Command for ExistsCommand {
     async fn execute(
         &self,
-        db_number: &mut u16,
+        client: &mut Client,
         items: &[Value],
         server: &RedisServer,
     ) -> Result<Value, CacheCatError> {
         let params = ExistsParams::parse(items)?;
         let mut counter = 0;
-        let values = server.app.multi_read(params.keys, *db_number).await?;
+        let values = server.app.multi_read(params.keys, client.db_number).await?;
         for my_value in values {
             if my_value.is_some() {
                 counter += 1;

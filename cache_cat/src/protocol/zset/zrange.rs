@@ -13,7 +13,7 @@
 //! - WRONGTYPE error if key exists but is not a sorted set
 
 use crate::error::{CacheCatError, ProtocolError};
-use crate::protocol::command::Command;
+use crate::protocol::command::{Client, Command};
 use crate::raft::network::redis_server::RedisServer;
 use crate::raft::types::core::response_value::Value;
 use crate::raft::types::core::value_object::ValueObject;
@@ -91,12 +91,12 @@ impl ZRangeCommand {
 impl Command for ZRangeCommand {
     async fn execute(
         &self,
-        db_number: &mut u16,
+        client: &mut Client,
         items: &[Value],
         server: &RedisServer,
     ) -> Result<Value, CacheCatError> {
         let params = Self::parse_args(items)?;
-        let my_value = server.app.read(params.key, *db_number).await?;
+        let my_value = server.app.read(params.key, client.db_number).await?;
         match my_value {
             None => Ok(Value::BulkString(None)),
             Some(v) => match v.data {

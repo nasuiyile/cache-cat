@@ -8,7 +8,7 @@
 //! - 0 if none of the specified keys existed
 
 use crate::error::{CacheCatError, ProtocolError};
-use crate::protocol::command::Command;
+use crate::protocol::command::{Client, Command};
 use crate::raft::network::redis_server::RedisServer;
 use crate::raft::types::core::response_value::Value;
 use crate::raft::types::entry::bae_operation::BaseOperation::Del;
@@ -60,7 +60,7 @@ pub struct DelCommand;
 impl Command for DelCommand {
     async fn execute(
         &self,
-        db_number: &mut u16,
+        client: &mut Client,
         items: &[Value],
         server: &RedisServer,
     ) -> Result<Value, CacheCatError> {
@@ -69,9 +69,9 @@ impl Command for DelCommand {
             let operation = Del(DelReq {
                 key: Arc::new(params.keys[0].clone()),
             });
-            server.app.write_base(operation, *db_number).await?
+            server.app.write_base(operation, client.db_number).await?
         } else {
-            server.app.write_redis(RedisDel(params), *db_number).await?
+            server.app.write_redis(RedisDel(params), client.db_number).await?
         };
         Ok(value)
     }

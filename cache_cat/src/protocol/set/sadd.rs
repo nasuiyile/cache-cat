@@ -1,5 +1,5 @@
 use crate::error::{CacheCatError, ProtocolError};
-use crate::protocol::command::Command;
+use crate::protocol::command::{Client, Command};
 use crate::raft::network::redis_server::RedisServer;
 use crate::raft::types::core::response_value::Value;
 use crate::raft::types::entry::bae_operation::BaseOperation::SAdd;
@@ -45,7 +45,7 @@ impl SAddCommand {
 impl Command for SAddCommand {
     async fn execute(
         &self,
-        db_number: &mut u16,
+        client: &mut Client,
         items: &[Value],
         server: &RedisServer,
     ) -> Result<Value, CacheCatError> {
@@ -58,7 +58,7 @@ impl Command for SAddCommand {
             key: Arc::from(params.key),
             elements,
         });
-        let value = server.app.write_base(operation, *db_number).await?;
+        let value = server.app.write_base(operation, client.db_number).await?;
         Ok(value)
     }
 }

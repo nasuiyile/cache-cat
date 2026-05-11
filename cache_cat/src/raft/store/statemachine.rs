@@ -188,8 +188,8 @@ impl RaftStateMachine<TypeConfig> for StateMachineStore {
             let st = &self.data.kvs;
             let response = match entry.payload {
                 EntryPayload::Blank => {
-                    for cache in &st.cache {
-                        cache.run_pending_tasks()
+                    for db in &st.databases {
+                        db.cache.run_pending_tasks()
                     }
                     Value::ok()
                 }
@@ -207,10 +207,7 @@ impl RaftStateMachine<TypeConfig> for StateMachineStore {
                     match req {
                         Request::Base(_, base) => match base {
                             BaseOperation::Empty => Value::ok(),
-                            BaseOperation::Set(set) => {
-                                st.set(set, &mut update);
-                                Value::ok()
-                            }
+                            BaseOperation::Set(set) => st.set(set, &mut update),
                             BaseOperation::Expire(expire) => st.expire(expire, &mut update),
                             BaseOperation::LPush(l_push) => st.l_push(l_push, &mut update),
                             BaseOperation::Del(del) => st.del(del, &mut update),
@@ -346,7 +343,7 @@ pub async fn redis_rename_hand(
     params: RenameParams,
     update: &mut Update<'_, '_>,
 ) -> Value {
-    let _exclusive_lock = cache.read_lock.lock().await;
+    let _exclusive_lock = cache.read_lock.write().await;
     let cached = match cache.get_cache(update.db_number) {
         Err(err) => return err,
         Ok(cache) => cache,
@@ -375,7 +372,7 @@ pub async fn redis_del_hand(
     update: &mut Update<'_, '_>,
 ) -> Value {
     let mut count = 0;
-    let _exclusive_lock = cache.read_lock.lock().await;
+    let _exclusive_lock = cache.read_lock.write().await;
     for key in params.keys {
         let del = DelReq {
             key: Arc::from(key),
@@ -394,7 +391,7 @@ pub async fn redis_mset_hand(
     params: MsetParams,
     update: &mut Update<'_, '_>,
 ) -> Value {
-    let _exclusive_lock = cache.read_lock.lock().await;
+    let _exclusive_lock = cache.read_lock.write().await;
     for pair in params.pairs {
         let set = SetReq {
             key: Arc::from(pair.0),

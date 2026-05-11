@@ -4,7 +4,7 @@
 //! Returns the message verbatim.
 
 use crate::error::{CacheCatError, ProtocolError};
-use crate::protocol::command::Command;
+use crate::protocol::command::{Client, Command};
 use crate::raft::network::redis_server::RedisServer;
 use crate::raft::types::core::response_value::Value;
 use async_trait::async_trait;
@@ -16,7 +16,7 @@ pub struct EchoCommand;
 impl Command for EchoCommand {
     async fn execute(
         &self,
-        _db_number: &mut u16,
+        client: &mut Client,
         items: &[Value],
         _server: &RedisServer,
     ) -> Result<Value, CacheCatError> {

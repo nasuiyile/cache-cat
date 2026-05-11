@@ -7,6 +7,7 @@ pub mod resp;
 pub mod set;
 pub mod string;
 pub mod zset;
+mod transaction;
 
 /// Current format version for all encoded types (stored in high 4 bits of flags)
 pub const CURRENT_VERSION: u8 = 1;

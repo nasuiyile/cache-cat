@@ -11,17 +11,17 @@ impl MyCache {
         W: AsyncWrite + Unpin + Send,
     {
         // 先写入分片数量
-        let shard_count = self.cache.len() as u64;
+        let shard_count = self.databases.len() as u64;
         writer.write_u64(shard_count).await?;
 
         // 遍历每个分片
-        for shard in &self.cache {
+        for shard in &self.databases {
             // 记录当前分片的条目数量
-            let entry_count = shard.iter().count() as u64;
+            let entry_count = shard.cache.iter().count() as u64;
             writer.write_u64(entry_count).await?;
 
             // 遍历分片中的所有条目
-            for entry in shard.iter() {
+            for entry in shard.cache.iter() {
                 let (k_arc, v) = entry;
                 let key_bytes = bincode2::serialize(&*k_arc)
                     .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
@@ -47,10 +47,14 @@ impl MyCache {
         let shard_count = reader.read_u64().await? as usize;
 
         // 确保 cache 有足够的容量
-        if self.cache.len() < shard_count {
+        if self.databases.len() < shard_count {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidData,
-                format!("Expected {} shards, but cache only has {}", shard_count, self.cache.len())
+                format!(
+                    "Expected {} shards, but cache only has {}",
+                    shard_count,
+                    self.databases.len()
+                ),
             ));
         }
 
@@ -78,7 +82,9 @@ impl MyCache {
                     .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
 
                 // 注意：这里需要根据 key 决定插入到哪个分片
-                self.cache[shard_idx].insert(Arc::new(key_vec), value);
+                self.databases[shard_idx]
+                    .cache
+                    .insert(Arc::new(key_vec), value);
             }
         }
 

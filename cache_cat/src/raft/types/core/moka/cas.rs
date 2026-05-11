@@ -24,10 +24,11 @@ impl MyCache {
     where
         C: ComputeCommand + Clone,
     {
-        let cache = match self.cache.get(update.db_number as usize) {
+        let cache = match self.databases.get(update.db_number as usize) {
             None => return Value::error("Key not found"),
-            Some(v) => v,
+            Some(v) => &v.cache,
         };
+
         let key = cmd.key();
         let mut return_value = Integer(0);
 

@@ -6,7 +6,7 @@
 //! Returns an error if the source key does not exist.
 
 use crate::error::{CacheCatError, ProtocolError};
-use crate::protocol::command::Command;
+use crate::protocol::command::{Client, Command};
 use crate::raft::network::redis_server::RedisServer;
 use crate::raft::types::core::response_value::Value;
 use crate::raft::types::entry::request::RedisOperation;
@@ -62,14 +62,14 @@ pub struct RenameCommand;
 impl Command for RenameCommand {
     async fn execute(
         &self,
-        db_number: &mut u16,
+        client: &mut Client,
         items: &[Value],
         server: &RedisServer,
     ) -> Result<Value, CacheCatError> {
         let params = RenameParams::parse(items)?;
         let value = server
             .app
-            .write_redis(RedisOperation::RedisRename(params), *db_number)
+            .write_redis(RedisOperation::RedisRename(params), client.db_number)
             .await?;
         Ok(value)
     }

@@ -1,5 +1,5 @@
 use crate::error::{CacheCatError, ProtocolError};
-use crate::protocol::command::Command;
+use crate::protocol::command::{Client, Command};
 use crate::raft::network::redis_server::RedisServer;
 use crate::raft::types::core::response_value::Value;
 use crate::raft::types::entry::request::RedisOperation::RedisSet;
@@ -188,13 +188,13 @@ pub struct SetCommand;
 impl Command for SetCommand {
     async fn execute(
         &self,
-        db_number: &mut u16,
+        client: &mut Client,
         items: &[Value],
         server: &RedisServer,
     ) -> Result<Value, CacheCatError> {
         let params = SetParams::parse(items)?;
         let get = params.get;
-        let value = server.app.write_redis(RedisSet(params), *db_number).await?;
+        let value = server.app.write_redis(RedisSet(params), client.db_number).await?;
         if get { Ok(value) } else { Ok(Value::ok()) }
     }
 }

@@ -1,5 +1,5 @@
 use crate::error::{CacheCatError, ProtocolError};
-use crate::protocol::command::Command;
+use crate::protocol::command::{Client, Command};
 use crate::raft::network::redis_server::RedisServer;
 use crate::raft::types::core::response_value::Value;
 use async_trait::async_trait;
@@ -10,7 +10,7 @@ pub struct SelectCommand;
 impl Command for SelectCommand {
     async fn execute(
         &self,
-        db_number: &mut u16,
+        client: &mut Client,
         items: &[Value],
         server: &RedisServer,
     ) -> Result<Value, CacheCatError> {
@@ -33,11 +33,11 @@ impl Command for SelectCommand {
                 _ => return Err(CacheCatError::from(ProtocolError::SyntaxError)),
             }
         }
-        let len = server.app.state_machine.data.kvs.cache.len();
+        let len = server.app.state_machine.data.kvs.databases.len();
         if num >= len as u16 {
             return Err(ProtocolError::DbNotExist.into());
         }
-        *db_number = num;
+        client.db_number = num;
         Ok(Value::ok())
     }
 }

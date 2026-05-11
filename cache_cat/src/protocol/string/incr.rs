@@ -1,5 +1,5 @@
 use crate::error::{CacheCatError, ProtocolError};
-use crate::protocol::command::Command;
+use crate::protocol::command::{Client, Command};
 use crate::raft::network::redis_server::RedisServer;
 use std::sync::Arc;
 
@@ -37,7 +37,7 @@ pub struct IncrCommand;
 impl Command for IncrCommand {
     async fn execute(
         &self,
-        db_number: &mut u16,
+        client: &mut Client,
         items: &[Value],
         server: &RedisServer,
     ) -> Result<Value, CacheCatError> {
@@ -46,7 +46,7 @@ impl Command for IncrCommand {
             key: Arc::from(params.key),
             value: 1,
         });
-        let value = server.app.write_base(operation, *db_number).await?;
+        let value = server.app.write_base(operation, client.db_number).await?;
         Ok(value)
     }
 }
