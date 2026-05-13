@@ -1,13 +1,29 @@
+use crate::protocol::key::exists::ExistsParams;
 use crate::protocol::key::expire::ExpireCondition;
 use crate::raft::types::core::moka::moka::{MyCache, MyValue, Update, UpdateType};
 use crate::raft::types::core::response_value::Value;
 use crate::raft::types::entry::bae_operation::{
     BaseOperation, DelReq, ExpireReq, InsertReq, PersistReq,
 };
+use crate::raft::types::entry::read_operation::ReadOperation;
 use crate::raft::types::entry::request::AtomicRequest;
 
 impl MyCache {
-    pub fn persist(&self, persist: PersistReq,update: &mut Update) -> Value {
+    pub fn exists(&self, exists_params: ExistsParams, db_number: u16) -> Value {
+        let cache = match self.get_cache(db_number) {
+            Err(err) => return err,
+            Ok(cache) => cache,
+        };
+        let mut count = 0;
+        for key in exists_params.keys {
+            if cache.contains_key(&key) {
+                count += 1;
+            }
+        }
+        Value::Integer(count)
+    }
+
+    pub fn persist(&self, persist: PersistReq, update: &mut Update) -> Value {
         let cache = match self.get_cache(update.db_number) {
             Err(err) => return err,
             Ok(cache) => cache,
@@ -42,7 +58,7 @@ impl MyCache {
         Value::Integer(1)
     }
 
-    pub fn expire(&self, expire_req: ExpireReq,update: &mut Update) -> Value {
+    pub fn expire(&self, expire_req: ExpireReq, update: &mut Update) -> Value {
         let cache = match self.get_cache(update.db_number) {
             Err(err) => return err,
             Ok(cache) => cache,
@@ -138,7 +154,7 @@ impl MyCache {
         }
     }
 
-    pub fn insert(&self, insert_req: InsertReq,update: &mut Update) -> Value {
+    pub fn insert(&self, insert_req: InsertReq, update: &mut Update) -> Value {
         let cache = match self.get_cache(update.db_number) {
             Err(err) => return err,
             Ok(cache) => cache,

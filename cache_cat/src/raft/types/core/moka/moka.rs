@@ -98,7 +98,7 @@ pub struct MyCache {
 impl MyCache {
     pub fn get_cache(&self, db_number: u16) -> Result<&Cache<Arc<Vec<u8>>, MyValue>, Value> {
         match self.databases.get(db_number as usize) {
-            None => Err(Value::error("db not exist")),
+            None => Err(ProtocolError::DbNotExist.into()),
             Some(v) => Ok(&v.cache),
         }
     }

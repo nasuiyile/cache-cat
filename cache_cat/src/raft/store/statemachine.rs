@@ -11,6 +11,7 @@ use crate::raft::types::core::moka::moka::{MyCache, Update, UpdateType};
 use crate::raft::types::core::response_value::Value;
 use crate::raft::types::core::value_object::ValueObject;
 use crate::raft::types::entry::bae_operation::{BaseOperation, DelReq, InsertReq, SetReq};
+use crate::raft::types::entry::read_operation::ReadOperation;
 use crate::raft::types::entry::request::{AtomicRequest, RedisOperation, Request};
 use crate::raft::types::file_operator::FileOperator;
 use crate::raft::types::raft_types::{NodeId, TypeConfig};
@@ -205,33 +206,40 @@ impl RaftStateMachine<TypeConfig> for StateMachineStore {
                     }
                     update.db_number = db_number;
                     match req {
+                        Request::Read(_, read) => match read {
+                            ReadOperation::Exists(param) => st.exists(param, update.db_number),
+                            ReadOperation::Get(param) => st.get(param, update.db_number),
+                            ReadOperation::LRange(param) => st.l_range(param, update.db_number),
+                            ReadOperation::MGet(param) => st.m_get(param, update.db_number),
+                            ReadOperation::ZRange(param) => st.z_range(param, update.db_number),
+                        },
                         Request::Base(_, base) => match base {
                             BaseOperation::Empty => Value::ok(),
-                            BaseOperation::Set(set) => st.set(set, &mut update),
-                            BaseOperation::Expire(expire) => st.expire(expire, &mut update),
-                            BaseOperation::LPush(l_push) => st.l_push(l_push, &mut update),
-                            BaseOperation::Del(del) => st.del(del, &mut update),
-                            BaseOperation::Incr(incr) => st.incr(incr, &mut update),
-                            BaseOperation::Append(append) => st.append(append, &mut update),
-                            BaseOperation::HSet(h_set) => st.h_set(h_set, &mut update),
-                            BaseOperation::HIncr(h_get) => st.h_incr(h_get, &mut update),
-                            BaseOperation::ZAdd(z_add) => st.z_add(z_add, &mut update),
-                            BaseOperation::SAdd(s_add) => st.s_add(s_add, &mut update),
-                            BaseOperation::Persist(persist) => st.persist(persist, &mut update),
-                            BaseOperation::Insert(insert) => st.insert(insert, &mut update),
+                            BaseOperation::Set(param) => st.set(param, &mut update),
+                            BaseOperation::Expire(param) => st.expire(param, &mut update),
+                            BaseOperation::LPush(param) => st.l_push(param, &mut update),
+                            BaseOperation::Del(param) => st.del(param, &mut update),
+                            BaseOperation::Incr(param) => st.incr(param, &mut update),
+                            BaseOperation::Append(param) => st.append(param, &mut update),
+                            BaseOperation::HSet(param) => st.h_set(param, &mut update),
+                            BaseOperation::HIncr(param) => st.h_incr(param, &mut update),
+                            BaseOperation::ZAdd(param) => st.z_add(param, &mut update),
+                            BaseOperation::SAdd(param) => st.s_add(param, &mut update),
+                            BaseOperation::Persist(param) => st.persist(param, &mut update),
+                            BaseOperation::Insert(param) => st.insert(param, &mut update),
                         },
                         Request::Redis(_, redis) => match redis {
-                            RedisOperation::RedisDel(del) => {
-                                redis_del_hand(st, del, &mut update).await
+                            RedisOperation::RedisDel(param) => {
+                                del_hand(st, param, &mut update).await
                             }
-                            RedisOperation::RedisSet(set) => {
-                                redis_set_hand(st, set, &mut update, write_clock).await
+                            RedisOperation::RedisSet(param) => {
+                                set_hand(st, param, &mut update, write_clock).await
                             }
-                            RedisOperation::RedisMset(mset) => {
-                                redis_mset_hand(st, mset, &mut update).await
+                            RedisOperation::RedisMset(param) => {
+                                mset_hand(st, param, &mut update).await
                             }
-                            RedisOperation::RedisRename(rename) => {
-                                redis_rename_hand(st, rename, &mut update).await
+                            RedisOperation::RedisRename(param) => {
+                                rename_hand(st, param, &mut update).await
                             }
                         },
                     }
@@ -278,41 +286,41 @@ impl RaftStateMachine<TypeConfig> for StateMachineStore {
             };
             match atomic_request.request {
                 BaseOperation::Empty => {}
-                BaseOperation::Set(set) => {
-                    self.data.kvs.set(set, &mut update);
+                BaseOperation::Set(param) => {
+                    self.data.kvs.set(param, &mut update);
                 }
-                BaseOperation::Expire(expire_req) => {
-                    self.data.kvs.expire(expire_req, &mut update);
+                BaseOperation::Expire(param) => {
+                    self.data.kvs.expire(param, &mut update);
                 }
-                BaseOperation::LPush(l_push) => {
-                    self.data.kvs.l_push(l_push, &mut update);
+                BaseOperation::LPush(param) => {
+                    self.data.kvs.l_push(param, &mut update);
                 }
-                BaseOperation::Del(del) => {
-                    self.data.kvs.del(del, &mut update);
+                BaseOperation::Del(param) => {
+                    self.data.kvs.del(param, &mut update);
                 }
-                BaseOperation::Incr(incr) => {
-                    self.data.kvs.incr(incr, &mut update);
+                BaseOperation::Incr(param) => {
+                    self.data.kvs.incr(param, &mut update);
                 }
-                BaseOperation::Append(append) => {
-                    self.data.kvs.append(append, &mut update);
+                BaseOperation::Append(param) => {
+                    self.data.kvs.append(param, &mut update);
                 }
-                BaseOperation::HSet(hset) => {
-                    self.data.kvs.h_set(hset, &mut update);
+                BaseOperation::HSet(param) => {
+                    self.data.kvs.h_set(param, &mut update);
                 }
-                BaseOperation::HIncr(h_incr) => {
-                    self.data.kvs.h_incr(h_incr, &mut update);
+                BaseOperation::HIncr(param) => {
+                    self.data.kvs.h_incr(param, &mut update);
                 }
-                BaseOperation::ZAdd(zadd) => {
-                    self.data.kvs.z_add(zadd, &mut update);
+                BaseOperation::ZAdd(param) => {
+                    self.data.kvs.z_add(param, &mut update);
                 }
-                BaseOperation::SAdd(sadd) => {
-                    self.data.kvs.s_add(sadd, &mut update);
+                BaseOperation::SAdd(param) => {
+                    self.data.kvs.s_add(param, &mut update);
                 }
-                BaseOperation::Persist(persist) => {
-                    self.data.kvs.persist(persist, &mut update);
+                BaseOperation::Persist(param) => {
+                    self.data.kvs.persist(param, &mut update);
                 }
-                BaseOperation::Insert(insert) => {
-                    self.data.kvs.insert(insert, &mut update);
+                BaseOperation::Insert(param) => {
+                    self.data.kvs.insert(param, &mut update);
                 }
             }
         }
@@ -338,7 +346,7 @@ impl RaftStateMachine<TypeConfig> for StateMachineStore {
     }
 }
 
-pub async fn redis_rename_hand(
+pub async fn rename_hand(
     cache: &MyCache,
     params: RenameParams,
     update: &mut Update<'_, '_>,
@@ -366,11 +374,7 @@ pub async fn redis_rename_hand(
     Value::ok()
 }
 
-pub async fn redis_del_hand(
-    cache: &MyCache,
-    params: DelParams,
-    update: &mut Update<'_, '_>,
-) -> Value {
+pub async fn del_hand(cache: &MyCache, params: DelParams, update: &mut Update<'_, '_>) -> Value {
     let mut count = 0;
     let _exclusive_lock = cache.read_lock.write().await;
     for key in params.keys {
@@ -386,11 +390,7 @@ pub async fn redis_del_hand(
     Value::Integer(count)
 }
 
-pub async fn redis_mset_hand(
-    cache: &MyCache,
-    params: MsetParams,
-    update: &mut Update<'_, '_>,
-) -> Value {
+pub async fn mset_hand(cache: &MyCache, params: MsetParams, update: &mut Update<'_, '_>) -> Value {
     let _exclusive_lock = cache.read_lock.write().await;
     for pair in params.pairs {
         let set = SetReq {
@@ -403,7 +403,7 @@ pub async fn redis_mset_hand(
     Value::ok()
 }
 
-pub async fn redis_set_hand(
+pub async fn set_hand(
     cache: &MyCache,
     params: SetParams,
     update: &mut Update<'_, '_>,
@@ -426,7 +426,6 @@ pub async fn redis_set_hand(
                 Err(err) => return err,
                 Ok(cache) => cache,
             };
-
             // Read existing value to get its expiration time
             match cache.get(&params.key) {
                 None => NO_EXPIRATION,

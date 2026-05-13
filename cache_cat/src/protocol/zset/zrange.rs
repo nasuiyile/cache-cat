@@ -18,21 +18,38 @@ use crate::raft::network::redis_server::RedisServer;
 use crate::raft::types::core::response_value::Value;
 use crate::raft::types::core::value_object::ValueObject;
 use async_trait::async_trait;
+use serde::{Deserialize, Serialize};
+use std::fmt::Display;
 
 /// ZRANGE command handler
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ZRangeCommand;
 
 /// Parsed arguments for ZRANGE
-struct ZRangeArgs {
-    key: Vec<u8>,
-    start: i64,
-    stop: i64,
-    with_scores: bool,
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ZRangeParams {
+    pub key: Vec<u8>,
+    pub start: i64,
+    pub stop: i64,
+    pub with_scores: bool,
+}
+
+impl Display for ZRangeParams {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "ZRangeParams {{ key: {}, start: {}, stop: {}, with_scores: {} }}",
+            String::from_utf8_lossy(&self.key),
+            self.start,
+            self.stop,
+            self.with_scores
+        )
+    }
 }
 
 impl ZRangeCommand {
     /// Parse ZRANGE arguments: ZRANGE key start stop [WITHSCORES]
-    fn parse_args(items: &[Value]) -> Result<ZRangeArgs, ProtocolError> {
+    fn parse_args(items: &[Value]) -> Result<ZRangeParams, ProtocolError> {
         if items.len() < 4 {
             return Err(ProtocolError::WrongArgCount("zrange"));
         }
@@ -78,7 +95,7 @@ impl ZRangeCommand {
             }
         }
 
-        Ok(ZRangeArgs {
+        Ok(ZRangeParams {
             key,
             start,
             stop,

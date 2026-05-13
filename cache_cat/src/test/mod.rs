@@ -1,5 +1,8 @@
+mod lua;
+
 #[cfg(test)]
 mod tests {
+    use crate::error::Error;
     use crate::raft::network::client::RpcMultiClient;
     use crate::raft::network::model::{GetReq, GetRes, PrintTestReq, PrintTestRes};
     use crate::raft::network::pipeline_client::{PipelineClient, PipelineMultiClient};

@@ -5,17 +5,29 @@ use crate::raft::types::core::response_value::Value;
 use crate::raft::types::core::value_object::ValueObject;
 use crate::utils::lrange;
 use async_trait::async_trait;
+use serde::{Deserialize, Serialize};
+use std::fmt::Display;
 
 pub struct LRangeCommand;
-
-struct RangeArgs {
-    key: Vec<u8>,
-    start: i64,
-    stop: i64,
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LRangeParams {
+    pub key: Vec<u8>,
+    pub start: i64,
+    pub stop: i64,
 }
-
+impl Display for LRangeParams {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "LRangeParams {{ key: {}, start: {}, stop: {} }}",
+            String::from_utf8_lossy(&self.key),
+            self.start,
+            self.stop
+        )
+    }
+}
 impl LRangeCommand {
-    fn parse_args(items: &[Value]) -> Result<RangeArgs, ProtocolError> {
+    fn parse_args(items: &[Value]) -> Result<LRangeParams, ProtocolError> {
         if items.len() != 4 {
             return Err(ProtocolError::WrongArgCount("lrange"));
         }
@@ -29,7 +41,7 @@ impl LRangeCommand {
         let start = parse_i64(&items[2])?;
         let stop = parse_i64(&items[3])?;
 
-        Ok(RangeArgs { key, start, stop })
+        Ok(LRangeParams { key, start, stop })
     }
 }
 
@@ -67,7 +79,7 @@ impl Command for LRangeCommand {
                     }
                     Ok(Value::Array(Some(array)))
                 }
-                _ => Err(CacheCatError::from(ProtocolError::WrongType)),
+                _ => Err(ProtocolError::WrongType.into()),
             },
         }
     }

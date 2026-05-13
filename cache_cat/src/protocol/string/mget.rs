@@ -4,11 +4,22 @@ use crate::raft::network::redis_server::RedisServer;
 use crate::raft::types::core::response_value::Value;
 use crate::raft::types::core::value_object::ValueObject;
 use async_trait::async_trait;
+use serde::{Deserialize, Serialize};
+use std::fmt::Display;
 
 /// Parameters for MGET command
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MgetParams {
     pub keys: Vec<Vec<u8>>,
+}
+impl Display for MgetParams {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "MGET")?;
+        for key in &self.keys {
+            write!(f, " {}", String::from_utf8_lossy(key))?;
+        }
+        Ok(())
+    }
 }
 
 impl MgetParams {

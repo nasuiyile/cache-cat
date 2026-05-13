@@ -1,3 +1,5 @@
+use crate::error::ProtocolError;
+use crate::protocol::zset::zrange::ZRangeParams;
 use crate::raft::types::core::moka::cas::ComputeCommand;
 use crate::raft::types::core::moka::moka::{MyCache, MyValue, Update};
 use crate::raft::types::core::response_value::Value;
@@ -37,6 +39,28 @@ impl ComputeCommand for ZAddReq {
 }
 
 impl MyCache {
+    pub fn z_range(&self, params: ZRangeParams, db_number: u16) -> Value {
+        let cache = match self.get_cache(db_number) {
+            Err(err) => return err,
+            Ok(cache) => cache,
+        };
+        match cache.get(&params.key) {
+            None => Value::BulkString(None),
+            Some(v) => match v.data {
+                ValueObject::ZSet(list) => {
+                    let res = list
+                        .lock()
+                        .zrange(params.start, params.stop, params.with_scores);
+                    let mut vec = Vec::new();
+                    for v in res {
+                        vec.push(Value::BulkString(Some(v)))
+                    }
+                    Value::Array(Some(vec))
+                }
+                _ => ProtocolError::WrongType.into(),
+            },
+        }
+    }
     pub fn z_add(&self, zadd: ZAddReq, update: &mut Update) -> Value {
         self.execute_compute(zadd, update)
     }

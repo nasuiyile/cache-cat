@@ -3,6 +3,7 @@ use crate::protocol::key::rename::RenameParams;
 use crate::protocol::string::mset::MsetParams;
 use crate::protocol::string::set::SetParams;
 use crate::raft::types::entry::bae_operation::BaseOperation;
+use crate::raft::types::entry::read_operation::ReadOperation;
 use crate::utils::merge_u64;
 use serde::{Deserialize, Serialize};
 use std::fmt;
@@ -11,6 +12,7 @@ use std::fmt;
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum Request {
     Base(u64, BaseOperation),
+    Read(u64, ReadOperation),
     Redis(u64, RedisOperation),
 }
 impl Request {
@@ -28,7 +30,7 @@ impl Request {
     pub fn set_write_clock(&mut self, high_bits: u64) {
         let masked = high_bits << 16; // 高48位移到高位
         match self {
-            Request::Base(val, _) | Request::Redis(val, _) => {
+            Request::Base(val, _) | Request::Redis(val, _) | Request::Read(val, _) => {
                 *val = (*val & 0xFFFF) | (masked & 0xFFFFFFFFFFFF0000);
             }
         }
@@ -38,6 +40,7 @@ impl Request {
         let value = match self {
             Request::Base(value, _) => value,
             Request::Redis(value, _) => value,
+            Request::Read(value, _) => value,
         };
         let high_48: u64 = value >> 16; // 取高 48 位 作为当前时间戳毫秒值
         let low_16: u16 = (value & 0xFFFF) as u16; // 取低 16 位 作为数据库编号
@@ -48,6 +51,7 @@ impl Request {
         let value = match self {
             Request::Base(value, _) => value,
             Request::Redis(value, _) => value,
+            Request::Read(value, _) => value,
         };
         (value >> 16) as u16
     }
@@ -64,6 +68,13 @@ pub enum RedisOperation {
 impl fmt::Display for Request {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Request::Read(.., op) => match op {
+                ReadOperation::Get(req) => write!(f, "Get: {}", req),
+                ReadOperation::MGet(req) => write!(f, "MGet: {}", req),
+                ReadOperation::ZRange(req) => write!(f, "ZRange: {}", req),
+                ReadOperation::Exists(req) => write!(f, "Exists: {}", req),
+                ReadOperation::LRange(req) => write!(f, "LRange: {}", req),
+            },
             Request::Base(.., op) => match op {
                 BaseOperation::Empty => write!(f, "None"),
                 BaseOperation::Set(req) => write!(f, "Set: {}", req),

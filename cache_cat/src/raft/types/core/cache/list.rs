@@ -1,3 +1,5 @@
+use crate::error::ProtocolError;
+use crate::protocol::list::lrange::{LRangeCommand, LRangeParams};
 use crate::raft::types::core::moka::cas::ComputeCommand;
 use crate::raft::types::core::moka::moka::{MyCache, MyValue, Update};
 use crate::raft::types::core::response_value::Value;
@@ -47,6 +49,28 @@ impl ComputeCommand for LPushReq {
 }
 
 impl MyCache {
+    pub fn l_range(&self, params: LRangeParams, db_number: u16) -> Value {
+        let cache = match self.get_cache(db_number) {
+            Err(err) => return err,
+            Ok(cache) => cache,
+        };
+        match cache.get(&params.key) {
+            None => Value::BulkString(None),
+            Some(v) => match v.data {
+                ValueObject::List(list) => {
+                    let vec = crate::utils::lrange(&list.lock(), params.start, params.stop);
+                    let mut array = Vec::new();
+                    for x in vec {
+                        let value = Value::BulkString(Some(x.as_ref().clone()));
+                        array.push(value);
+                    }
+                    Value::Array(Some(array))
+                }
+                _ => ProtocolError::WrongType.into(),
+            },
+        }
+    }
+
     pub fn l_push(&self, l_push: LPushReq, update: &mut Update) -> Value {
         self.execute_compute(l_push, update)
     }

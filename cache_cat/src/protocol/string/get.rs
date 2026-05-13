@@ -4,11 +4,18 @@ use crate::raft::network::redis_server::RedisServer;
 use crate::raft::types::core::response_value::Value;
 use crate::raft::types::core::value_object::ValueObject;
 use async_trait::async_trait;
+use serde::{Deserialize, Serialize};
+use std::fmt::Display;
 
 /// Parameters for GET command
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct GetParams {
     pub key: Vec<u8>,
+}
+impl Display for GetParams {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "GET {}", String::from_utf8_lossy(&self.key))
+    }
 }
 
 impl GetParams {

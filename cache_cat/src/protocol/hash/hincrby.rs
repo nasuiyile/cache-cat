@@ -65,11 +65,6 @@ impl HIncrByCommand {
         })
     }
 
-    /// Parse a byte array to i64
-    fn parse_value_to_i64(data: &[u8]) -> Result<i64, ()> {
-        let s = String::from_utf8_lossy(data);
-        s.parse::<i64>().map_err(|_| ())
-    }
 }
 
 #[async_trait]

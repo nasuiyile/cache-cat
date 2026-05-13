@@ -312,7 +312,11 @@ impl From<CacheCatError> for Value {
         }
     }
 }
-
+impl From<ProtocolError> for Value {
+    fn from(err: ProtocolError) -> Self {
+        Value::error(err.to_string())
+    }
+}
 impl From<io::Error> for Error {
     fn from(e: io::Error) -> Self {
         // IO errors are generally retryable (network issues, etc.)

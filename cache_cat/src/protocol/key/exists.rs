@@ -8,13 +8,19 @@ use crate::protocol::command::{Client, Command};
 use crate::raft::network::redis_server::RedisServer;
 use crate::raft::types::core::response_value::Value;
 use async_trait::async_trait;
+use serde::{Deserialize, Serialize};
+use std::fmt::Display;
 
 /// EXISTS command parameters
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ExistsParams {
     pub keys: Vec<Vec<u8>>,
 }
-
+impl Display for ExistsParams {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "ExistsParams {{ keys: {:?} }}", self.keys)
+    }
+}
 impl ExistsParams {
     /// Parse EXISTS command parameters from RESP array items
     /// Format: EXISTS key [key ...]

@@ -1,6 +1,10 @@
+use crate::error::{CacheCatError, ProtocolError};
+use crate::protocol::string::get::GetParams;
+use crate::protocol::string::mget::MgetParams;
 use crate::raft::types::core::moka::cas::ComputeCommand;
 use crate::raft::types::core::moka::moka::{MyCache, MyValue, Update, UpdateType};
 use crate::raft::types::core::response_value::Value;
+use crate::raft::types::core::response_value::Value::Error;
 use crate::raft::types::core::value_object::ValueObject;
 use crate::raft::types::entry::bae_operation::{AppendReq, BaseOperation, IncrReq, SetReq};
 use crate::raft::types::entry::request::AtomicRequest;
@@ -79,6 +83,48 @@ impl ComputeCommand for AppendReq {
 }
 
 impl MyCache {
+    pub fn m_get(&self, param: MgetParams, db_number: u16) -> Value {
+        let cache = match self.get_cache(db_number) {
+            Err(err) => return err,
+            Ok(cache) => cache,
+        };
+        let mut results = Vec::with_capacity(param.keys.len());
+        for key in param.keys {
+            results.push(match cache.get(&key) {
+                None => Value::BulkString(None),
+                Some(v) => match v.data {
+                    ValueObject::Int(int_value) => {
+                        Value::BulkString(Some(int_value.to_string().into_bytes()))
+                    }
+                    ValueObject::String(str_value) => {
+                        Value::BulkString(Some(str_value.as_ref().clone()))
+                    }
+                    _ => ProtocolError::WrongType.into(),
+                },
+            });
+        }
+        Value::Array(Some(results))
+    }
+
+    pub fn get(&self, param: GetParams, db_number: u16) -> Value {
+        let cache = match self.get_cache(db_number) {
+            Err(err) => return err,
+            Ok(cache) => cache,
+        };
+        match cache.get(&param.key) {
+            None => Value::BulkString(None),
+            Some(v) => match v.data {
+                ValueObject::Int(int_value) => {
+                    Value::BulkString(Some(int_value.to_string().into_bytes()))
+                }
+                ValueObject::String(str_value) => {
+                    Value::BulkString(Some(str_value.as_ref().clone()))
+                }
+                _ => ProtocolError::WrongType.into(),
+            },
+        }
+    }
+
     pub fn set(&self, set_req: SetReq, update: &mut Update) -> Value {
         let cache = match self.get_cache(update.db_number) {
             Err(err) => return err,
@@ -146,7 +192,7 @@ impl MyCache {
         }
     }
 
-    pub fn incr(&self, incr_req: IncrReq,update: &mut Update) -> Value {
+    pub fn incr(&self, incr_req: IncrReq, update: &mut Update) -> Value {
         self.execute_compute(incr_req, update)
     }
     //如果不是string就报错，如果是string就append，如果没有值就创建一个
