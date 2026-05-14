@@ -197,10 +197,10 @@ mod tests {
 
         assert_eq!(values.len(), 2);
         assert!(matches!(values[0], Value::BulkString(None)));
-        let Value::BulkString(Some(message)) = &values[1] else {
-            panic!("expected error message, got {:?}", values[1]);
+        let Value::Error(message) = &values[1] else {
+            panic!("expected captured error, got {:?}", values[1]);
         };
-        assert!(String::from_utf8_lossy(message).contains("wrong number of arguments"));
+        assert!(message.contains("wrong number of arguments"));
     }
 
     #[test]
