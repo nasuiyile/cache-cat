@@ -9,6 +9,7 @@ use mlua::{Lua, Value as LuaValue, Variadic};
 use lru::LruCache;
 use parking_lot::Mutex;
 use std::num::NonZeroUsize;
+use std::sync::Arc;
 // 使用 lru crate
 
 /// LRU 缓存容量
@@ -69,29 +70,25 @@ impl LuaEnv {
         let func = self.get_or_compile_script(script)?;
 
         let res = self.lua.scope(|scope| -> mlua::Result<LuaValue> {
-            // 1. 创建临时 redis.call 闭包（每次执行时捕获 cache、update）
-            let redis_call = scope.create_function_mut(|_lua_ctx, args: Variadic<String>| {
-                if args.is_empty() {
-                    return Err(LuaError::external(
-                        "redis.call requires at least one argument",
-                    ));
-                }
-                let mut vec = Vec::new();
-                for param in args {
-                    vec.push(Value::SimpleString(param));
-                }
+            let update = Arc::new(Mutex::new(update));
 
-                let operation = self
-                    .raft_command
-                    .parse_request(&vec)
-                    .map_err(|e| LuaError::external(e))?;
-                let value = do_request(cache, operation, update);
-                value.into_lua_value(&self.lua)
+            // 1. 创建临时 redis.call 闭包（每次执行时捕获 cache、update）
+            let call_update = Arc::clone(&update);
+            let redis_call = scope.create_function_mut(|_lua_ctx, args: Variadic<String>| {
+                let mut update = call_update.lock();
+                self.redis_command_to_lua(cache, args, &mut **update, true)
+            })?;
+
+            let pcall_update = Arc::clone(&update);
+            let redis_pcall = scope.create_function_mut(|_lua_ctx, args: Variadic<String>| {
+                let mut update = pcall_update.lock();
+                self.redis_command_to_lua(cache, args, &mut **update, false)
             })?;
 
             // 2. 注入 redis 全局表
             let redis_table = self.lua.create_table()?;
             redis_table.set("call", redis_call)?;
+            redis_table.set("pcall", redis_pcall)?;
             self.lua.globals().set("redis", redis_table)?;
 
             let keys_table = self.lua.create_table()?;
@@ -115,6 +112,41 @@ impl LuaEnv {
         Value::from_lua(res?, &self.lua)
     }
 
+    fn redis_command_to_lua(
+        &self,
+        cache: &MyCache,
+        args: Variadic<String>,
+        update: &mut Update<'_>,
+        raise_error: bool,
+    ) -> mlua::Result<LuaValue> {
+        let value = self.exec_redis_command(cache, args, update);
+        match value {
+            Ok(Value::Error(err)) if raise_error => Err(LuaError::RuntimeError(err)),
+            Ok(value) => value.into_lua_value(&self.lua),
+            Err(err) if raise_error => Err(LuaError::RuntimeError(err.to_string())),
+            Err(err) => Value::Error(err.to_string()).into_lua_value(&self.lua),
+        }
+    }
+
+    fn exec_redis_command(
+        &self,
+        cache: &MyCache,
+        args: Variadic<String>,
+        update: &mut Update<'_>,
+    ) -> Result<Value, ProtocolError> {
+        if args.is_empty() {
+            return Err(ProtocolError::WrongArgCount("redis.call"));
+        }
+
+        let vec = args
+            .into_iter()
+            .map(Value::SimpleString)
+            .collect::<Vec<_>>();
+
+        let operation = self.raft_command.parse_request(&vec)?;
+        Ok(do_request(cache, operation, update))
+    }
+
     /// 从缓存获取已编译函数，若没有则编译并存入缓存（LRU 淘汰）
     fn get_or_compile_script(&self, script: &str) -> Result<mlua::Function, ProtocolError> {
         if let Some(func) = self.script_cache.lock().get(script) {
@@ -132,5 +164,50 @@ impl LuaEnv {
             .put(script.to_owned(), func.clone());
 
         Ok(func)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::raft::types::core::moka::moka::UpdateType;
+
+    fn exec_script(script: &str) -> Result<Value, ProtocolError> {
+        let cache = MyCache::new(1)?;
+        let lua_env = LuaEnv::new()?;
+        let mut update_type = UpdateType::None;
+        let mut update = Update {
+            db_number: 0,
+            write_clock: cache.get_new_write_clock(),
+            update_type: &mut update_type,
+        };
+
+        lua_env.exec_lua(&cache, script, &[], &[], &mut update)
+    }
+
+    #[test]
+    fn lua_pcall_catches_redis_call_errors() {
+        let result = exec_script("return {pcall(redis.call, 'GET')}").unwrap();
+
+        let Value::Array(Some(values)) = result else {
+            panic!("expected pcall return values, got {result:?}");
+        };
+
+        assert_eq!(values.len(), 2);
+        assert!(matches!(values[0], Value::BulkString(None)));
+        let Value::BulkString(Some(message)) = &values[1] else {
+            panic!("expected error message, got {:?}", values[1]);
+        };
+        assert!(String::from_utf8_lossy(message).contains("wrong number of arguments"));
+    }
+
+    #[test]
+    fn redis_pcall_returns_error_reply() {
+        let result = exec_script("return redis.pcall('GET')").unwrap();
+
+        let Value::Error(message) = result else {
+            panic!("expected redis error reply, got {result:?}");
+        };
+        assert!(message.contains("wrong number of arguments"));
     }
 }
