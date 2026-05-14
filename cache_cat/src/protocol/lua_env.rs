@@ -74,16 +74,18 @@ impl LuaEnv {
 
             // 1. 创建临时 redis.call 闭包（每次执行时捕获 cache、update）
             let call_update = Arc::clone(&update);
-            let redis_call = scope.create_function_mut(|_lua_ctx, args: Variadic<String>| {
-                let mut update = call_update.lock();
-                self.redis_command_to_lua(cache, args, &mut **update, true)
-            })?;
+            let redis_call =
+                scope.create_function_mut(move |_lua_ctx, args: Variadic<String>| {
+                    let mut update = call_update.lock();
+                    self.redis_command_to_lua(cache, args, &mut **update, true)
+                })?;
 
             let pcall_update = Arc::clone(&update);
-            let redis_pcall = scope.create_function_mut(|_lua_ctx, args: Variadic<String>| {
-                let mut update = pcall_update.lock();
-                self.redis_command_to_lua(cache, args, &mut **update, false)
-            })?;
+            let redis_pcall =
+                scope.create_function_mut(move |_lua_ctx, args: Variadic<String>| {
+                    let mut update = pcall_update.lock();
+                    self.redis_command_to_lua(cache, args, &mut **update, false)
+                })?;
 
             // 2. 注入 redis 全局表
             let redis_table = self.lua.create_table()?;
