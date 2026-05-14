@@ -7,9 +7,10 @@
 
 use crate::error::{CacheCatError, ProtocolError};
 use crate::protocol::command::{Client, Command};
+use crate::protocol::raft_command::RaftCommand;
 use crate::raft::network::redis_server::RedisServer;
 use crate::raft::types::core::response_value::Value;
-use crate::raft::types::entry::request::RedisOperation;
+use crate::raft::types::entry::request::{Operation, RedisOperation};
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use std::fmt::{Display, Formatter};
@@ -58,6 +59,13 @@ impl Display for RenameParams {
 /// RENAME command executor
 pub struct RenameCommand;
 
+impl RaftCommand for RenameCommand {
+    fn raft_request(&self, items: &[Value]) -> Result<Operation, ProtocolError> {
+        Ok(Operation::Redis(RedisOperation::RedisRename(
+            RenameParams::parse(items)?,
+        )))
+    }
+}
 #[async_trait]
 impl Command for RenameCommand {
     async fn execute(
@@ -66,11 +74,12 @@ impl Command for RenameCommand {
         items: &[Value],
         server: &RedisServer,
     ) -> Result<Value, CacheCatError> {
-        let params = RenameParams::parse(items)?;
-        let value = server
-            .app
-            .write_redis(RedisOperation::RedisRename(params), client.db_number)
-            .await?;
+        if let Some(vec) = client.transaction_queue.as_mut() {
+            vec.push(self.raft_request(items)?);
+            return Ok(Value::SimpleString(String::from("QUEUED")));
+        }
+        let operation = self.raft_request(items)?;
+        let value = server.app.write(operation, client.db_number).await?;
         Ok(value)
     }
 }

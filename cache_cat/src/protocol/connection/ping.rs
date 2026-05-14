@@ -16,7 +16,7 @@ pub struct PingCommand;
 impl Command for PingCommand {
     async fn execute(
         &self,
-        client: &mut Client,
+        _client: &mut Client,
         items: &[Value],
         _server: &RedisServer,
     ) -> Result<Value, CacheCatError> {

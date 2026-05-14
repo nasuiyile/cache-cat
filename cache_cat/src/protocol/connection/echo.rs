@@ -16,7 +16,7 @@ pub struct EchoCommand;
 impl Command for EchoCommand {
     async fn execute(
         &self,
-        client: &mut Client,
+        _client: &mut Client,
         items: &[Value],
         _server: &RedisServer,
     ) -> Result<Value, CacheCatError> {

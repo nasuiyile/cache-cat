@@ -4,7 +4,7 @@ use crate::node::node::RaftNode;
 
 use crate::node::parsed_config::ParsedConfig;
 use crate::raft::types::entry::bae_operation::BaseOperation;
-use crate::raft::types::entry::request::Request;
+use crate::raft::types::entry::request::{Operation, Request};
 use crate::utils::times::time_gap;
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
@@ -45,7 +45,11 @@ impl RaftNodeBuilder {
                     let result = back
                         .app
                         .raft
-                        .client_write(Request::new_base(write_clock, 0, BaseOperation::Empty))
+                        .client_write(Request::new(
+                            write_clock,
+                            0,
+                            Operation::Base(BaseOperation::Empty),
+                        ))
                         .await;
                     match result {
                         Err(err) => {

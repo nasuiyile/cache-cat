@@ -1,5 +1,5 @@
 use crate::error::ProtocolError;
-use crate::protocol::list::lrange::{LRangeCommand, LRangeParams};
+use crate::protocol::list::lrange::LRangeParams;
 use crate::raft::types::core::moka::cas::ComputeCommand;
 use crate::raft::types::core::moka::moka::{MyCache, MyValue, Update};
 use crate::raft::types::core::response_value::Value;

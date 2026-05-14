@@ -5,6 +5,7 @@
 
 use crate::error::ErrorKind::{Internal, InvalidConfig, Protocol, Retryable, Storage};
 use crate::raft::types::core::response_value::Value;
+use mlua::prelude::LuaError;
 use std::error::Error as StdError;
 use std::fmt;
 use std::fmt::Display;
@@ -159,6 +160,14 @@ pub enum StorageError {
 /// Protocol-related errors (RESP parsing, command validation)
 #[derive(thiserror::Error, Clone, Debug, PartialEq, Eq)]
 pub enum ProtocolError {
+    /// Lua script execution error
+    #[error("ERR Error running script (call to {0}): {1}")]
+    ScriptError(&'static str, String),
+
+    /// Lua script compilation error
+    #[error("ERR Error compiling script: {0}")]
+    ScriptCompileError(String),
+
     /// Invalid RESP format
     #[error("invalid RESP format: {0}")]
     InvalidFormat(String),
@@ -198,6 +207,25 @@ pub enum ProtocolError {
     /// Custom error with full Redis error message
     #[error("{0}")]
     Custom(&'static str),
+}
+impl From<LuaError> for ProtocolError {
+    fn from(err: LuaError) -> Self {
+        match err {
+            LuaError::SyntaxError { message, .. } => ProtocolError::ScriptCompileError(message),
+            LuaError::RuntimeError(message) => ProtocolError::ScriptError("f_script", message),
+            LuaError::MemoryError(message) => ProtocolError::ScriptError("unknown", message),
+            // ... 其他 Lua 错误类型
+            _ => ProtocolError::ScriptError("unknown", err.to_string().replace('\n', " ")),
+        }
+    }
+}
+
+// 这样 Error 的转换链就自动工作了
+impl From<LuaError> for Error {
+    fn from(err: LuaError) -> Self {
+        // LuaError -> ProtocolError -> ErrorKind -> Error
+        ProtocolError::from(err).into()
+    }
 }
 impl From<ProtocolError> for Error {
     fn from(err: ProtocolError) -> Self {

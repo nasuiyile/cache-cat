@@ -59,8 +59,7 @@ impl RedisServer {
         let (mut writer, mut reader) = framed.split();
         let mut client = Client {
             db_number: 0,
-            watch_flag: false,
-            watched_keys: HashMap::new(),
+            transaction_queue: None,
         };
         while let Some(frame_result) = reader.next().await {
             match frame_result {
@@ -107,8 +106,7 @@ impl RedisServer {
             }
             let mut client = Client {
                 db_number: 0,
-                watch_flag: false,
-                watched_keys: HashMap::new(),
+                transaction_queue: None,
             };
             tokio::select! {
                 // 1) 继续读命令，只要队列没满

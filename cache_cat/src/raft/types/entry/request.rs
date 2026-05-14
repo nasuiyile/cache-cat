@@ -1,5 +1,6 @@
 use crate::protocol::key::del::DelParams;
 use crate::protocol::key::rename::RenameParams;
+use crate::protocol::lua::eval::EvalParams;
 use crate::protocol::string::mset::MsetParams;
 use crate::protocol::string::set::SetParams;
 use crate::raft::types::entry::bae_operation::BaseOperation;
@@ -7,53 +8,46 @@ use crate::raft::types::entry::read_operation::ReadOperation;
 use crate::utils::merge_u64;
 use serde::{Deserialize, Serialize};
 use std::fmt;
+use crate::protocol::transaction::exec::ExecParams;
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum Operation {
+    Base(BaseOperation),
+    Read(ReadOperation),
+    Redis(RedisOperation),
+}
 
 /// A request to the KV store.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub enum Request {
-    Base(u64, BaseOperation),
-    Read(u64, ReadOperation),
-    Redis(u64, RedisOperation),
+pub struct Request {
+    pub number: u64,
+    pub operation: Operation,
 }
 impl Request {
     #[inline]
-    pub fn new_base(write_clock: u64, db_number: u16, request: BaseOperation) -> Self {
-        Request::Base(merge_u64(write_clock, db_number), request)
-    }
-
-    #[inline]
-    pub fn new_redis(write_clock: u64, db_number: u16, request: RedisOperation) -> Self {
-        Request::Redis(merge_u64(write_clock, db_number), request)
+    pub fn new(write_clock: u64, db_number: u16, operation: Operation) -> Self {
+        Request {
+            number: merge_u64(write_clock, db_number),
+            operation,
+        }
     }
 
     #[inline]
     pub fn set_write_clock(&mut self, high_bits: u64) {
         let masked = high_bits << 16; // 高48位移到高位
-        match self {
-            Request::Base(val, _) | Request::Redis(val, _) | Request::Read(val, _) => {
-                *val = (*val & 0xFFFF) | (masked & 0xFFFFFFFFFFFF0000);
-            }
-        }
+        self.number = (self.number & 0xFFFF) | (masked & 0xFFFFFFFFFFFF0000);
     }
+
     #[inline]
     pub fn split_u64(&self) -> (u64, u16) {
-        let value = match self {
-            Request::Base(value, _) => value,
-            Request::Redis(value, _) => value,
-            Request::Read(value, _) => value,
-        };
-        let high_48: u64 = value >> 16; // 取高 48 位 作为当前时间戳毫秒值
-        let low_16: u16 = (value & 0xFFFF) as u16; // 取低 16 位 作为数据库编号
+        let high_48: u64 = self.number >> 16; // 取高 48 位作为当前时间戳毫秒值
+        let low_16: u16 = (self.number & 0xFFFF) as u16; // 取低 16 位作为数据库编号
         (high_48, low_16)
     }
+
     #[inline]
     pub fn get_db_number(&self) -> u16 {
-        let value = match self {
-            Request::Base(value, _) => value,
-            Request::Redis(value, _) => value,
-            Request::Read(value, _) => value,
-        };
-        (value >> 16) as u16
+        (self.number >> 16) as u16
     }
 }
 
@@ -63,19 +57,22 @@ pub enum RedisOperation {
     RedisMset(MsetParams),
     RedisDel(DelParams),
     RedisRename(RenameParams),
+    RedisEval(EvalParams),
+    RedisExec(ExecParams),
 }
 
 impl fmt::Display for Request {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Request::Read(.., op) => match op {
+        match &self.operation {
+            Operation::Read(op) => match op {
                 ReadOperation::Get(req) => write!(f, "Get: {}", req),
                 ReadOperation::MGet(req) => write!(f, "MGet: {}", req),
                 ReadOperation::ZRange(req) => write!(f, "ZRange: {}", req),
                 ReadOperation::Exists(req) => write!(f, "Exists: {}", req),
                 ReadOperation::LRange(req) => write!(f, "LRange: {}", req),
+                ReadOperation::HGet(req) => write!(f, "HGet: {}", req),
             },
-            Request::Base(.., op) => match op {
+            Operation::Base(op) => match op {
                 BaseOperation::Empty => write!(f, "None"),
                 BaseOperation::Set(req) => write!(f, "Set: {}", req),
                 BaseOperation::LPush(req) => write!(f, "LPush: {}", req),
@@ -90,11 +87,13 @@ impl fmt::Display for Request {
                 BaseOperation::Persist(req) => write!(f, "Persist: {}", req),
                 BaseOperation::Insert(insert) => write!(f, "Insert: {}", insert),
             },
-            Request::Redis(.., redis) => match redis {
+            Operation::Redis(op) => match op {
                 RedisOperation::RedisSet(req) => write!(f, "RedisSet: {}", req),
                 RedisOperation::RedisMset(req) => write!(f, "RedisMset: {}", req),
                 RedisOperation::RedisDel(req) => write!(f, "RedisDel: {}", req),
                 RedisOperation::RedisRename(req) => write!(f, "RedisRename: {}", req),
+                RedisOperation::RedisEval(req) => write!(f, "RedisEval: {}", req),
+                RedisOperation::RedisExec(req) => write!(f, "RedisExec: {}", req),
             },
         }
     }

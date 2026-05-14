@@ -1,14 +1,17 @@
 pub mod command;
 pub mod connection;
-mod hash;
+pub mod hash;
 pub mod key;
 pub mod list;
+pub mod lua;
 pub mod resp;
 pub mod set;
 pub mod string;
+pub mod transaction;
 pub mod zset;
-mod transaction;
-mod lua;
+
+pub mod lua_env;
+mod raft_command;
 
 /// Current format version for all encoded types (stored in high 4 bits of flags)
 pub const CURRENT_VERSION: u8 = 1;

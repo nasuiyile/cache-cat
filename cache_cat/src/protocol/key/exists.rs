@@ -5,8 +5,11 @@
 
 use crate::error::{CacheCatError, ProtocolError};
 use crate::protocol::command::{Client, Command};
+use crate::protocol::raft_command::RaftCommand;
 use crate::raft::network::redis_server::RedisServer;
 use crate::raft::types::core::response_value::Value;
+use crate::raft::types::entry::read_operation::ReadOperation;
+use crate::raft::types::entry::request::Operation;
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use std::fmt::Display;
@@ -44,6 +47,13 @@ impl ExistsParams {
     }
 }
 
+impl RaftCommand for ExistsCommand {
+    fn raft_request(&self, items: &[Value]) -> Result<Operation, ProtocolError> {
+        let params = ExistsParams::parse(items)?;
+        Ok(Operation::Read(ReadOperation::Exists(params)))
+    }
+}
+
 /// EXISTS command executor
 pub struct ExistsCommand;
 
@@ -55,6 +65,10 @@ impl Command for ExistsCommand {
         items: &[Value],
         server: &RedisServer,
     ) -> Result<Value, CacheCatError> {
+        if let Some(vec) = client.transaction_queue.as_mut() {
+            vec.push(self.raft_request(items)?);
+            return Ok(Value::SimpleString(String::from("QUEUED")));
+        }
         let params = ExistsParams::parse(items)?;
         let mut counter = 0;
         let values = server.app.multi_read(params.keys, client.db_number).await?;

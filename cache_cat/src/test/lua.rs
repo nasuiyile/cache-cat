@@ -100,7 +100,7 @@ pub mod lua {
             Ok(Value::String(lua.create_string("OK")?))
         }
 
-        fn handle_del(&self, lua: &Lua, args: &[String]) -> mlua::Result<Value> {
+        fn handle_del(&self, _lua: &Lua, args: &[String]) -> mlua::Result<Value> {
             let mut count = 0i64;
             for key in &args[1..] {
                 self.cache.invalidate(key);
@@ -109,7 +109,7 @@ pub mod lua {
             Ok(Value::Integer(count))
         }
 
-        fn handle_exists(&self, lua: &Lua, args: &[String]) -> mlua::Result<Value> {
+        fn handle_exists(&self, _lua: &Lua, args: &[String]) -> mlua::Result<Value> {
             let mut count = 0i64;
             for key in &args[1..] {
                 if self.cache.contains_key(key) {

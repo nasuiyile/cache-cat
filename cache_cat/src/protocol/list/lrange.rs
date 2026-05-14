@@ -7,6 +7,9 @@ use crate::utils::lrange;
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use std::fmt::Display;
+use crate::protocol::raft_command::RaftCommand;
+use crate::raft::types::entry::read_operation::ReadOperation;
+use crate::raft::types::entry::request::Operation;
 
 pub struct LRangeCommand;
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -57,6 +60,14 @@ fn parse_i64(value: &Value) -> Result<i64, ProtocolError> {
     }
 }
 
+impl RaftCommand for LRangeCommand {
+    fn raft_request(&self, items: &[Value]) -> Result<Operation, ProtocolError> {
+        let params = Self::parse_args(items)?;
+        Ok(Operation::Read(ReadOperation::LRange(params)))
+    }
+}
+
+
 #[async_trait]
 impl Command for LRangeCommand {
     async fn execute(
@@ -65,6 +76,10 @@ impl Command for LRangeCommand {
         items: &[Value],
         server: &RedisServer,
     ) -> Result<Value, CacheCatError> {
+        if let Some(vec) = client.transaction_queue.as_mut() {
+            vec.push(self.raft_request(items)?);
+            return Ok(Value::SimpleString(String::from("QUEUED")));
+        }
         let params = Self::parse_args(items)?;
         let my_value = server.app.read(params.key, client.db_number).await?;
         match my_value {

@@ -1,9 +1,11 @@
 use crate::error::{CacheCatError, ProtocolError};
 use crate::protocol::command::{Client, Command};
+use crate::protocol::raft_command::RaftCommand;
 use crate::raft::network::redis_server::RedisServer;
 use crate::raft::types::core::response_value::Value;
 use crate::raft::types::entry::bae_operation::BaseOperation::ZAdd;
 use crate::raft::types::entry::bae_operation::ZAddReq;
+use crate::raft::types::entry::request::Operation;
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use std::fmt::Display;
@@ -155,6 +157,24 @@ impl ZAddCommand {
         s.parse::<f64>().ok()
     }
 }
+impl RaftCommand for ZAddCommand {
+    fn raft_request(&self, items: &[Value]) -> Result<Operation, ProtocolError> {
+        let params = Self::parse_params(items)?;
+        let mut elements = Vec::new();
+        for v in params.members {
+            elements.push((Arc::new(v.0), v.1));
+        }
+        Ok(Operation::Base(ZAdd(ZAddReq {
+            key: Arc::from(params.key),
+            nx: params.nx,
+            xx: params.xx,
+            gt: params.gt,
+            lt: params.lt,
+            ch: params.ch,
+            members: elements,
+        })))
+    }
+}
 
 #[async_trait]
 impl Command for ZAddCommand {
@@ -164,21 +184,9 @@ impl Command for ZAddCommand {
         items: &[Value],
         server: &RedisServer,
     ) -> Result<Value, CacheCatError> {
-        let params = Self::parse_params(items)?;
-        let mut elements = Vec::new();
-        for v in params.members {
-            elements.push((Arc::new(v.0), v.1));
-        }
-        let operation = ZAdd(ZAddReq {
-            key: Arc::from(params.key),
-            nx: params.nx,
-            xx: params.xx,
-            gt: params.gt,
-            lt: params.lt,
-            ch: params.ch,
-            members: elements,
-        });
-        let value = server.app.write_base(operation, client.db_number).await?;
+        // Parse arguments
+        let operation = self.raft_request(items)?;
+        let value = server.app.write(operation, client.db_number).await?;
         Ok(value)
     }
 }

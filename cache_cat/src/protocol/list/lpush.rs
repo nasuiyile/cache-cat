@@ -13,10 +13,12 @@
 
 use crate::error::{CacheCatError, ProtocolError};
 use crate::protocol::command::{Client, Command};
+use crate::protocol::raft_command::RaftCommand;
 use crate::raft::network::redis_server::RedisServer;
 use crate::raft::types::core::response_value::Value;
 use crate::raft::types::entry::bae_operation::BaseOperation::LPush;
 use crate::raft::types::entry::bae_operation::LPushReq;
+use crate::raft::types::entry::request::Operation;
 use async_trait::async_trait;
 use std::sync::Arc;
 
@@ -60,6 +62,20 @@ struct LPushArgs {
     elements: Vec<Vec<u8>>,
 }
 
+impl RaftCommand for LPushCommand {
+    fn raft_request(&self, items: &[Value]) -> Result<Operation, ProtocolError> {
+        let params = Self::parse_args(items)?;
+        let mut elements = Vec::new();
+        for v in params.elements {
+            elements.push(Arc::new(v));
+        }
+        Ok(Operation::Base(LPush(LPushReq {
+            key: Arc::from(params.key),
+            elements,
+        })))
+    }
+}
+
 #[async_trait]
 impl Command for LPushCommand {
     async fn execute(
@@ -68,17 +84,13 @@ impl Command for LPushCommand {
         items: &[Value],
         server: &RedisServer,
     ) -> Result<Value, CacheCatError> {
-        // Parse arguments
-        let params = Self::parse_args(items)?;
-        let mut elements = Vec::new();
-        for v in params.elements {
-            elements.push(Arc::new(v));
+        if let Some(vec) = client.transaction_queue.as_mut() {
+            vec.push(self.raft_request(items)?);
+            return Ok(Value::SimpleString(String::from("QUEUED")));
         }
-        let operation = LPush(LPushReq {
-            key: Arc::from(params.key),
-            elements,
-        });
-        let value = server.app.write_base(operation, client.db_number).await?;
+        // Parse arguments
+        let operation = self.raft_request(items)?;
+        let value = server.app.write(operation, client.db_number).await?;
         Ok(value)
     }
 }

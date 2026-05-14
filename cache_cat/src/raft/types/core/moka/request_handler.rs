@@ -1,0 +1,51 @@
+use crate::raft::types::core::moka::moka::{MyCache, Update};
+use crate::raft::types::core::response_value::Value;
+use crate::raft::types::entry::bae_operation::BaseOperation;
+use crate::raft::types::entry::read_operation::ReadOperation;
+use crate::raft::types::entry::request::{Operation, RedisOperation};
+
+#[inline]
+pub fn do_request(my_cache: &MyCache, operation: Operation, update: &mut Update) -> Value {
+    match operation {
+        Operation::Read(read) => match read {
+            ReadOperation::Exists(param) => my_cache.exists(param, update.db_number),
+            ReadOperation::Get(param) => my_cache.get(param, update.db_number),
+            ReadOperation::LRange(param) => my_cache.l_range(param, update.db_number),
+            ReadOperation::MGet(param) => my_cache.m_get(param, update.db_number),
+            ReadOperation::ZRange(param) => my_cache.z_range(param, update.db_number),
+            ReadOperation::HGet(param) => my_cache.h_get(param, update.db_number),
+        },
+        Operation::Base(base) => match base {
+            BaseOperation::Empty => Value::ok(),
+            BaseOperation::Set(param) => my_cache.set(param, update),
+            BaseOperation::Expire(param) => my_cache.expire(param, update),
+            BaseOperation::LPush(param) => my_cache.l_push(param, update),
+            BaseOperation::Del(param) => my_cache.del(param, update),
+            BaseOperation::Incr(param) => my_cache.incr(param, update),
+            BaseOperation::Append(param) => my_cache.append(param, update),
+            BaseOperation::HSet(param) => my_cache.h_set(param, update),
+            BaseOperation::HIncr(param) => my_cache.h_incr(param, update),
+            BaseOperation::ZAdd(param) => my_cache.z_add(param, update),
+            BaseOperation::SAdd(param) => my_cache.s_add(param, update),
+            BaseOperation::Persist(param) => my_cache.persist(param, update),
+            BaseOperation::Insert(param) => my_cache.insert(param, update),
+        },
+        Operation::Redis(redis) => match redis {
+            RedisOperation::RedisDel(param) => my_cache.redis_del(param, update),
+            RedisOperation::RedisSet(param) => my_cache.redis_set(param, update),
+            RedisOperation::RedisMset(param) => my_cache.redis_mset(param, update),
+            RedisOperation::RedisRename(param) => my_cache.redis_rename(param, update),
+            RedisOperation::RedisEval(param) => my_cache
+                .lua_env
+                .exec_lua(my_cache, &*param.script, &param.keys, &param.args, update)
+                .unwrap_or_else(|err| err.into()),
+            RedisOperation::RedisExec(param) => {
+                let mut vec = Vec::new();
+                for operation in param.operations {
+                    vec.push(do_request(my_cache, operation, update));
+                }
+                Value::Array(Some(vec))
+            }
+        },
+    }
+}

@@ -9,10 +9,12 @@
 
 use crate::error::{CacheCatError, ProtocolError};
 use crate::protocol::command::{Client, Command};
+use crate::protocol::raft_command::RaftCommand;
 use crate::raft::network::redis_server::RedisServer;
 use crate::raft::types::core::response_value::Value;
 use crate::raft::types::entry::bae_operation::BaseOperation::Del;
 use crate::raft::types::entry::bae_operation::DelReq;
+use crate::raft::types::entry::request::Operation;
 use crate::raft::types::entry::request::RedisOperation::RedisDel;
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
@@ -56,6 +58,20 @@ impl Display for DelParams {
 /// DEL command executor
 pub struct DelCommand;
 
+impl RaftCommand for DelCommand {
+    fn raft_request(&self, items: &[Value]) -> Result<Operation, ProtocolError> {
+        let params = DelParams::parse(items)?;
+        let operation = if params.keys.len() == 1 {
+            Operation::Base(Del(DelReq {
+                key: Arc::new(params.keys[0].clone()),
+            }))
+        } else {
+            Operation::Redis(RedisDel(params))
+        };
+        Ok(operation)
+    }
+}
+
 #[async_trait]
 impl Command for DelCommand {
     async fn execute(
@@ -64,15 +80,13 @@ impl Command for DelCommand {
         items: &[Value],
         server: &RedisServer,
     ) -> Result<Value, CacheCatError> {
-        let params = DelParams::parse(items)?;
-        let value = if params.keys.len() == 1 {
-            let operation = Del(DelReq {
-                key: Arc::new(params.keys[0].clone()),
-            });
-            server.app.write_base(operation, client.db_number).await?
-        } else {
-            server.app.write_redis(RedisDel(params), client.db_number).await?
-        };
+        if let Some(vec) = client.transaction_queue.as_mut() {
+            vec.push(self.raft_request(items)?);
+            return Ok(Value::SimpleString(String::from("QUEUED")));
+        }
+        // Parse arguments
+        let operation = self.raft_request(items)?;
+        let value = server.app.write(operation, client.db_number).await?;
         Ok(value)
     }
 }

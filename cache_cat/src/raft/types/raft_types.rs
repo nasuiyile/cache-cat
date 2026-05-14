@@ -3,8 +3,7 @@ use crate::error::{CacheCatError, StorageError};
 use crate::raft::store::statemachine::StateMachineStore;
 use crate::raft::types::core::moka::moka::MyValue;
 use crate::raft::types::core::response_value::Value;
-use crate::raft::types::entry::bae_operation::BaseOperation;
-use crate::raft::types::entry::request::{RedisOperation, Request};
+use crate::raft::types::entry::request::{Operation, Request};
 use crate::raft::types::file_operator::FileOperator;
 use openraft::ReadPolicy::LeaseRead;
 use serde::Deserialize;
@@ -50,28 +49,9 @@ pub struct CacheCatApp {
 }
 
 impl CacheCatApp {
-    pub async fn write_redis(
-        &self,
-        op: RedisOperation,
-        db_number: u16,
-    ) -> Result<Value, CacheCatError> {
+    pub async fn write(&self, op: Operation, db_number: u16) -> Result<Value, CacheCatError> {
         let write_clock = self.state_machine.data.kvs.get_new_write_clock();
-        let request = Request::new_redis(write_clock, db_number, op);
-        let res = self
-            .raft
-            .client_write(request)
-            .await
-            .map_err(|e| StorageError::WriteFailed(e.to_string()))?;
-        Ok(res.data)
-    }
-
-    pub async fn write_base(
-        &self,
-        op: BaseOperation,
-        db_number: u16,
-    ) -> Result<Value, CacheCatError> {
-        let write_clock = self.state_machine.data.kvs.get_new_write_clock();
-        let request = Request::new_base(write_clock, db_number, op);
+        let request = Request::new(write_clock, db_number, op);
         let res = self
             .raft
             .client_write(request)
@@ -93,7 +73,7 @@ impl CacheCatApp {
             .await_ready(&self.raft)
             .await
             .map_err(|e| StorageError::WriteFailed(e.to_string()))?;
-        let read_lock = self.state_machine.data.kvs.read_lock.read().await;
+        let read_lock = self.state_machine.data.kvs.read_lock.read();
         let my_value = self
             .state_machine
             .data
@@ -117,8 +97,9 @@ impl CacheCatApp {
             .await_ready(&self.raft)
             .await
             .map_err(|e| StorageError::WriteFailed(e.to_string()))?;
-        let _read_lock = self.state_machine.data.kvs.read_lock.read().await;
         let _write_lock = self.state_machine.data.kvs.write_lock.lock().await;
+        let _read_lock = self.state_machine.data.kvs.read_lock.read();
+
         let mut vec = Vec::new();
         for key in keys {
             let my_value = self

@@ -2,7 +2,7 @@ use cache_cat::config::config::load_config;
 use cache_cat::node::raft_builder::RaftNodeBuilder;
 use cache_cat::raft::types::entry::bae_operation::BaseOperation::Set;
 use cache_cat::raft::types::entry::bae_operation::SetReq;
-use cache_cat::raft::types::entry::request::Request;
+use cache_cat::raft::types::entry::request::{Operation, Request};
 use cache_cat::raft::types::raft_types::CacheCatApp;
 use mimalloc::MiMalloc;
 use std::env;
@@ -65,14 +65,14 @@ async fn benchmark_requests(apps: Arc<CacheCatApp>) {
         let handle = tokio::spawn(async move {
             for i in 0..num {
                 // sleep(std::time::Duration::from_millis(1)).await;
-                let request = Request::new_base(
+                let request = Request::new(
                     apps_clone.state_machine.data.kvs.get_write_clock(),
                     0,
-                    Set(SetReq {
+                    Operation::Base(Set(SetReq {
                         key: Arc::from((num).to_be_bytes().to_vec()),
                         value: Arc::from(Vec::from(format!("value_{}", i))),
                         ex_time: 0,
-                    }),
+                    })),
                 );
                 apps_clone.raft.client_write(request).await.unwrap();
             }

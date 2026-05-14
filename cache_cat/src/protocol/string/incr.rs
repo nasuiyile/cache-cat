@@ -1,12 +1,13 @@
 use crate::error::{CacheCatError, ProtocolError};
 use crate::protocol::command::{Client, Command};
+use crate::protocol::raft_command::RaftCommand;
 use crate::raft::network::redis_server::RedisServer;
-use std::sync::Arc;
-
 use crate::raft::types::core::response_value::Value;
 use crate::raft::types::entry::bae_operation::BaseOperation::Incr;
 use crate::raft::types::entry::bae_operation::IncrReq;
+use crate::raft::types::entry::request::Operation;
 use async_trait::async_trait;
+use std::sync::Arc;
 
 /// Parameters for INCR command
 #[derive(Debug, Clone, PartialEq)]
@@ -33,6 +34,15 @@ impl IncrParams {
 /// INCR command executor
 pub struct IncrCommand;
 
+impl RaftCommand for IncrCommand {
+    fn raft_request(&self, items: &[Value]) -> Result<Operation, ProtocolError> {
+        Ok(Operation::Base(Incr(IncrReq {
+            key: Arc::from(IncrParams::parse(items)?.key),
+            value: 1,
+        })))
+    }
+}
+
 #[async_trait]
 impl Command for IncrCommand {
     async fn execute(
@@ -41,12 +51,13 @@ impl Command for IncrCommand {
         items: &[Value],
         server: &RedisServer,
     ) -> Result<Value, CacheCatError> {
-        let params = IncrParams::parse(items)?;
-        let operation = Incr(IncrReq {
-            key: Arc::from(params.key),
-            value: 1,
-        });
-        let value = server.app.write_base(operation, client.db_number).await?;
+        if let Some(vec) = client.transaction_queue.as_mut() {
+            vec.push(self.raft_request(items)?);
+            return Ok(Value::SimpleString(String::from("QUEUED")));
+        }
+        // Parse arguments
+        let operation = self.raft_request(items)?;
+        let value = server.app.write(operation, client.db_number).await?;
         Ok(value)
     }
 }

@@ -14,7 +14,7 @@ pub struct BgsaveCommand;
 impl Command for BgsaveCommand {
     async fn execute(
         &self,
-        client: &mut Client,
+        _client: &mut Client,
         items: &[Value],
         server: &RedisServer,
     ) -> Result<Value, CacheCatError> {

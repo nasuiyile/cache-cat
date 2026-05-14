@@ -1,18 +1,15 @@
+use crate::error::{CacheCatError, ProtocolError};
 use crate::node::parsed_config::ParsedConfig;
-use crate::protocol::NO_EXPIRATION;
-use crate::protocol::key::del::DelParams;
-use crate::protocol::key::rename::RenameParams;
-use crate::protocol::string::mset::MsetParams;
-use crate::protocol::string::set::{Expiration, SetMode, SetParams};
+use crate::protocol::string::set::{SetMode, SetParams};
 use crate::raft::store::snapshot::snapshot_handler::{
     dump_cache_to_path, get_snapshot_file_name, load_cache_from_path,
 };
 use crate::raft::types::core::moka::moka::{MyCache, Update, UpdateType};
+use crate::raft::types::core::moka::request_handler::do_request;
 use crate::raft::types::core::response_value::Value;
-use crate::raft::types::core::value_object::ValueObject;
 use crate::raft::types::entry::bae_operation::{BaseOperation, DelReq, InsertReq, SetReq};
 use crate::raft::types::entry::read_operation::ReadOperation;
-use crate::raft::types::entry::request::{AtomicRequest, RedisOperation, Request};
+use crate::raft::types::entry::request::{AtomicRequest, Operation, RedisOperation};
 use crate::raft::types::file_operator::FileOperator;
 use crate::raft::types::raft_types::{NodeId, TypeConfig};
 use futures::Stream;
@@ -64,7 +61,7 @@ pub struct StateMachineStore {
 #[derive(Debug, Clone)]
 pub struct StateMachineData {
     /// State built from applying the raft logs
-    pub kvs: MyCache,
+    pub kvs: Arc<MyCache>,
     //增量日志队列
     pub incremental_operation_queue: Arc<Mutex<Vec<AtomicRequest>>>,
 
@@ -118,9 +115,9 @@ impl StateMachineStore {
         config: ParsedConfig,
         path: PathBuf,
         node_id: NodeId,
-    ) -> Result<StateMachineStore, io::Error> {
+    ) -> Result<StateMachineStore, CacheCatError> {
         let (tx, _) = broadcast::channel::<()>(2);
-        let cache = MyCache::new(config.db_number);
+        let cache = Arc::new(MyCache::new(config.db_number)?);
         let mut sm = Self {
             data: StateMachineData {
                 snapshot_message: tx,
@@ -176,11 +173,12 @@ impl RaftStateMachine<TypeConfig> for StateMachineStore {
         let mut guard;
         let update_type = if raft_meta.snapshot_state == SnapshotState::Start {
             guard = self.data.incremental_operation_queue.lock().await;
-            &mut UpdateType::Snapshot(&mut guard, 0)
+            &mut UpdateType::Snapshot(&mut guard)
         } else {
             &mut UpdateType::None
         };
         let mut update = Update {
+            write_clock: 0,
             db_number: 0,
             update_type,
         };
@@ -197,52 +195,10 @@ impl RaftStateMachine<TypeConfig> for StateMachineStore {
                 EntryPayload::Normal(req) => {
                     let (time, db_number) = req.split_u64();
                     let write_clock = st.set_write_clock(time);
-                    match update.update_type {
-                        UpdateType::Snapshot(_, count) => {
-                            // 直接修改 count（因为匹配到的 count 是可变的）
-                            *count = write_clock;
-                        }
-                        _ => {}
-                    }
                     update.db_number = db_number;
-                    match req {
-                        Request::Read(_, read) => match read {
-                            ReadOperation::Exists(param) => st.exists(param, update.db_number),
-                            ReadOperation::Get(param) => st.get(param, update.db_number),
-                            ReadOperation::LRange(param) => st.l_range(param, update.db_number),
-                            ReadOperation::MGet(param) => st.m_get(param, update.db_number),
-                            ReadOperation::ZRange(param) => st.z_range(param, update.db_number),
-                        },
-                        Request::Base(_, base) => match base {
-                            BaseOperation::Empty => Value::ok(),
-                            BaseOperation::Set(param) => st.set(param, &mut update),
-                            BaseOperation::Expire(param) => st.expire(param, &mut update),
-                            BaseOperation::LPush(param) => st.l_push(param, &mut update),
-                            BaseOperation::Del(param) => st.del(param, &mut update),
-                            BaseOperation::Incr(param) => st.incr(param, &mut update),
-                            BaseOperation::Append(param) => st.append(param, &mut update),
-                            BaseOperation::HSet(param) => st.h_set(param, &mut update),
-                            BaseOperation::HIncr(param) => st.h_incr(param, &mut update),
-                            BaseOperation::ZAdd(param) => st.z_add(param, &mut update),
-                            BaseOperation::SAdd(param) => st.s_add(param, &mut update),
-                            BaseOperation::Persist(param) => st.persist(param, &mut update),
-                            BaseOperation::Insert(param) => st.insert(param, &mut update),
-                        },
-                        Request::Redis(_, redis) => match redis {
-                            RedisOperation::RedisDel(param) => {
-                                del_hand(st, param, &mut update).await
-                            }
-                            RedisOperation::RedisSet(param) => {
-                                set_hand(st, param, &mut update, write_clock).await
-                            }
-                            RedisOperation::RedisMset(param) => {
-                                mset_hand(st, param, &mut update).await
-                            }
-                            RedisOperation::RedisRename(param) => {
-                                rename_hand(st, param, &mut update).await
-                            }
-                        },
-                    }
+                    update.write_clock = write_clock;
+                    let value = do_request(&self.data.kvs, req.operation, &mut update);
+                    value
                 }
                 EntryPayload::Membership(mem) => {
                     raft_meta.last_membership =
@@ -283,6 +239,7 @@ impl RaftStateMachine<TypeConfig> for StateMachineStore {
             let mut update = Update {
                 db_number: 0,
                 update_type,
+                write_clock: atomic_request.write_clock,
             };
             match atomic_request.request {
                 BaseOperation::Empty => {}
@@ -343,163 +300,5 @@ impl RaftStateMachine<TypeConfig> for StateMachineStore {
                 }))
             }
         }
-    }
-}
-
-pub async fn rename_hand(
-    cache: &MyCache,
-    params: RenameParams,
-    update: &mut Update<'_, '_>,
-) -> Value {
-    let _exclusive_lock = cache.read_lock.write().await;
-    let cached = match cache.get_cache(update.db_number) {
-        Err(err) => return err,
-        Ok(cache) => cache,
-    };
-    let my_value = match cached.get(&params.key) {
-        None => return Value::Error("no such key".to_string()),
-        Some(value) => value,
-    };
-    let del = DelReq {
-        key: Arc::from(params.key),
-    };
-    cache.del(del, update);
-    let new_key: Arc<Vec<u8>> = Arc::from(params.new_key);
-    let insert = InsertReq {
-        key: new_key.clone(),
-        value: my_value.data,
-        expires_at: my_value.expires_at,
-    };
-    cache.insert(insert, update);
-    Value::ok()
-}
-
-pub async fn del_hand(cache: &MyCache, params: DelParams, update: &mut Update<'_, '_>) -> Value {
-    let mut count = 0;
-    let _exclusive_lock = cache.read_lock.write().await;
-    for key in params.keys {
-        let del = DelReq {
-            key: Arc::from(key),
-        };
-        match cache.del(del, update) {
-            Value::Error(err) => return Value::Error(err),
-            Value::Integer(num) => count = count + num,
-            _ => {}
-        }
-    }
-    Value::Integer(count)
-}
-
-pub async fn mset_hand(cache: &MyCache, params: MsetParams, update: &mut Update<'_, '_>) -> Value {
-    let _exclusive_lock = cache.read_lock.write().await;
-    for pair in params.pairs {
-        let set = SetReq {
-            key: Arc::from(pair.0),
-            value: Arc::from(pair.1),
-            ex_time: 0,
-        };
-        cache.set(set, update);
-    }
-    Value::ok()
-}
-
-pub async fn set_hand(
-    cache: &MyCache,
-    params: SetParams,
-    update: &mut Update<'_, '_>,
-    time: u64,
-) -> Value {
-    // 最新的写逻辑时间
-    let now = time;
-
-    enum ExistingKey {
-        None,               // Key doesn't exist
-        Data(Arc<Vec<u8>>), // Key exists and is a valid string
-        OtherType,          // Key exists but is not a string (Hash, etc.)
-    }
-    let mut existing_key = ExistingKey::None;
-
-    // Calculate expiration timestamp in milliseconds (0 means no expiration)
-    let expires_at = match params.expiration {
-        Some(Expiration::KeepTTL) => {
-            let cache = match cache.get_cache(update.db_number) {
-                Err(err) => return err,
-                Ok(cache) => cache,
-            };
-            // Read existing value to get its expiration time
-            match cache.get(&params.key) {
-                None => NO_EXPIRATION,
-                Some(value) => {
-                    let ttl_ms = value.expires_at;
-                    existing_key = match value.data {
-                        ValueObject::Int(v) => {
-                            ExistingKey::Data(Arc::from(v.to_string().into_bytes()))
-                        }
-                        ValueObject::String(v) => ExistingKey::Data(v),
-                        _ => ExistingKey::OtherType,
-                    };
-                    ttl_ms
-                }
-            }
-        }
-        Some(exp) => match exp {
-            Expiration::Ex(seconds) => now + seconds * 1000,
-            Expiration::Px(millis) => now + millis,
-            Expiration::ExAt(timestamp) => timestamp * 1000,
-            Expiration::PxAt(timestamp) => timestamp,
-            Expiration::KeepTTL => unreachable!(), // Handled above
-        },
-        None => NO_EXPIRATION, // No expiration
-    };
-    let key_exists = matches!(existing_key, ExistingKey::Data(_) | ExistingKey::OtherType);
-
-    // Apply NX/XX mode logic
-    match params.mode {
-        Some(SetMode::Nx) => {
-            // NX: Only set if key does not exist
-            if key_exists {
-                // Key exists, do not set
-                return if params.get {
-                    // GET with NX: return current value if it's a string, otherwise nil
-                    match existing_key {
-                        ExistingKey::Data(v) => Value::BulkString(Some(v.as_ref().clone())),
-                        _ => Value::BulkString(None), // Other type, return nil
-                    }
-                } else {
-                    // Just return nil (nil bulk string)
-                    Value::BulkString(None)
-                };
-            }
-        }
-        Some(SetMode::Xx) => {
-            // XX: Only set if key exists
-            if !key_exists {
-                // Key does not exist, do not set
-                return if params.get {
-                    // GET with XX: return nil since key doesn't exist
-                    Value::BulkString(None)
-                } else {
-                    Value::BulkString(None)
-                };
-            }
-        }
-        None => {
-            // No mode restriction, always set
-        }
-    }
-    let set = SetReq {
-        key: Arc::from(params.key),
-        value: Arc::from(params.value),
-        ex_time: expires_at,
-    };
-    cache.set(set, update);
-    if params.get {
-        // Store the old value for GET option before we overwrite
-        match existing_key {
-            ExistingKey::Data(v) => Value::BulkString(Some(v.as_ref().clone())),
-            _ => Value::BulkString(None), // Other type, return nil
-        }
-    } else {
-        Value::ok()
     }
 }

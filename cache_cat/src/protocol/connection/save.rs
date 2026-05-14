@@ -14,14 +14,13 @@ pub struct SaveCommand;
 impl Command for SaveCommand {
     async fn execute(
         &self,
-        client: &mut Client,
+        _client: &mut Client,
         items: &[Value],
         server: &RedisServer,
     ) -> Result<Value, CacheCatError> {
         if items.len() >= 2 {
             return Err(ProtocolError::WrongArgCount("save").into());
         }
-
         let snapshot_state = server
             .app
             .state_machine

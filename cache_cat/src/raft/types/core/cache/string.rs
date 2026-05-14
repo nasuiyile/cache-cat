@@ -1,10 +1,12 @@
-use crate::error::{CacheCatError, ProtocolError};
+use crate::error::ProtocolError;
+use crate::protocol::NO_EXPIRATION;
 use crate::protocol::string::get::GetParams;
 use crate::protocol::string::mget::MgetParams;
+use crate::protocol::string::mset::MsetParams;
+use crate::protocol::string::set::{Expiration, SetMode, SetParams};
 use crate::raft::types::core::moka::cas::ComputeCommand;
 use crate::raft::types::core::moka::moka::{MyCache, MyValue, Update, UpdateType};
 use crate::raft::types::core::response_value::Value;
-use crate::raft::types::core::response_value::Value::Error;
 use crate::raft::types::core::value_object::ValueObject;
 use crate::raft::types::entry::bae_operation::{AppendReq, BaseOperation, IncrReq, SetReq};
 use crate::raft::types::entry::request::AtomicRequest;
@@ -83,6 +85,115 @@ impl ComputeCommand for AppendReq {
 }
 
 impl MyCache {
+    pub fn redis_mset(&self, params: MsetParams, update: &mut Update<'_>) -> Value {
+        let _exclusive_lock = self.read_lock.write();
+        for pair in params.pairs {
+            let set = SetReq {
+                key: Arc::from(pair.0),
+                value: Arc::from(pair.1),
+                ex_time: 0,
+            };
+            self.set(set, update);
+        }
+        Value::ok()
+    }
+
+    pub fn redis_set(&self, params: SetParams, update: &mut Update<'_>) -> Value {
+        // 最新的写逻辑时间
+        let now = update.write_clock;
+
+        enum ExistingKey {
+            None,               // Key doesn't exist
+            Data(Arc<Vec<u8>>), // Key exists and is a valid string
+            OtherType,          // Key exists but is not a string (Hash, etc.)
+        }
+        let mut existing_key = ExistingKey::None;
+
+        // Calculate expiration timestamp in milliseconds (0 means no expiration)
+        let expires_at = match params.expiration {
+            Some(Expiration::KeepTTL) => {
+                let cache = match self.get_cache(update.db_number) {
+                    Err(err) => return err,
+                    Ok(cache) => cache,
+                };
+                // Read existing value to get its expiration time
+                match cache.get(&params.key) {
+                    None => NO_EXPIRATION,
+                    Some(value) => {
+                        let ttl_ms = value.expires_at;
+                        existing_key = match value.data {
+                            ValueObject::Int(v) => {
+                                ExistingKey::Data(Arc::from(v.to_string().into_bytes()))
+                            }
+                            ValueObject::String(v) => ExistingKey::Data(v),
+                            _ => ExistingKey::OtherType,
+                        };
+                        ttl_ms
+                    }
+                }
+            }
+            Some(exp) => match exp {
+                Expiration::Ex(seconds) => now + seconds * 1000,
+                Expiration::Px(millis) => now + millis,
+                Expiration::ExAt(timestamp) => timestamp * 1000,
+                Expiration::PxAt(timestamp) => timestamp,
+                Expiration::KeepTTL => unreachable!(), // Handled above
+            },
+            None => NO_EXPIRATION, // No expiration
+        };
+        let key_exists = matches!(existing_key, ExistingKey::Data(_) | ExistingKey::OtherType);
+
+        // Apply NX/XX mode logic
+        match params.mode {
+            Some(SetMode::Nx) => {
+                // NX: Only set if key does not exist
+                if key_exists {
+                    // Key exists, do not set
+                    return if params.get {
+                        // GET with NX: return current value if it's a string, otherwise nil
+                        match existing_key {
+                            ExistingKey::Data(v) => Value::BulkString(Some(v.as_ref().clone())),
+                            _ => Value::BulkString(None), // Other type, return nil
+                        }
+                    } else {
+                        // Just return nil (nil bulk string)
+                        Value::BulkString(None)
+                    };
+                }
+            }
+            Some(SetMode::Xx) => {
+                // XX: Only set if key exists
+                if !key_exists {
+                    // Key does not exist, do not set
+                    return if params.get {
+                        // GET with XX: return nil since key doesn't exist
+                        Value::BulkString(None)
+                    } else {
+                        Value::BulkString(None)
+                    };
+                }
+            }
+            None => {
+                // No mode restriction, always set
+            }
+        }
+        let set = SetReq {
+            key: Arc::from(params.key),
+            value: Arc::from(params.value),
+            ex_time: expires_at,
+        };
+        self.set(set, update);
+        if params.get {
+            // Store the old value for GET option before we overwrite
+            match existing_key {
+                ExistingKey::Data(v) => Value::BulkString(Some(v.as_ref().clone())),
+                _ => Value::BulkString(None), // Other type, return nil
+            }
+        } else {
+            Value::ok()
+        }
+    }
+
     pub fn m_get(&self, param: MgetParams, db_number: u16) -> Value {
         let cache = match self.get_cache(db_number) {
             Err(err) => return err,
@@ -147,7 +258,7 @@ impl MyCache {
                 cache.insert(set_req.key, value);
                 Value::ok()
             }
-            UpdateType::Snapshot(queue, write_clock) => {
+            UpdateType::Snapshot(queue) => {
                 let key = set_req.key.clone();
                 cache.entry(key).and_upsert_with(|old_entry| {
                     value.version = if let Some(entry) = old_entry {
@@ -158,7 +269,7 @@ impl MyCache {
                     queue.push(AtomicRequest {
                         version: value.version,
                         request: BaseOperation::Set(set_req),
-                        write_clock: *write_clock,
+                        write_clock: update.write_clock,
                     });
                     value
                 });

@@ -1,19 +1,19 @@
 use crate::error::ProtocolError;
-use crate::protocol::command::Client;
+use crate::protocol::lua_env::LuaEnv;
 use crate::raft::types::core::response_value::Value;
 use crate::raft::types::core::value_object::ValueObject;
 use crate::raft::types::entry::request::AtomicRequest;
 use crate::utils::now_ms;
 use moka::Expiry;
 use moka::sync::Cache;
+use parking_lot::RwLock;
 use serde::{Deserialize, Serialize};
 use std::cmp::max;
-use std::collections::HashMap;
 use std::option::Option;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::time::{Duration, Instant};
-use tokio::sync::{Mutex, RwLock};
+use tokio::sync::Mutex;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct MyValue {
@@ -69,20 +69,18 @@ impl Expiry<Arc<Vec<u8>>, MyValue> for MyExpiry {
 #[derive(Debug)]
 pub struct Database {
     pub cache: Cache<Arc<Vec<u8>>, MyValue>,
-    pub watched_keys: HashMap<Arc<Vec<u8>>, ()>,
 }
 impl Clone for Database {
     fn clone(&self) -> Self {
         Self {
             cache: self.cache.clone(),
-            // clone 时忽略 watched_keys
-            watched_keys: HashMap::new(),
         }
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct MyCache {
+    pub lua_env: LuaEnv,
     // 在固定间隔内是否发生过删除操作
     pub have_deleted: Arc<AtomicBool>,
 
@@ -133,7 +131,7 @@ impl MyCache {
     }
 
     /// 创建 MyCache 时自动初始化内部 Cache
-    pub fn new(db_number: u16) -> Self {
+    pub fn new(db_number: u16) -> Result<Self, ProtocolError> {
         let have_deleted = Arc::new(AtomicBool::new(false));
         let write_logic_clock = Arc::new(AtomicU64::new(0));
         let deleted = have_deleted.clone();
@@ -151,20 +149,19 @@ impl MyCache {
                     deleted.store(true, Ordering::Release)
                 })
                 .build();
-            let db = Database {
-                cache,
-                watched_keys: HashMap::new(),
-            };
+            let db = Database { cache };
             vec.push(db);
         }
-        Self {
+        let lua_env = LuaEnv::new()?;
+        Ok(Self {
+            lua_env,
             have_deleted,
             read_logic_clock: Arc::new(AtomicU64::new(0)),
             write_logic_clock,
             databases: vec,
             write_lock: Arc::new(Default::default()),
             read_lock: Arc::new(Default::default()),
-        }
+        })
     }
 
     #[inline]
@@ -200,12 +197,13 @@ impl MyCache {
     }
 }
 
-pub struct Update<'a, 'b> {
+pub struct Update<'a> {
     pub db_number: u16,
-    pub update_type: &'b mut UpdateType<'a>,
+    pub write_clock: u64,
+    pub update_type: &'a mut UpdateType<'a>,
 }
 pub enum UpdateType<'a> {
     None,
-    Snapshot(&'a mut Vec<AtomicRequest>, u64),
+    Snapshot(&'a mut Vec<AtomicRequest>),
     CAS(u32),
 }

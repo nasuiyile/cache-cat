@@ -1,8 +1,11 @@
 use crate::error::{CacheCatError, ProtocolError};
 use crate::protocol::command::{Client, Command};
+use crate::protocol::raft_command::RaftCommand;
 use crate::raft::network::redis_server::RedisServer;
 use crate::raft::types::core::response_value::Value;
 use crate::raft::types::core::value_object::ValueObject;
+use crate::raft::types::entry::read_operation::ReadOperation;
+use crate::raft::types::entry::request::Operation;
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use std::fmt::Display;
@@ -44,6 +47,13 @@ impl MgetParams {
 /// MGET command executor
 pub struct MgetCommand;
 
+impl RaftCommand for MgetCommand {
+    fn raft_request(&self, items: &[Value]) -> Result<Operation, ProtocolError> {
+        let params = MgetParams::parse(items)?;
+        Ok(Operation::Read(ReadOperation::MGet(params)))
+    }
+}
+
 #[async_trait]
 impl Command for MgetCommand {
     async fn execute(
@@ -52,6 +62,10 @@ impl Command for MgetCommand {
         items: &[Value],
         server: &RedisServer,
     ) -> Result<Value, CacheCatError> {
+        if let Some(vec) = client.transaction_queue.as_mut() {
+            vec.push(self.raft_request(items)?);
+            return Ok(Value::SimpleString(String::from("QUEUED")));
+        }
         let params = MgetParams::parse(items)?;
         let values = server.app.multi_read(params.keys, client.db_number).await?;
         let mut results = Vec::with_capacity(values.len());

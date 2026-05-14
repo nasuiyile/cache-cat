@@ -1,9 +1,11 @@
 use crate::error::{CacheCatError, ProtocolError};
 use crate::protocol::command::{Client, Command};
+use crate::protocol::raft_command::RaftCommand;
 use crate::raft::network::redis_server::RedisServer;
 use crate::raft::types::core::response_value::Value;
 use crate::raft::types::entry::bae_operation::BaseOperation::Expire;
 use crate::raft::types::entry::bae_operation::ExpireReq;
+use crate::raft::types::entry::request::Operation;
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
@@ -86,6 +88,18 @@ fn parse_u64(value: &Value) -> Option<u64> {
 /// EXPIRE command executor
 pub struct ExpireCommand;
 
+impl RaftCommand for ExpireCommand {
+    fn raft_request(&self, items: &[Value]) -> Result<Operation, ProtocolError> {
+        let params = ExpireParams::parse(items)?;
+        let req = ExpireReq {
+            key: Arc::from(params.key),
+            expires_at: params.seconds * 1000,
+            condition: params.condition,
+        };
+        Ok(Operation::Base(Expire(req)))
+    }
+}
+
 #[async_trait]
 impl Command for ExpireCommand {
     async fn execute(
@@ -94,15 +108,12 @@ impl Command for ExpireCommand {
         items: &[Value],
         server: &RedisServer,
     ) -> Result<Value, CacheCatError> {
-        let params = ExpireParams::parse(items)?;
-        let write_clock = server.app.state_machine.data.kvs.get_new_write_clock();
-        let req = ExpireReq {
-            key: Arc::from(params.key),
-            expires_at: params.seconds * 1000 + write_clock,
-            condition: params.condition,
-        };
-        let value = server.app.write_base(Expire(req), client.db_number).await?;
-
+        if let Some(vec) = client.transaction_queue.as_mut() {
+            vec.push(self.raft_request(items)?);
+            return Ok(Value::SimpleString(String::from("QUEUED")));
+        }
+        let operation = self.raft_request(items)?;
+        let value = server.app.write(operation, client.db_number).await?;
         Ok(value)
     }
 }

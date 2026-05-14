@@ -36,7 +36,7 @@ struct CacheCatSnapshotMeta {
 }
 
 pub async fn dump_cache_to_path<P>(
-    cache: MyCache,
+    cache: Arc<MyCache>,
     path: P,
     raft_meta: Arc<Mutex<RaftMetaData>>,
     queue: Arc<Mutex<Vec<AtomicRequest>>>,
@@ -101,7 +101,7 @@ where
 }
 
 pub async fn load_cache_from_path<P>(
-    cache: MyCache,
+    cache: Arc<MyCache>,
     path: P,
 ) -> Result<Option<(SnapshotMeta<TypeConfig>, Vec<AtomicRequest>)>, io::Error>
 where
@@ -199,7 +199,7 @@ async fn test_dump_and_load_with_data() {
     pub const TEMP_PATH: &str = r"E:\tmp\raft\raft-engine";
     use crate::raft::types::core::moka::moka::MyValue;
     use crate::raft::types::core::value_object::ValueObject;
-    let cache = MyCache::new(1);
+    let cache = Arc::new(MyCache::new(1).unwrap());
 
     // 插入测试数据
     let key1 = Arc::new(b"key1".to_vec());
@@ -246,7 +246,7 @@ async fn test_dump_and_load_with_data() {
     .expect("dump cache should succeed");
 
     // 创建新缓存并加载数据
-    let new_cache = MyCache::new(1);
+    let new_cache = Arc::new(MyCache::new(1).unwrap());
     match load_cache_from_path(
         new_cache.clone(),
         path.join("snapshot").join(get_snapshot_file_name()),

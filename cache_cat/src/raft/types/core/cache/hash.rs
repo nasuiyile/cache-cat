@@ -1,3 +1,5 @@
+use crate::error::ProtocolError;
+use crate::protocol::hash::hget::HGetParams;
 use crate::raft::types::core::moka::cas::ComputeCommand;
 use crate::raft::types::core::moka::moka::{MyCache, MyValue, Update};
 use crate::raft::types::core::response_value::Value;
@@ -110,7 +112,33 @@ impl ComputeCommand for HIncrReq {
 }
 
 impl MyCache {
-    pub fn h_set(&self, hset: HSetReq,update: &mut Update) -> Value {
+    pub fn h_get(&self, param: HGetParams, db_number: u16) -> Value {
+        let cache = match self.get_cache(db_number) {
+            Err(err) => return err,
+            Ok(cache) => cache,
+        };
+        match cache.get(&param.key) {
+            None => Value::BulkString(None),
+            Some(v) => match v.data {
+                ValueObject::Hash(map) => {
+                    let guard = map.lock();
+                    let option = guard.get(&param.field);
+                    match option {
+                        None => Value::BulkString(None) ,
+                        Some(value) => match value {
+                            HashValue::Str(str) => Value::BulkString(Some(str.as_ref().clone())) ,
+                            HashValue::Int(int) => {
+                                Value::BulkString(Some(int.to_string().as_bytes().to_vec())) 
+                            }
+                        },
+                    }
+                }
+                _ => ProtocolError::WrongType.into(),
+            },
+        }
+    }
+
+    pub fn h_set(&self, hset: HSetReq, update: &mut Update) -> Value {
         self.execute_compute(hset, update)
     }
     pub fn h_incr(&self, h_incr: HIncrReq, update: &mut Update) -> Value {

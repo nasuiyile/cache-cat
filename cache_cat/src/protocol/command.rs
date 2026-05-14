@@ -14,6 +14,7 @@ use crate::protocol::key::persist::PersistCommand;
 use crate::protocol::key::rename::RenameCommand;
 use crate::protocol::list::lpush::LPushCommand;
 use crate::protocol::list::lrange::LRangeCommand;
+use crate::protocol::lua::eval::EvalCommand;
 use crate::protocol::set::sadd::SAddCommand;
 use crate::protocol::string::append::AppendCommand;
 use crate::protocol::string::get::GetCommand;
@@ -22,14 +23,16 @@ use crate::protocol::string::incrby::IncrByCommand;
 use crate::protocol::string::mget::MgetCommand;
 use crate::protocol::string::mset::MsetCommand;
 use crate::protocol::string::set::SetCommand;
+use crate::protocol::transaction::multi::MultiCommand;
 use crate::protocol::zset::zadd::ZAddCommand;
 use crate::protocol::zset::zrange::ZRangeCommand;
 use crate::raft::network::redis_server::RedisServer;
-use crate::raft::types::core::moka::moka::Database;
 use crate::raft::types::core::response_value::Value;
+use crate::raft::types::entry::request::Operation;
 use async_trait::async_trait;
 use std::collections::HashMap;
 use tracing::warn;
+use crate::protocol::transaction::exec::ExecCommand;
 
 #[async_trait]
 pub trait Command: Send + Sync {
@@ -45,16 +48,7 @@ pub trait Command: Send + Sync {
 #[derive(Debug)]
 pub struct Client {
     pub db_number: u16,
-    pub watch_flag: bool, //产生变更为true
-    pub watched_keys: HashMap<Vec<u8>, u16>,
-}
-
-impl Client {
-    pub fn watch(&mut self, keys: Vec<Vec<u8>>, db: u16) {
-        for key in keys {
-            self.watched_keys.insert(key, db);
-        }
-    }
+    pub transaction_queue: Option<Vec<Operation>>,
 }
 
 /// Command factory for creating and executing commands
@@ -105,16 +99,15 @@ impl CommandFactory {
         factory.register("SAVE", SaveCommand);
         factory.register("SELECT", SelectCommand);
         factory.register("ECHO", EchoCommand);
+        factory.register("EVAL", EvalCommand);
+        factory.register("MULTI", MultiCommand);
+        factory.register("EXEC", ExecCommand);
+
         factory
     }
 
     /// Execute a RESP command on the given server
-    pub async fn execute(
-        &self,
-        client: &mut Client,
-        value: Value,
-        server: &RedisServer,
-    ) -> Value {
+    pub async fn execute(&self, client: &mut Client, value: Value, server: &RedisServer) -> Value {
         match value {
             Value::Array(Some(items)) if !items.is_empty() => {
                 // Extract command name
