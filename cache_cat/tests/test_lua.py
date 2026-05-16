@@ -9,7 +9,7 @@ r = redis.Redis(
 )
 print()
 
-# r.set('key_lua', '0')
+r.set('key_lua', '0')
 
 # Lua 脚本：获取比当前值大的下一个质数并设置回去
 lua_script = """

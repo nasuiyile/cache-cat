@@ -72,7 +72,7 @@ impl Command for GetCommand {
                 ValueObject::String(str_value) => {
                     Ok(Value::BulkString(Some(str_value.as_ref().clone())))
                 }
-                _ => Err(CacheCatError::from(ProtocolError::WrongType)),
+                _ => Err(ProtocolError::WrongType.into()),
             },
         }
     }

@@ -37,6 +37,7 @@ use crate::raft::types::entry::request::Operation;
 use async_trait::async_trait;
 use std::collections::HashMap;
 use tracing::warn;
+use crate::protocol::lua::evalsha::EvalShaCommand;
 
 #[async_trait]
 pub trait Command: Send + Sync {
@@ -110,6 +111,7 @@ impl CommandFactory {
         factory.register("SMEMBERS", SMembersCommand);
         factory.register("HMGET", HMGetCommand);
         factory.register("SCRIPT", ScriptCommand);
+        factory.register("EVALSHA", EvalShaCommand);
         factory
     }
 

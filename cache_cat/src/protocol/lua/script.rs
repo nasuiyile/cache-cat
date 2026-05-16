@@ -174,9 +174,26 @@ impl Command for ScriptCommand {
         let value = match param {
             ScriptParam::Load(v) => {
                 let mut hasher = Sha1::new();
-                hasher.update(v.script);
-                let hash = hasher.finalize().to_vec();
-                Value::BulkString(Some(hash))
+                hasher.update(&v.script);
+
+                let hash = hasher.finalize();
+
+                let sha1_hex = hash
+                    .iter()
+                    .map(|b| format!("{:02x}", b))
+                    .collect::<String>();
+
+                server
+                    .app
+                    .state_machine
+                    .data
+                    .kvs
+                    .lua_env
+                    .script_map
+                    .lock()
+                    .insert(sha1_hex.clone(), v.script);
+
+                Value::BulkString(Some(sha1_hex.into_bytes()))
             }
             ScriptParam::Exists(v) => {
                 let map = server.app.state_machine.data.kvs.lua_env.script_map.lock();
