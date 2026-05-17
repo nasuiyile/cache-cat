@@ -10,46 +10,48 @@ use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use std::fmt::Display;
 
-/// Parameters for GET command
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct GetParams {
+pub struct SMembersCommand;
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SMembersParams {
     pub key: Vec<u8>,
 }
-impl Display for GetParams {
+
+impl Display for SMembersParams {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "GET {}", String::from_utf8_lossy(&self.key))
+        write!(
+            f,
+            "SMembersParams {{ key: {} }}",
+            String::from_utf8_lossy(&self.key)
+        )
     }
 }
 
-impl GetParams {
-    /// Parse GET command parameters from RESP array items
-    fn parse(items: &[Value]) -> Result<Self, ProtocolError> {
+impl SMembersCommand {
+    fn parse_args(items: &[Value]) -> Result<SMembersParams, ProtocolError> {
         if items.len() != 2 {
-            return Err(ProtocolError::WrongArgCount("GET"));
+            return Err(ProtocolError::WrongArgCount("smembers"));
         }
 
-        let key: Vec<u8> = match &items[1] {
+        let key = match &items[1] {
             Value::BulkString(Some(data)) => data.clone(),
             Value::SimpleString(s) => s.as_bytes().to_vec(),
             _ => return Err(ProtocolError::InvalidArgument("key")),
         };
 
-        Ok(GetParams { key })
+        Ok(SMembersParams { key })
     }
 }
 
-/// GET command executor
-pub struct GetCommand;
-
-impl RaftCommand for GetCommand {
+impl RaftCommand for SMembersCommand {
     fn raft_request(&self, items: &[Value]) -> Result<Operation, ProtocolError> {
-        let params = GetParams::parse(items)?;
-        Ok(Operation::Read(ReadOperation::Get(params)))
+        let params = SMembersCommand::parse_args(items)?;
+        Ok(Operation::Read(ReadOperation::SMembers(params)))
     }
 }
 
 #[async_trait]
-impl Command for GetCommand {
+impl Command for SMembersCommand {
     async fn execute(
         &self,
         client: &mut Client,
@@ -60,17 +62,18 @@ impl Command for GetCommand {
             vec.push(self.raft_request(items)?);
             return Ok(Value::SimpleString(String::from("QUEUED")));
         }
-
-        let params = GetParams::parse(items)?;
-        let values = server.app.read(params.key, client.db_number).await?;
-        match values {
-            None => Ok(Value::BulkString(None)),
+        let params = SMembersCommand::parse_args(items)?;
+        let my_value = server.app.read(params.key, client.db_number).await?;
+        match my_value {
+            None => Ok(Value::Array(Some(vec![]))),
             Some(v) => match v.data {
-                ValueObject::Int(int_value) => {
-                    Ok(Value::BulkString(Some(int_value.to_string().into_bytes())))
-                }
-                ValueObject::String(str_value) => {
-                    Ok(Value::BulkString(Some(str_value.as_ref().clone())))
+                ValueObject::Set(set) => {
+                    let guard = set.lock();
+                    let mut array = Vec::new();
+                    for member in guard.iter() {
+                        array.push(Value::BulkString(Some(member.as_ref().clone())));
+                    }
+                    Ok(Value::Array(Some(array)))
                 }
                 _ => Err(ProtocolError::WrongType.into()),
             },

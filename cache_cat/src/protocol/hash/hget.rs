@@ -14,6 +14,7 @@ use crate::raft::types::entry::request::Operation;
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use std::fmt::{Display, Formatter};
+use crate::raft::types::core::moka::moka::MyValue;
 
 /// Parsed HGET arguments
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -62,36 +63,7 @@ impl HGetCommand {
         Ok(HGetParams { key, field })
     }
 
-    /// Execute the actual HGET logic
-    async fn execute_hget(
-        params: HGetParams,
-        client: &mut Client,
-        server: &RedisServer,
-    ) -> Result<Value, CacheCatError> {
-        let my_value = server.app.read(params.key, client.db_number).await?;
 
-        match my_value {
-            None => Ok(Value::BulkString(None)),
-            Some(v) => match v.data {
-                ValueObject::Hash(map) => {
-                    let guard = map.lock();
-                    let option = guard.get(&params.field);
-                    match option {
-                        None => Ok(Value::BulkString(None)),
-                        Some(value) => match value {
-                            HashValue::Str(str) => {
-                                Ok(Value::BulkString(Some(str.as_ref().clone())))
-                            }
-                            HashValue::Int(int) => {
-                                Ok(Value::BulkString(Some(int.to_string().as_bytes().to_vec())))
-                            }
-                        },
-                    }
-                }
-                _ => Err(CacheCatError::from(ProtocolError::WrongType)),
-            },
-        }
-    }
 }
 impl RaftCommand for HGetCommand {
     fn raft_request(&self, items: &[Value]) -> Result<Operation, ProtocolError> {
@@ -114,8 +86,27 @@ impl Command for HGetCommand {
         }
         // Parse arguments
         let params = Self::parse_args(items)?;
-
-        // Execute the command logic
-        Self::execute_hget(params, client, server).await
+        let value = server.app.read(params.key, client.db_number).await?;
+        match value {
+            None => Ok(Value::BulkString(None)),
+            Some(v) => match v.data {
+                ValueObject::Hash(map) => {
+                    let guard = map.lock();
+                    let option = guard.get(&params.field);
+                    match option {
+                        None => Ok(Value::BulkString(None)),
+                        Some(value) => match value {
+                            HashValue::Str(str) => {
+                                Ok(Value::BulkString(Some(str.as_ref().clone())))
+                            }
+                            HashValue::Int(int) => {
+                                Ok(Value::BulkString(Some(int.to_string().as_bytes().to_vec())))
+                            }
+                        },
+                    }
+                }
+                _ => Err(CacheCatError::from(ProtocolError::WrongType)),
+            },
+        }
     }
 }

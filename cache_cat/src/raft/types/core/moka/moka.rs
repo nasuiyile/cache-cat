@@ -22,6 +22,16 @@ pub struct MyValue {
     pub expires_at: u64, //绝对时间  这里 假设不同节点的时钟偏移是有界的
 }
 
+impl MyValue {
+    pub fn new(value: ValueObject) -> Self {
+        Self {
+            version: 1,
+            data: value,
+            expires_at: 0,
+        }
+    }
+}
+
 // 自定义 Expiry
 struct MyExpiry {
     write_logic_clock: Arc<AtomicU64>, //写逻辑时钟的副本

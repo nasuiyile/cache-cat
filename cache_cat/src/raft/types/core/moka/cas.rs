@@ -13,10 +13,10 @@ pub trait ComputeCommand: Send + 'static {
     fn into_base_op(self) -> BaseOperation;
 
     /// 返回: (是否修改, 返回值)
-    fn mutate(self, value: &mut MyValue) -> (bool, Value);
+    fn mutate(self, value: MyValue) -> (Op<MyValue>, Value);
 
     /// 返回: (初始化值, 返回值)
-    fn init(self) -> (ValueObject, Value);
+    fn init(self) -> (Op<MyValue>, Value);
 }
 
 impl MyCache {
@@ -37,54 +37,42 @@ impl MyCache {
                 let cmd = cmd.clone();
                 match maybe_entry {
                     Some(entry) => {
-                        let mut value = entry.into_value();
-                        let (changed, res) = cmd.mutate(&mut value);
+                        let value = entry.into_value();
+                        let (changed, res) = cmd.mutate(value);
                         return_value = res;
-
-                        if changed {
-                            value.version += 1;
-                            Op::Put(value)
-                        } else {
-                            Op::Nop
-                        }
+                        changed
                     }
                     None => {
                         let (new_obj, res) = cmd.init();
                         return_value = res;
-
-                        Op::Put(MyValue {
-                            data: new_obj,
-                            expires_at: 0,
-                            version: 1,
-                        })
+                        new_obj
                     }
                 }
             }),
-
             UpdateType::Snapshot(queue) => cache.entry(key).and_compute_with(|maybe_entry| {
                 let cmd_copy = cmd.clone();
                 let mut next_version = 1;
 
                 let op = match maybe_entry {
                     Some(entry) => {
-                        let mut value = entry.into_value();
-                        let (changed, res) = cmd.mutate(&mut value);
+                        let value = entry.into_value();
+                        let (changed, res) = cmd.mutate(value);
                         return_value = res;
-
-                        value.version += 1;
-                        next_version = value.version;
-
-                        if changed { Op::Put(value) } else { Op::Nop }
+                        match changed {
+                            Op::Nop => Op::Nop,
+                            Op::Put(mut value) => {
+                                value.version += 1;
+                                next_version = value.version;
+                                Op::Put(value)
+                            }
+                            Op::Remove => Op::Remove,
+                        }
                     }
                     None => {
                         let (new_obj, res) = cmd.init();
                         return_value = res;
 
-                        Op::Put(MyValue {
-                            data: new_obj,
-                            expires_at: 0,
-                            version: 1,
-                        })
+                        new_obj
                     }
                 };
 
@@ -109,24 +97,21 @@ impl MyCache {
                                 return Op::Nop;
                             }
 
-                            let (changed, res) = cmd.mutate(&mut value);
+                            let (changed, res) = cmd.mutate(value);
                             return_value = res;
-
-                            if changed {
-                                value.version += 1;
-                                Op::Put(value)
-                            } else {
-                                Op::Nop
+                            match changed {
+                                Op::Nop => Op::Nop,
+                                Op::Put(mut value) => {
+                                    value.version += 1;
+                                    Op::Put(value)
+                                }
+                                Op::Remove => Op::Remove,
                             }
                         }
                         None => {
                             let (new_obj, res) = cmd.init();
                             return_value = res;
-                            Op::Put(MyValue {
-                                data: new_obj,
-                                expires_at: 0,
-                                version: 1,
-                            })
+                            new_obj
                         }
                     }
                 })

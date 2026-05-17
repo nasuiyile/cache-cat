@@ -4,8 +4,10 @@ use crate::protocol::connection::echo::EchoCommand;
 use crate::protocol::connection::ping::PingCommand;
 use crate::protocol::connection::save::SaveCommand;
 use crate::protocol::connection::select::SelectCommand;
+use crate::protocol::hash::hdel::HDelCommand;
 use crate::protocol::hash::hget::HGetCommand;
 use crate::protocol::hash::hincrby::HIncrByCommand;
+use crate::protocol::hash::hmget::{HMGetCommand, HMGetParams};
 use crate::protocol::hash::hset::HSetCommand;
 use crate::protocol::key::del::DelCommand;
 use crate::protocol::key::exists::ExistsCommand;
@@ -15,7 +17,10 @@ use crate::protocol::key::rename::RenameCommand;
 use crate::protocol::list::lpush::LPushCommand;
 use crate::protocol::list::lrange::LRangeCommand;
 use crate::protocol::lua::eval::EvalCommand;
+use crate::protocol::lua::evalsha::EvalShaCommand;
+use crate::protocol::lua::script::{ScriptCommand, ScriptParam};
 use crate::protocol::set::sadd::SAddCommand;
+use crate::protocol::set::smembers::SMembersCommand;
 use crate::protocol::string::append::AppendCommand;
 use crate::protocol::string::get::GetCommand;
 use crate::protocol::string::incr::IncrCommand;
@@ -23,6 +28,8 @@ use crate::protocol::string::incrby::IncrByCommand;
 use crate::protocol::string::mget::MgetCommand;
 use crate::protocol::string::mset::MsetCommand;
 use crate::protocol::string::set::SetCommand;
+use crate::protocol::transaction::discard::DiscardCommand;
+use crate::protocol::transaction::exec::ExecCommand;
 use crate::protocol::transaction::multi::MultiCommand;
 use crate::protocol::zset::zadd::ZAddCommand;
 use crate::protocol::zset::zrange::ZRangeCommand;
@@ -32,7 +39,6 @@ use crate::raft::types::entry::request::Operation;
 use async_trait::async_trait;
 use std::collections::HashMap;
 use tracing::warn;
-use crate::protocol::transaction::exec::ExecCommand;
 
 #[async_trait]
 pub trait Command: Send + Sync {
@@ -101,7 +107,13 @@ impl CommandFactory {
         factory.register("ECHO", EchoCommand);
         factory.register("EVAL", EvalCommand);
         factory.register("MULTI", MultiCommand);
+        factory.register("DISCARD", DiscardCommand);
         factory.register("EXEC", ExecCommand);
+        factory.register("SMEMBERS", SMembersCommand);
+        factory.register("HMGET", HMGetCommand);
+        factory.register("SCRIPT", ScriptCommand);
+        factory.register("EVALSHA", EvalShaCommand);
+        factory.register("HDEL", HDelCommand);
 
         factory
     }

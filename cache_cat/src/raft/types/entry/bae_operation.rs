@@ -26,6 +26,23 @@ pub enum BaseOperation {
     ZAdd(ZAddReq),
     // set
     SAdd(SAddReq),
+
+    HDel(HDelReq),
+}
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct HDelReq {
+    pub key: Arc<Vec<u8>>,
+    pub fields: Vec<Arc<Vec<u8>>>,
+}
+impl fmt::Display for HDelReq {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(
+            f,
+            "HDelReq {{ key: {}, fields: {:?} }}",
+            String::from_utf8_lossy(&self.key),
+            self.fields
+        )
+    }
 }
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct InsertReq {

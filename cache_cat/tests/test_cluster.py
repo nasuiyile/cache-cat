@@ -42,3 +42,13 @@ r = redis.Redis(
 r.set('test12', 'test')
 print(r.get('test12'))
 print(r.echo('test13'))
+
+r.sadd('test14', 'test')
+print(r.smembers('test14'))
+
+r.hset('test15', 'test', 'test')
+r.hmget('test15', ['test'])
+
+r.hset('test16', 'test', 'test')
+r.hdel('test16', 'test')
+print(r.hget('test16', 'test'))

@@ -8,10 +8,12 @@ use std::collections::HashMap;
 use std::io::Result as IoResult;
 use std::net::SocketAddr;
 use std::sync::Arc;
+use serde::{Deserialize, Serialize};
 use tokio::net::{TcpListener, TcpStream};
 use tokio_util::codec::{Decoder, Encoder, Framed};
 use tracing::{debug, error, info, warn};
 
+#[derive(Clone)]
 pub struct RedisServer {
     pub(crate) app: Arc<CacheCatApp>,
     pub redis_addr: String,

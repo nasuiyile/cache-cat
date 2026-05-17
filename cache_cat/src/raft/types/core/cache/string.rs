@@ -11,6 +11,7 @@ use crate::raft::types::core::value_object::ValueObject;
 use crate::raft::types::entry::bae_operation::{AppendReq, BaseOperation, IncrReq, SetReq};
 use crate::raft::types::entry::request::AtomicRequest;
 use crate::utils::parse_i64;
+use moka::ops::compute::Op;
 use std::sync::Arc;
 
 impl ComputeCommand for IncrReq {
@@ -22,33 +23,37 @@ impl ComputeCommand for IncrReq {
         BaseOperation::Incr(self.clone())
     }
 
-    fn mutate(self, value: &mut MyValue) -> (bool, Value) {
-        match &mut value.data {
+    fn mutate(self, mut value: MyValue) -> (Op<MyValue>, Value) {
+        let result = match &mut value.data {
             ValueObject::Int(n) => {
                 *n += self.value;
-                (true, Value::Integer(*n))
+                Value::Integer(*n)
             }
-
             ValueObject::String(s) => {
                 if let Some(v) = parse_i64(s) {
                     let new_val = v + self.value;
                     value.data = ValueObject::Int(new_val);
-                    (true, Value::Integer(new_val))
+                    Value::Integer(new_val)
                 } else {
-                    (false, Value::Error("Value is not an integer".to_string()))
+                    return (Op::Nop, Value::Error("Value is not an integer".to_string()));
                 }
             }
-
-            _ => (
-                false,
-                Value::Error("Key exists but is not an Integer".to_string()),
-            ),
-        }
+            _ => {
+                return (
+                    Op::Nop,
+                    Value::Error("Key exists but is not an Integer".to_string()),
+                );
+            }
+        };
+        (Op::Put(value), result)
     }
 
-    fn init(self) -> (ValueObject, Value) {
+    fn init(self) -> (Op<MyValue>, Value) {
         let v = self.value;
-        (ValueObject::Int(v), Value::Integer(v))
+        (
+            Op::Put(MyValue::new(ValueObject::Int(v))),
+            Value::Integer(v),
+        )
     }
 }
 
@@ -61,32 +66,37 @@ impl ComputeCommand for AppendReq {
         BaseOperation::Append(self.clone())
     }
 
-    fn mutate(self, value: &mut MyValue) -> (bool, Value) {
-        match &mut value.data {
+    fn mutate(self, mut data: MyValue) -> (Op<MyValue>, Value) {
+        match &mut data.data {
             ValueObject::String(data_arc) => {
-                let buf = Arc::make_mut(data_arc);
-                buf.extend_from_slice(&self.value);
-
-                let len = buf.len() as i64;
-                (true, Value::Integer(len))
+                let len = {
+                    let buf = Arc::make_mut(data_arc);
+                    buf.extend_from_slice(&self.value);
+                    buf.len() as i64
+                };
+                (Op::Put(data), Value::Integer(len))
             }
-
             _ => (
-                false,
+                Op::Nop,
                 Value::Error("Key exists but is not a String".to_string()),
             ),
         }
     }
 
-    fn init(self) -> (ValueObject, Value) {
+    fn init(self) -> (Op<MyValue>, Value) {
         let len = self.value.len() as i64;
-        (ValueObject::String(self.value), Value::Integer(len))
+        (
+            Op::Put(MyValue::new(ValueObject::String(self.value))),
+            Value::Integer(len),
+        )
     }
 }
 
 impl MyCache {
-    pub fn redis_mset(&self, params: MsetParams, update: &mut Update<'_>) -> Value {
-        let _exclusive_lock = self.read_lock.write();
+    pub fn redis_mset(&self, params: MsetParams, update: &mut Update<'_>, external: bool) -> Value {
+        if external {
+            let _exclusive_lock = self.read_lock.write();
+        }
         for pair in params.pairs {
             let set = SetReq {
                 key: Arc::from(pair.0),

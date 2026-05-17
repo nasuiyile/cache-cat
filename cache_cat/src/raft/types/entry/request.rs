@@ -1,14 +1,15 @@
 use crate::protocol::key::del::DelParams;
 use crate::protocol::key::rename::RenameParams;
 use crate::protocol::lua::eval::EvalParams;
+use crate::protocol::lua::script::ScriptParam;
 use crate::protocol::string::mset::MsetParams;
 use crate::protocol::string::set::SetParams;
+use crate::protocol::transaction::exec::ExecParams;
 use crate::raft::types::entry::bae_operation::BaseOperation;
 use crate::raft::types::entry::read_operation::ReadOperation;
 use crate::utils::merge_u64;
 use serde::{Deserialize, Serialize};
 use std::fmt;
-use crate::protocol::transaction::exec::ExecParams;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum Operation {
@@ -71,6 +72,8 @@ impl fmt::Display for Request {
                 ReadOperation::Exists(req) => write!(f, "Exists: {}", req),
                 ReadOperation::LRange(req) => write!(f, "LRange: {}", req),
                 ReadOperation::HGet(req) => write!(f, "HGet: {}", req),
+                ReadOperation::SMembers(req) => write!(f, "SMembers: {}", req),
+                ReadOperation::HMGet(req) => write!(f, "HMGet: {}", req),
             },
             Operation::Base(op) => match op {
                 BaseOperation::Empty => write!(f, "None"),
@@ -86,6 +89,7 @@ impl fmt::Display for Request {
                 BaseOperation::HIncr(req) => write!(f, "HIncr: {}", req),
                 BaseOperation::Persist(req) => write!(f, "Persist: {}", req),
                 BaseOperation::Insert(insert) => write!(f, "Insert: {}", insert),
+                BaseOperation::HDel(req) => write!(f, "HDel: {}", req),
             },
             Operation::Redis(op) => match op {
                 RedisOperation::RedisSet(req) => write!(f, "RedisSet: {}", req),

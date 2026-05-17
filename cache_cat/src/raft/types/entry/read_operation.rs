@@ -5,6 +5,8 @@ use crate::protocol::string::mget::MgetParams;
 use crate::protocol::zset::zrange::ZRangeParams;
 
 use crate::protocol::hash::hget::HGetParams;
+use crate::protocol::hash::hmget::HMGetParams;
+use crate::protocol::set::smembers::SMembersParams;
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -15,4 +17,6 @@ pub enum ReadOperation {
     LRange(LRangeParams),
     ZRange(ZRangeParams),
     HGet(HGetParams),
+    SMembers(SMembersParams),
+    HMGet(HMGetParams),
 }

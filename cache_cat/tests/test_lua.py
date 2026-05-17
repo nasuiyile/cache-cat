@@ -9,7 +9,7 @@ r = redis.Redis(
 )
 print()
 
-# r.set('key_lua', '0')
+r.set('key_lua', '0')
 
 # Lua 脚本：获取比当前值大的下一个质数并设置回去
 lua_script = """
@@ -54,10 +54,9 @@ print(f"下一个质数是: {result}")
 # 验证结果
 print(f"key_lua 的值现在是: {r.get('key_lua')}")
 
-
 r.set('key_testtest', '0')
 lua_script = """
--- 尝试在 Lua 脚本中调用 EVAL（会报错）
+-- 尝试在 Lua 脚本中调用 EVAL（原生redis会报错）
 local result = redis.call('EVAL', "return redis.call('GET','key_testtest')", 0)
 return result
 """
@@ -66,3 +65,14 @@ try:
     print(f"结果: {result}")
 except redis.exceptions.ResponseError as e:
     print(f"预期错误: {e}")
+
+r.lpush('list_lua', '1', '2', '3')
+
+# 测试pcall
+lua_script = """
+redis.pcall('GET', 'list_lua')
+local result = redis.pcall('LRANGE', 'list_lua', 0, -1)
+return result
+ """
+result = r.eval(lua_script, 0)
+print(f"结果: {result}")

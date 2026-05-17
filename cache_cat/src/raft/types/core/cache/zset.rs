@@ -6,6 +6,7 @@ use crate::raft::types::core::response_value::Value;
 use crate::raft::types::core::value_object::ValueObject::ZSet;
 use crate::raft::types::core::value_object::{SortedSet, ValueObject};
 use crate::raft::types::entry::bae_operation::{BaseOperation, ZAddReq};
+use moka::ops::compute::Op;
 use parking_lot::Mutex;
 use std::sync::Arc;
 
@@ -18,21 +19,21 @@ impl ComputeCommand for ZAddReq {
         BaseOperation::ZAdd(self.clone())
     }
 
-    fn mutate(self, value: &mut MyValue) -> (bool, Value) {
+    fn mutate(self, mut value: MyValue) -> (Op<MyValue>, Value) {
         match &value.data {
             ZSet(zset) => {
                 let changed_count = zset.lock().zadd(self);
-                (changed_count > 0, Value::Integer(changed_count))
+                (Op::Put(value), Value::Integer(changed_count))
             }
-            _ => (false, Value::Error("zadd: key is not a zset".to_string())),
+            _ => (Op::Nop, Value::Error("zadd: key is not a zset".to_string())),
         }
     }
 
-    fn init(self) -> (ValueObject, Value) {
+    fn init(self) -> (Op<MyValue>, Value) {
         let mut set = SortedSet::new();
         let changed_count = set.zadd(self);
         (
-            ZSet(Arc::new(Mutex::new(set))),
+            Op::Put(MyValue::new(ZSet(Arc::new(Mutex::new(set))))),
             Value::Integer(changed_count),
         )
     }
@@ -47,7 +48,7 @@ impl MyCache {
         match cache.get(&params.key) {
             None => Value::BulkString(None),
             Some(v) => match v.data {
-                ValueObject::ZSet(list) => {
+                ZSet(list) => {
                     let res = list
                         .lock()
                         .zrange(params.start, params.stop, params.with_scores);

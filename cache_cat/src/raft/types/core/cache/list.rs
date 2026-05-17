@@ -8,6 +8,7 @@ use crate::raft::types::entry::bae_operation::{BaseOperation, LPushReq};
 use parking_lot::lock_api::Mutex;
 use std::collections::VecDeque;
 use std::sync::Arc;
+use moka::ops::compute::Op;
 
 impl ComputeCommand for LPushReq {
     fn key(&self) -> Arc<Vec<u8>> {
@@ -18,31 +19,31 @@ impl ComputeCommand for LPushReq {
         BaseOperation::LPush(self.clone())
     }
 
-    fn mutate(self, data: &mut MyValue) -> (bool, Value) {
+    fn mutate(self, mut data: MyValue) -> (Op<MyValue>, Value) {
         match &data.data {
             ValueObject::List(data_arc) => {
-                let mut list = data_arc.lock();
-
-                for element in self.elements {
-                    list.push_front(element);
-                }
-
-                let len = list.len() as i64;
-                (true, Value::Integer(len))
+                let len = {
+                    let mut list = data_arc.lock();
+                    for element in self.elements {
+                        list.push_front(element);
+                    }
+                    list.len() as i64
+                };
+                (Op::Put(data), Value::Integer(len))
             }
             _ => (
-                false,
+                Op::Nop,
                 Value::Error("Key exists but is not a List".to_string()),
             ),
         }
     }
 
-    fn init(self) -> (ValueObject, Value) {
+    fn init(self) -> (Op<MyValue>, Value) {
         let deque: VecDeque<_> = VecDeque::from(self.elements);
         let len = deque.len() as i64;
 
         (
-            ValueObject::List(Arc::new(Mutex::new(deque))),
+            Op::Put(MyValue::new(ValueObject::List(Arc::new(Mutex::new(deque))))),
             Value::Integer(len),
         )
     }
