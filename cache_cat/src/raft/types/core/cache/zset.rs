@@ -19,7 +19,7 @@ impl ComputeCommand for ZAddReq {
         BaseOperation::ZAdd(self.clone())
     }
 
-    fn mutate(self, mut value: MyValue) -> (Op<MyValue>, Value) {
+    fn mutate(self, mut value: MyValue, write_clock: u64) -> (Op<MyValue>, Value) {
         match &value.data {
             ZSet(zset) => {
                 let changed_count = zset.lock().zadd(self);

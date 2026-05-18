@@ -22,12 +22,27 @@ pub enum BaseOperation {
     //hash
     HSet(HSetReq),
     HIncr(HIncrReq),
+    HDel(HDelReq),
     // zset
     ZAdd(ZAddReq),
     // set
     SAdd(SAddReq),
-
-    HDel(HDelReq),
+    SRem(SRemReq),
+}
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct SRemReq {
+    pub key: Arc<Vec<u8>>,
+    pub members: Vec<Arc<Vec<u8>>>,
+}
+impl fmt::Display for SRemReq {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(
+            f,
+            "SRemReq {{ key: {}, fields: {:?} }}",
+            String::from_utf8_lossy(&self.key),
+            self.members
+        )
+    }
 }
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct HDelReq {

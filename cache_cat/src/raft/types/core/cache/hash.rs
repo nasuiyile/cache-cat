@@ -21,7 +21,7 @@ impl ComputeCommand for HSetReq {
         BaseOperation::HSet(self.clone())
     }
 
-    fn mutate(self, mut data: MyValue) -> (Op<MyValue>, Value) {
+    fn mutate(self, mut data: MyValue, write_clock: u64) -> (Op<MyValue>, Value) {
         if let ValueObject::Hash(map_arc) = &data.data {
             let mut count = 0;
             {
@@ -73,7 +73,7 @@ impl ComputeCommand for HIncrReq {
         BaseOperation::HIncr(self.clone())
     }
 
-    fn mutate(self, mut data: MyValue) -> (Op<MyValue>, Value) {
+    fn mutate(self, mut data: MyValue, write_clock: u64) -> (Op<MyValue>, Value) {
         match &mut data.data {
             ValueObject::Hash(hash) => {
                 let result = {
@@ -127,7 +127,7 @@ impl ComputeCommand for HDelReq {
         BaseOperation::HDel(self.clone())
     }
 
-    fn mutate(self, mut data: MyValue) -> (Op<MyValue>, Value) {
+    fn mutate(self, mut data: MyValue, write_clock: u64) -> (Op<MyValue>, Value) {
         match &mut data.data {
             ValueObject::Hash(hash) => {
                 let deleted_count = {

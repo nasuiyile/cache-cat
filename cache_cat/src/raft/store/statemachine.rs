@@ -283,6 +283,9 @@ impl RaftStateMachine<TypeConfig> for StateMachineStore {
                 BaseOperation::HDel(param) => {
                     self.data.kvs.h_del(param, &mut update);
                 }
+                BaseOperation::SRem(param) => {
+                    self.data.kvs.s_rem(param, &mut update);
+                }
             }
         }
         self.update_meta_data(res.0).await;

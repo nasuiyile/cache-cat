@@ -2,13 +2,67 @@ use crate::protocol::key::del::DelParams;
 use crate::protocol::key::exists::ExistsParams;
 use crate::protocol::key::expire::ExpireCondition;
 use crate::protocol::key::rename::RenameParams;
+use crate::raft::types::core::moka::cas::ComputeCommand;
 use crate::raft::types::core::moka::moka::{MyCache, MyValue, Update, UpdateType};
 use crate::raft::types::core::response_value::Value;
 use crate::raft::types::entry::bae_operation::{
     BaseOperation, DelReq, ExpireReq, InsertReq, PersistReq,
 };
 use crate::raft::types::entry::request::AtomicRequest;
+use moka::ops::compute::Op;
 use std::sync::Arc;
+
+impl ComputeCommand for ExpireReq {
+    fn key(&self) -> Arc<Vec<u8>> {
+        Arc::from(self.key.clone())
+    }
+    fn into_base_op(self) -> BaseOperation {
+        BaseOperation::Expire(self.clone())
+    }
+    fn mutate(self, mut data: MyValue, write_clock: u64) -> (Op<MyValue>, Value) {
+        let expires_at = self.expires_at + write_clock;
+        let should_update = match self.condition {
+            None => true,
+            Some(ref condition) => match condition {
+                ExpireCondition::Nx => data.expires_at == 0,
+                ExpireCondition::Xx => data.expires_at != 0,
+                ExpireCondition::Gt => data.expires_at != 0 && data.expires_at <= expires_at,
+                ExpireCondition::Lt => data.expires_at != 0 && data.expires_at >= expires_at,
+            },
+        };
+        if !should_update {
+            return (Op::Nop, Value::Integer(0));
+        }
+        data.expires_at = expires_at;
+        (Op::Put(data), Value::Integer(1))
+    }
+    fn init(self) -> (Op<MyValue>, Value) {
+        (Op::Nop, Value::Integer(0))
+    }
+}
+
+impl ComputeCommand for PersistReq {
+    fn key(&self) -> Arc<Vec<u8>> {
+        Arc::from(self.key.clone())
+    }
+
+    fn into_base_op(self) -> BaseOperation {
+        BaseOperation::Persist(self.clone())
+    }
+
+    fn mutate(self, mut value: MyValue, write_clock: u64) -> (Op<MyValue>, Value) {
+        if value.expires_at == 0 {
+            return (Op::Nop, Value::Integer(0));
+        }
+        value.expires_at = 0;
+        (Op::Put(value), Value::Integer(1))
+    }
+
+    fn init(self) -> (Op<MyValue>, Value) {
+        (Op::Nop, Value::Integer(0))
+    }
+}
+
 
 impl MyCache {
     pub fn redis_rename(
@@ -75,86 +129,11 @@ impl MyCache {
     }
 
     pub fn persist(&self, persist: PersistReq, update: &mut Update) -> Value {
-        let cache = match self.get_cache(update.db_number) {
-            Err(err) => return err,
-            Ok(cache) => cache,
-        };
-        let mut v = match cache.get(&persist.key) {
-            Some(v) => v,
-            None => return Value::Integer(0),
-        };
-        v.expires_at = 0;
-        match update.update_type {
-            UpdateType::None => {
-                cache.insert(persist.key, v);
-            }
-            UpdateType::Snapshot(queue) => {
-                let key = persist.key.clone();
-                v.version = v.version + 1;
-                queue.push(AtomicRequest {
-                    version: v.version,
-                    request: BaseOperation::Persist(persist),
-                    write_clock: update.write_clock,
-                });
-
-                cache.insert(key, v);
-            }
-            UpdateType::CAS(cas_version) => {
-                if *cas_version - 1 == v.version {
-                    v.version += 1;
-                    cache.insert(persist.key, v);
-                }
-            }
-        }
-        Value::Integer(1)
+        self.execute_compute(persist, update)
     }
 
     pub fn expire(&self, param: ExpireReq, update: &mut Update) -> Value {
-        let expires_at = param.expires_at + update.write_clock;
-        let cache = match self.get_cache(update.db_number) {
-            Err(err) => return err,
-            Ok(cache) => cache,
-        };
-        let mut v = match cache.get(&param.key) {
-            Some(v) => v,
-            None => return Value::Integer(0),
-        };
-        let should_update = match param.condition {
-            None => true,
-            Some(ref condition) => match condition {
-                ExpireCondition::Nx => v.expires_at == 0,
-                ExpireCondition::Xx => v.expires_at != 0,
-                ExpireCondition::Gt => v.expires_at != 0 && v.expires_at <= expires_at,
-                ExpireCondition::Lt => v.expires_at != 0 && v.expires_at >= expires_at,
-            },
-        };
-        if !should_update {
-            return Value::Integer(0);
-        }
-
-        v.expires_at = expires_at;
-        match update.update_type {
-            UpdateType::None => {
-                cache.insert(param.key, v);
-            }
-            UpdateType::Snapshot(queue) => {
-                let key = param.key.clone();
-                v.version = v.version + 1;
-                queue.push(AtomicRequest {
-                    version: v.version,
-                    request: BaseOperation::Expire(param),
-                    write_clock: update.write_clock,
-                });
-                cache.insert(key, v);
-            }
-            UpdateType::CAS(cas_version) => {
-                if *cas_version - 1 == v.version {
-                    v.version += 1;
-                    cache.insert(param.key, v);
-                }
-            }
-        }
-        Value::Integer(1)
+        self.execute_compute(param, update)
     }
 
     pub fn del(&self, del_req: DelReq, update: &mut Update) -> Value {

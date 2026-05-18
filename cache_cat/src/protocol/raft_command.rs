@@ -13,6 +13,7 @@ use crate::protocol::list::lrange::LRangeCommand;
 use crate::protocol::lua::eval::EvalCommand;
 use crate::protocol::set::sadd::SAddCommand;
 use crate::protocol::set::smembers::SMembersCommand;
+use crate::protocol::set::srem::SRemCommand;
 use crate::protocol::string::append::AppendCommand;
 use crate::protocol::string::get::GetCommand;
 use crate::protocol::string::incr::IncrCommand;
@@ -84,7 +85,8 @@ impl RaftCommandFactory {
         factory.register("RENAME", RenameCommand);
         factory.register("SMEMBERS", SMembersCommand);
         factory.register("HMGET", HMGetCommand);
-        factory.register("EVAL", EvalCommand); //禁止套娃
+        factory.register("EVAL", EvalCommand); //禁止套娃(就不禁止)
+        factory.register("SREM", SRemCommand);
         factory
     }
 

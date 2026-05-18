@@ -19,7 +19,7 @@ impl ComputeCommand for LPushReq {
         BaseOperation::LPush(self.clone())
     }
 
-    fn mutate(self, mut data: MyValue) -> (Op<MyValue>, Value) {
+    fn mutate(self, mut data: MyValue, write_clock: u64) -> (Op<MyValue>, Value) {
         match &data.data {
             ValueObject::List(data_arc) => {
                 let len = {
@@ -41,7 +41,6 @@ impl ComputeCommand for LPushReq {
     fn init(self) -> (Op<MyValue>, Value) {
         let deque: VecDeque<_> = VecDeque::from(self.elements);
         let len = deque.len() as i64;
-
         (
             Op::Put(MyValue::new(ValueObject::List(Arc::new(Mutex::new(deque))))),
             Value::Integer(len),
@@ -72,7 +71,7 @@ impl MyCache {
         }
     }
 
-    pub fn l_push(&self, l_push: LPushReq, update: &mut Update) -> Value {
-        self.execute_compute(l_push, update)
+    pub fn l_push(&self, param: LPushReq, update: &mut Update) -> Value {
+        self.execute_compute(param, update)
     }
 }

@@ -1,7 +1,6 @@
 use crate::raft::types::core::moka::moka::{MyCache, MyValue, Update, UpdateType};
 use crate::raft::types::core::response_value::Value;
 use crate::raft::types::core::response_value::Value::Integer;
-use crate::raft::types::core::value_object::ValueObject;
 use crate::raft::types::entry::bae_operation::BaseOperation;
 use crate::raft::types::entry::request::AtomicRequest;
 use moka::ops::compute::{CompResult, Op};
@@ -13,7 +12,7 @@ pub trait ComputeCommand: Send + 'static {
     fn into_base_op(self) -> BaseOperation;
 
     /// 返回: (是否修改, 返回值)
-    fn mutate(self, value: MyValue) -> (Op<MyValue>, Value);
+    fn mutate(self, value: MyValue, write_clock: u64) -> (Op<MyValue>, Value);
 
     /// 返回: (初始化值, 返回值)
     fn init(self) -> (Op<MyValue>, Value);
@@ -38,7 +37,7 @@ impl MyCache {
                 match maybe_entry {
                     Some(entry) => {
                         let value = entry.into_value();
-                        let (changed, res) = cmd.mutate(value);
+                        let (changed, res) = cmd.mutate(value, update.write_clock);
                         return_value = res;
                         changed
                     }
@@ -56,7 +55,7 @@ impl MyCache {
                 let op = match maybe_entry {
                     Some(entry) => {
                         let value = entry.into_value();
-                        let (changed, res) = cmd.mutate(value);
+                        let (changed, res) = cmd.mutate(value, update.write_clock);
                         return_value = res;
                         match changed {
                             Op::Nop => Op::Nop,
@@ -97,7 +96,7 @@ impl MyCache {
                                 return Op::Nop;
                             }
 
-                            let (changed, res) = cmd.mutate(value);
+                            let (changed, res) = cmd.mutate(value, update.write_clock);
                             return_value = res;
                             match changed {
                                 Op::Nop => Op::Nop,

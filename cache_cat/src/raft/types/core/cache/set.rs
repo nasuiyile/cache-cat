@@ -4,11 +4,61 @@ use crate::raft::types::core::moka::cas::ComputeCommand;
 use crate::raft::types::core::moka::moka::{MyCache, MyValue, Update};
 use crate::raft::types::core::response_value::Value;
 use crate::raft::types::core::value_object::{HashValue, ValueObject};
-use crate::raft::types::entry::bae_operation::{BaseOperation, SAddReq};
+use crate::raft::types::entry::bae_operation::{BaseOperation, SAddReq, SRemReq};
 use moka::ops::compute::Op;
 use parking_lot::Mutex;
 use std::collections::HashSet;
 use std::sync::Arc;
+
+impl ComputeCommand for SRemReq {
+    fn key(&self) -> Arc<Vec<u8>> {
+        self.key.clone()
+    }
+
+    fn into_base_op(self) -> BaseOperation {
+        BaseOperation::SRem(self.clone())
+    }
+
+    fn mutate(self, mut data: MyValue, _write_clock: u64) -> (Op<MyValue>, Value) {
+        match &mut data.data {
+            ValueObject::Set(set) => {
+                let deleted_count = {
+                    let mut set = set.lock();
+                    let mut count = 0;
+                    for member in &self.members {
+                        if set.remove(member) {
+                            count += 1;
+                        }
+                    }
+                    count
+                };
+                if deleted_count == 0 {
+                    return (Op::Nop, Value::Integer(0));
+                }
+                // 空集合直接删 key
+                {
+                    let set = set.lock();
+                    if set.is_empty() {
+                        return (Op::Remove, Value::Integer(deleted_count));
+                    }
+                }
+                (Op::Put(data), Value::Integer(deleted_count))
+            }
+
+            _ => (
+                Op::Nop,
+                Value::Error(
+                    "WRONGTYPE Operation against a key holding the wrong kind of value".into(),
+                ),
+            ),
+        }
+    }
+
+    fn init(self) -> (Op<MyValue>, Value) {
+        // key 不存在时 SREM 返回 0
+        (Op::Remove, Value::Integer(0))
+    }
+}
 
 impl ComputeCommand for SAddReq {
     fn key(&self) -> Arc<Vec<u8>> {
@@ -19,7 +69,7 @@ impl ComputeCommand for SAddReq {
         BaseOperation::SAdd(self.clone())
     }
 
-    fn mutate(self, mut data: MyValue) -> (Op<MyValue>, Value) {
+    fn mutate(self, mut data: MyValue, write_clock: u64) -> (Op<MyValue>, Value) {
         if let ValueObject::Set(map_arc) = &data.data {
             let mut count = 0;
             {
@@ -76,7 +126,11 @@ impl MyCache {
         }
     }
 
-    pub fn s_add(&self, sadd: SAddReq, update: &mut Update) -> Value {
-        self.execute_compute(sadd, update)
+    pub fn s_rem(&self, param: SRemReq, update: &mut Update) -> Value {
+        self.execute_compute(param, update)
+    }
+
+    pub fn s_add(&self, param: SAddReq, update: &mut Update) -> Value {
+        self.execute_compute(param, update)
     }
 }

@@ -23,7 +23,7 @@ impl ComputeCommand for IncrReq {
         BaseOperation::Incr(self.clone())
     }
 
-    fn mutate(self, mut value: MyValue) -> (Op<MyValue>, Value) {
+    fn mutate(self, mut value: MyValue, write_clock: u64) -> (Op<MyValue>, Value) {
         let result = match &mut value.data {
             ValueObject::Int(n) => {
                 *n += self.value;
@@ -66,7 +66,7 @@ impl ComputeCommand for AppendReq {
         BaseOperation::Append(self.clone())
     }
 
-    fn mutate(self, mut data: MyValue) -> (Op<MyValue>, Value) {
+    fn mutate(self, mut data: MyValue, write_clock: u64) -> (Op<MyValue>, Value) {
         match &mut data.data {
             ValueObject::String(data_arc) => {
                 let len = {
