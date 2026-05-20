@@ -1,6 +1,6 @@
 use crate::raft::store::statemachine::RaftMetaData;
 use crate::raft::store::statemachine::SnapshotState::{End, Tail};
-use crate::raft::types::core::moka::moka::MyCache;
+use crate::raft::types::core::mocha::mocha::MyCache;
 use crate::raft::types::entry::request::AtomicRequest;
 use crate::raft::types::raft_types::TypeConfig;
 use openraft::SnapshotMeta;
@@ -197,7 +197,7 @@ where
 #[tokio::test]
 async fn test_dump_and_load_with_data() {
     pub const TEMP_PATH: &str = r"E:\tmp\raft\raft-engine";
-    use crate::raft::types::core::moka::moka::MyValue;
+    use crate::raft::types::core::mocha::mocha::MyValue;
     use crate::raft::types::core::value_object::ValueObject;
     let cache = Arc::new(MyCache::new(1).unwrap());
 
@@ -206,22 +206,20 @@ async fn test_dump_and_load_with_data() {
     let value1 = MyValue {
         version: 1,
         data: ValueObject::String(Arc::new(b"value1".to_vec())),
-        expires_at: 1000,
     };
 
     let key2 = Arc::new(b"key2".to_vec());
     let value2 = MyValue {
         version: 1,
         data: ValueObject::String(Arc::new(b"value1".to_vec())),
-        expires_at: 0, // 永不过期
     };
 
     cache.databases[0]
-        .cache
-        .insert(key1.clone(), value1.clone());
+        .mocha
+        .insert_persistent(key1.clone(), value1.clone());
     cache.databases[0]
-        .cache
-        .insert(key2.clone(), value2.clone());
+        .mocha
+        .insert_persistent(key2.clone(), value2.clone());
     // let req = SetReq {
     //     key: Vec::from("xxx").into(),
     //     value: Vec::from("xxx").into(),
@@ -261,8 +259,8 @@ async fn test_dump_and_load_with_data() {
     }
 
     // 验证数据完整性
-    let loaded_value1 = new_cache.databases[0].cache.get(&key1);
-    let loaded_value2 = new_cache.databases[0].cache.get(&key2);
+    let loaded_value1 = new_cache.databases[0].mocha.get(&key1);
+    let loaded_value2 = new_cache.databases[0].mocha.get(&key2);
 
     assert!(loaded_value1.is_some(), "key1 should exist");
     assert!(loaded_value2.is_some(), "key2 should exist");
@@ -277,7 +275,6 @@ async fn test_dump_and_load_with_data() {
         _ => panic!("key1 type mismatch"),
     }
 
-    assert_eq!(v1.expires_at, value1.expires_at);
 
     match (&v2.data, &value2.data) {
         (ValueObject::String(a), ValueObject::String(b)) => {
@@ -286,5 +283,4 @@ async fn test_dump_and_load_with_data() {
         _ => panic!("key2 type mismatch"),
     }
 
-    assert_eq!(v2.expires_at, value2.expires_at);
 }

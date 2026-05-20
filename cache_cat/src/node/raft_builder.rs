@@ -29,7 +29,7 @@ impl RaftNodeBuilder {
             loop {
                 interval.tick().await;
                 for db in &back.app.state_machine.data.kvs.databases {
-                    db.cache.run_pending_tasks()
+                    // db.cache.run_pending_tasks()
                 }
                 let write_clock = back.app.state_machine.data.kvs.get_write_clock();
                 let have_deleted = back

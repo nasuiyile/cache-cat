@@ -1,4 +1,3 @@
-mod lua;
 
 #[cfg(test)]
 mod tests {

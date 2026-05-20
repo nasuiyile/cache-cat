@@ -1,8 +1,8 @@
-use crate::raft::types::core::moka::moka::{MyCache, MyValue};
-
+use crate::mocha::EntrySnapshot;
+use crate::raft::types::core::mocha::mocha::{MyCache, MyValue};
 use std::sync::Arc;
-use tokio::io;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
+use tokio::{io, time};
 
 impl MyCache {
     // 流式序列化：遍历所有分片
@@ -10,22 +10,24 @@ impl MyCache {
     where
         W: AsyncWrite + Unpin + Send,
     {
-        // 先写入分片数量
         let shard_count = self.databases.len() as u64;
         writer.write_u64(shard_count).await?;
 
-        // 遍历每个分片
         for shard in &self.databases {
-            // 记录当前分片的条目数量
-            let entry_count = shard.cache.iter().count() as u64;
+            // 一次遍历，收集当前分片所有存活快照
+            let mut entries = Vec::new();
+            shard.mocha.for_each_snapshot(|key, snapshot| {
+                entries.push((key.clone(), snapshot));
+            });
+
+            let entry_count = entries.len() as u64;
             writer.write_u64(entry_count).await?;
 
-            // 遍历分片中的所有条目
-            for entry in shard.cache.iter() {
-                let (k_arc, v) = entry;
-                let key_bytes = bincode2::serialize(&*k_arc)
+            // 异步写出
+            for (key, value) in entries {
+                let key_bytes = bincode2::serialize(&key)
                     .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
-                let val_bytes = bincode2::serialize(&v)
+                let val_bytes = bincode2::serialize(&value)
                     .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
 
                 writer.write_u64(key_bytes.len() as u64).await?;
@@ -78,13 +80,13 @@ impl MyCache {
                 // 反序列化
                 let key_vec: Vec<u8> = bincode2::deserialize(&key_buf)
                     .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
-                let value: MyValue = bincode2::deserialize(&val_buf)
+                let value: EntrySnapshot<MyValue> = bincode2::deserialize(&val_buf)
                     .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
 
                 // 注意：这里需要根据 key 决定插入到哪个分片
                 self.databases[shard_idx]
-                    .cache
-                    .insert(Arc::new(key_vec), value);
+                    .mocha
+                    .insert_snapshot(Arc::new(key_vec), value);
             }
         }
 

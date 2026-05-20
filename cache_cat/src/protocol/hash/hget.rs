@@ -14,7 +14,6 @@ use crate::raft::types::entry::request::Operation;
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use std::fmt::{Display, Formatter};
-use crate::raft::types::core::moka::moka::MyValue;
 
 /// Parsed HGET arguments
 #[derive(Debug, Clone, Serialize, Deserialize)]

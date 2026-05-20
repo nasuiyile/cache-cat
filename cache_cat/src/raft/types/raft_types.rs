@@ -1,7 +1,7 @@
 use super::endpoint::Endpoint;
 use crate::error::{CacheCatError, StorageError};
 use crate::raft::store::statemachine::StateMachineStore;
-use crate::raft::types::core::moka::moka::MyValue;
+use crate::raft::types::core::mocha::mocha::MyValue;
 use crate::raft::types::core::response_value::Value;
 use crate::raft::types::entry::request::{Operation, Request};
 use crate::raft::types::file_operator::FileOperator;

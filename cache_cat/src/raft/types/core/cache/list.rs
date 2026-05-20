@@ -1,14 +1,14 @@
 use crate::error::ProtocolError;
 use crate::protocol::list::lrange::LRangeParams;
-use crate::raft::types::core::moka::cas::ComputeCommand;
-use crate::raft::types::core::moka::moka::{MyCache, MyValue, Update};
+use crate::raft::types::core::mocha::cas::ComputeCommand;
+use crate::raft::types::core::mocha::mocha::{MyCache, MyValue, Update};
 use crate::raft::types::core::response_value::Value;
 use crate::raft::types::core::value_object::ValueObject;
 use crate::raft::types::entry::bae_operation::{BaseOperation, LPushReq};
 use parking_lot::lock_api::Mutex;
 use std::collections::VecDeque;
 use std::sync::Arc;
-use moka::ops::compute::Op;
+use crate::mocha::{EntryRef, ExpirePolicy, MochaOperation};
 
 impl ComputeCommand for LPushReq {
     fn key(&self) -> Arc<Vec<u8>> {
@@ -19,8 +19,12 @@ impl ComputeCommand for LPushReq {
         BaseOperation::LPush(self.clone())
     }
 
-    fn mutate(self, mut data: MyValue, write_clock: u64) -> (Op<MyValue>, Value) {
-        match &data.data {
+    fn mutate(
+        self,
+        entry: EntryRef<MyValue>,
+        write_clock: u64,
+    ) -> (MochaOperation<MyValue>, Value) {
+        match &entry.value.data {
             ValueObject::List(data_arc) => {
                 let len = {
                     let mut list = data_arc.lock();
@@ -29,20 +33,29 @@ impl ComputeCommand for LPushReq {
                     }
                     list.len() as i64
                 };
-                (Op::Put(data), Value::Integer(len))
+                (
+                    MochaOperation::Insert {
+                        value: entry.value.clone(),
+                        expire: entry.get_expire_policy(),
+                    },
+                    Value::Integer(len),
+                )
             }
             _ => (
-                Op::Nop,
+                MochaOperation::Abort,
                 Value::Error("Key exists but is not a List".to_string()),
             ),
         }
     }
 
-    fn init(self) -> (Op<MyValue>, Value) {
+    fn init(self) -> (MochaOperation<MyValue>, Value) {
         let deque: VecDeque<_> = VecDeque::from(self.elements);
         let len = deque.len() as i64;
         (
-            Op::Put(MyValue::new(ValueObject::List(Arc::new(Mutex::new(deque))))),
+            MochaOperation::Insert {
+                value: MyValue::new(ValueObject::List(Arc::new(Mutex::new(deque)))),
+                expire: ExpirePolicy::Persistent,
+            },
             Value::Integer(len),
         )
     }

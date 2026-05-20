@@ -1,9 +1,9 @@
-use crate::raft::types::core::moka::moka::{MyCache, MyValue, Update, UpdateType};
+use crate::mocha::{EntryRef, MochaOperation};
+use crate::raft::types::core::mocha::mocha::{MyCache, MyValue, Update, UpdateType};
 use crate::raft::types::core::response_value::Value;
 use crate::raft::types::core::response_value::Value::Integer;
 use crate::raft::types::entry::bae_operation::BaseOperation;
 use crate::raft::types::entry::request::AtomicRequest;
-use moka::ops::compute::{CompResult, Op};
 use std::sync::Arc;
 
 pub trait ComputeCommand: Send + 'static {
@@ -12,10 +12,11 @@ pub trait ComputeCommand: Send + 'static {
     fn into_base_op(self) -> BaseOperation;
 
     /// 返回: (是否修改, 返回值)
-    fn mutate(self, value: MyValue, write_clock: u64) -> (Op<MyValue>, Value);
+    fn mutate(self, entry: EntryRef<MyValue>, write_clock: u64)
+    -> (MochaOperation<MyValue>, Value);
 
     /// 返回: (初始化值, 返回值)
-    fn init(self) -> (Op<MyValue>, Value);
+    fn init(self) -> (MochaOperation<MyValue>, Value);
 }
 
 impl MyCache {
@@ -25,19 +26,18 @@ impl MyCache {
     {
         let cache = match self.databases.get(update.db_number as usize) {
             None => return Value::error("Key not found"),
-            Some(v) => &v.cache,
+            Some(v) => &v.mocha,
         };
 
         let key = cmd.key();
         let mut return_value = Integer(0);
 
         let result = match update.update_type {
-            UpdateType::None => cache.entry(key).and_compute_with(|maybe_entry| {
+            UpdateType::None => cache.compute(key, |maybe_entry| {
                 let cmd = cmd.clone();
                 match maybe_entry {
                     Some(entry) => {
-                        let value = entry.into_value();
-                        let (changed, res) = cmd.mutate(value, update.write_clock);
+                        let (changed, res) = cmd.mutate(entry, update.write_clock);
                         return_value = res;
                         changed
                     }
@@ -48,29 +48,25 @@ impl MyCache {
                     }
                 }
             }),
-            UpdateType::Snapshot(queue) => cache.entry(key).and_compute_with(|maybe_entry| {
+            UpdateType::Snapshot(queue) => cache.compute(key, |maybe_entry| {
                 let cmd_copy = cmd.clone();
                 let mut next_version = 1;
-
                 let op = match maybe_entry {
                     Some(entry) => {
-                        let value = entry.into_value();
-                        let (changed, res) = cmd.mutate(value, update.write_clock);
+                        let (changed, res) = cmd.mutate(entry, update.write_clock);
                         return_value = res;
                         match changed {
-                            Op::Nop => Op::Nop,
-                            Op::Put(mut value) => {
-                                value.version += 1;
-                                next_version = value.version;
-                                Op::Put(value)
+                            MochaOperation::Insert { value, expire } => {
+                                next_version = value.version + 1;
+                                MochaOperation::Insert { value, expire }
                             }
-                            Op::Remove => Op::Remove,
+                            MochaOperation::Remove => MochaOperation::Remove,
+                            MochaOperation::Abort => MochaOperation::Abort,
                         }
                     }
                     None => {
                         let (new_obj, res) = cmd.init();
                         return_value = res;
-
                         new_obj
                     }
                 };
@@ -85,26 +81,23 @@ impl MyCache {
 
             UpdateType::CAS(cas_version) => {
                 let expected_version = *cas_version - 1;
-                cache.entry(key).and_compute_with(|maybe_entry| {
+                cache.compute(key, |maybe_entry| {
                     let cmd = cmd.clone();
                     match maybe_entry {
                         Some(entry) => {
-                            let mut value = entry.into_value();
-
-                            if value.version != expected_version {
+                            if entry.value.version != expected_version {
                                 return_value = Integer(0);
-                                return Op::Nop;
+                                return MochaOperation::Abort;
                             }
-
-                            let (changed, res) = cmd.mutate(value, update.write_clock);
+                            let (changed, res) = cmd.mutate(entry, update.write_clock);
                             return_value = res;
                             match changed {
-                                Op::Nop => Op::Nop,
-                                Op::Put(mut value) => {
+                                MochaOperation::Insert { mut value, expire } => {
                                     value.version += 1;
-                                    Op::Put(value)
+                                    MochaOperation::Insert { value, expire }
                                 }
-                                Op::Remove => Op::Remove,
+                                MochaOperation::Remove => MochaOperation::Remove,
+                                MochaOperation::Abort => MochaOperation::Abort,
                             }
                         }
                         None => {
@@ -117,9 +110,6 @@ impl MyCache {
             }
         };
 
-        match result {
-            CompResult::StillNone(_) => Value::Error("Key not found".into()),
-            _ => return_value,
-        }
+        return_value
     }
 }

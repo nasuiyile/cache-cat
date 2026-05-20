@@ -10,6 +10,9 @@ r = redis.Redis(
 )
 
 print()
+
+r.set('test0', 'test0')
+
 r.lpush('test1', 'test')
 print(r.lrange('test1', 0, -1))
 

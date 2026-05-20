@@ -4,8 +4,8 @@ use crate::protocol::string::set::{SetMode, SetParams};
 use crate::raft::store::snapshot::snapshot_handler::{
     dump_cache_to_path, get_snapshot_file_name, load_cache_from_path,
 };
-use crate::raft::types::core::moka::moka::{MyCache, Update, UpdateType};
-use crate::raft::types::core::moka::request_handler::do_request;
+use crate::raft::types::core::mocha::mocha::{MyCache, Update, UpdateType};
+use crate::raft::types::core::mocha::request_handler::do_request;
 use crate::raft::types::core::response_value::Value;
 use crate::raft::types::entry::bae_operation::{BaseOperation, DelReq, InsertReq, SetReq};
 use crate::raft::types::entry::read_operation::ReadOperation;
@@ -187,9 +187,6 @@ impl RaftStateMachine<TypeConfig> for StateMachineStore {
             let st = &self.data.kvs;
             let response = match entry.payload {
                 EntryPayload::Blank => {
-                    for db in &st.databases {
-                        db.cache.run_pending_tasks()
-                    }
                     Value::ok()
                 }
                 EntryPayload::Normal(req) => {

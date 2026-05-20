@@ -1,7 +1,6 @@
 use crate::protocol::key::del::DelParams;
 use crate::protocol::key::rename::RenameParams;
 use crate::protocol::lua::eval::EvalParams;
-use crate::protocol::lua::script::ScriptParam;
 use crate::protocol::string::mset::MsetParams;
 use crate::protocol::string::set::SetParams;
 use crate::protocol::transaction::exec::ExecParams;

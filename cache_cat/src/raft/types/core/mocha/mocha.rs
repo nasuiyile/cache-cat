@@ -1,25 +1,23 @@
 use crate::error::ProtocolError;
+use crate::mocha::Mocha;
 use crate::protocol::lua_env::LuaEnv;
 use crate::raft::types::core::response_value::Value;
 use crate::raft::types::core::value_object::ValueObject;
 use crate::raft::types::entry::request::AtomicRequest;
 use crate::utils::now_ms;
-use moka::Expiry;
-use moka::sync::Cache;
 use parking_lot::RwLock;
 use serde::{Deserialize, Serialize};
 use std::cmp::max;
 use std::option::Option;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 use tokio::sync::Mutex;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct MyValue {
     pub version: u32, //在快照期间每一次更新都会增加version 默认为1
     pub data: ValueObject,
-    pub expires_at: u64, //绝对时间  这里 假设不同节点的时钟偏移是有界的
 }
 
 impl MyValue {
@@ -27,63 +25,19 @@ impl MyValue {
         Self {
             version: 1,
             data: value,
-            expires_at: 0,
         }
     }
 }
 
-// 自定义 Expiry
-struct MyExpiry {
-    write_logic_clock: Arc<AtomicU64>, //写逻辑时钟的副本
-}
-impl Expiry<Arc<Vec<u8>>, MyValue> for MyExpiry {
-    //创建或更新后的定时删除逻辑
-    //唯一的过期方式是推动写逻辑时钟的推进
-    fn expire_after_create(
-        &self,
-        _key: &Arc<Vec<u8>>,
-        value: &MyValue,
-        _created_at: Instant,
-    ) -> Option<Duration> {
-        if value.expires_at == 0 {
-            None
-        } else {
-            let now = self.write_logic_clock.load(Ordering::Acquire);
-            if value.expires_at <= now {
-                Some(Duration::from_millis(0))
-            } else {
-                Some(Duration::from_millis(value.expires_at - now))
-            }
-        }
-    }
-
-    fn expire_after_update(
-        &self,
-        _key: &Arc<Vec<u8>>,
-        value: &MyValue,
-        _updated_at: Instant,
-        _duration_until_expiry: Option<Duration>,
-    ) -> Option<Duration> {
-        if value.expires_at == 0 {
-            None
-        } else {
-            let now = self.write_logic_clock.load(Ordering::Acquire);
-            if value.expires_at <= now {
-                Some(Duration::from_millis(0))
-            } else {
-                Some(Duration::from_millis(value.expires_at - now))
-            }
-        }
-    }
-}
 #[derive(Debug)]
 pub struct Database {
-    pub cache: Cache<Arc<Vec<u8>>, MyValue>,
+    // pub cache: Cache<Arc<Vec<u8>>, MyValue>,
+    pub mocha: Arc<Mocha<Arc<Vec<u8>>, MyValue>>,
 }
 impl Clone for Database {
     fn clone(&self) -> Self {
         Self {
-            cache: self.cache.clone(),
+            mocha: self.mocha.clone(),
         }
     }
 }
@@ -104,10 +58,10 @@ pub struct MyCache {
 }
 
 impl MyCache {
-    pub fn get_cache(&self, db_number: u16) -> Result<&Cache<Arc<Vec<u8>>, MyValue>, Value> {
+    pub fn get_cache(&self, db_number: u16) -> Result<&Mocha<Arc<Vec<u8>>, MyValue>, Value> {
         match self.databases.get(db_number as usize) {
             None => Err(ProtocolError::DbNotExist.into()),
-            Some(v) => Ok(&v.cache),
+            Some(v) => Ok(&v.mocha),
         }
     }
 
@@ -144,22 +98,10 @@ impl MyCache {
     pub fn new(db_number: u16) -> Result<Self, ProtocolError> {
         let have_deleted = Arc::new(AtomicBool::new(false));
         let write_logic_clock = Arc::new(AtomicU64::new(0));
-        let deleted = have_deleted.clone();
-
         let mut vec = Vec::new();
         for _ in 0..db_number {
-            let deleted = deleted.clone();
-            let cache = Cache::builder()
-                // .max_capacity(max_capacity)
-                .expire_after(MyExpiry {
-                    write_logic_clock: write_logic_clock.clone(),
-                })
-                .eviction_listener(move |_k, _v, _cause| {
-                    //如果有缓存数据被删除
-                    deleted.store(true, Ordering::Release)
-                })
-                .build();
-            let db = Database { cache };
+            let mocha = Mocha::new(write_logic_clock.clone(), Duration::from_secs(10));
+            let db = Database { mocha };
             vec.push(db);
         }
         let lua_env = LuaEnv::new()?;
@@ -185,24 +127,29 @@ impl MyCache {
             .get(db_number as usize)
             .ok_or(ProtocolError::DbNotExist)?;
         let read_clock = self.get_and_update_read_clock();
-        match cache.cache.get(key) {
+        match cache.mocha.get_entry(key) {
             None => {
                 //用写逻辑时钟也获取不到 可能会产生写逻辑时钟在此刻推进了导致读不到数据。但这是符合预期的。
                 Ok(None)
             }
             Some(my_value) => {
-                if my_value.expires_at < read_clock && my_value.expires_at != 0 {
-                    //写逻辑时钟获取到了 但是读逻辑时钟没有获取到
-                    return Ok(None);
+                match my_value.expire_at {
+                    Some(inner) => {
+                        if inner < read_clock {
+                            // 写逻辑时钟获取到了但是读逻辑时钟没有获取到
+                            return Ok(None);
+                        }
+                        Ok(Some(my_value.value))
+                    }
+                    None => Ok(Some(my_value.value)),
                 }
-                Ok(Some(my_value))
             }
         }
     }
 
     pub fn invalidate_all(&self) {
         for db in &self.databases {
-            db.cache.invalidate_all();
+            db.mocha.clear();
         }
     }
 }

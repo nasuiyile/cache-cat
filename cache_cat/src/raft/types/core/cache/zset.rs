@@ -1,14 +1,14 @@
 use crate::error::ProtocolError;
 use crate::protocol::zset::zrange::ZRangeParams;
-use crate::raft::types::core::moka::cas::ComputeCommand;
-use crate::raft::types::core::moka::moka::{MyCache, MyValue, Update};
+use crate::raft::types::core::mocha::cas::ComputeCommand;
+use crate::raft::types::core::mocha::mocha::{MyCache, MyValue, Update};
 use crate::raft::types::core::response_value::Value;
 use crate::raft::types::core::value_object::ValueObject::ZSet;
 use crate::raft::types::core::value_object::{SortedSet, ValueObject};
 use crate::raft::types::entry::bae_operation::{BaseOperation, ZAddReq};
-use moka::ops::compute::Op;
 use parking_lot::Mutex;
 use std::sync::Arc;
+use crate::mocha::{EntryRef, ExpirePolicy, MochaOperation};
 
 impl ComputeCommand for ZAddReq {
     fn key(&self) -> Arc<Vec<u8>> {
@@ -19,21 +19,37 @@ impl ComputeCommand for ZAddReq {
         BaseOperation::ZAdd(self.clone())
     }
 
-    fn mutate(self, mut value: MyValue, write_clock: u64) -> (Op<MyValue>, Value) {
-        match &value.data {
+    fn mutate(
+        self,
+        entry: EntryRef<MyValue>,
+        write_clock: u64,
+    ) -> (MochaOperation<MyValue>, Value) {
+        match &entry.value.data {
             ZSet(zset) => {
                 let changed_count = zset.lock().zadd(self);
-                (Op::Put(value), Value::Integer(changed_count))
+                (
+                    MochaOperation::Insert {
+                        value: entry.value.clone(),
+                        expire: entry.get_expire_policy(),
+                    },
+                    Value::Integer(changed_count),
+                )
             }
-            _ => (Op::Nop, Value::Error("zadd: key is not a zset".to_string())),
+            _ => (
+                MochaOperation::Abort,
+                Value::Error("zadd: key is not a zset".to_string()),
+            ),
         }
     }
 
-    fn init(self) -> (Op<MyValue>, Value) {
+    fn init(self) -> (MochaOperation<MyValue>, Value) {
         let mut set = SortedSet::new();
         let changed_count = set.zadd(self);
         (
-            Op::Put(MyValue::new(ZSet(Arc::new(Mutex::new(set))))),
+            MochaOperation::Insert {
+                value: MyValue::new(ZSet(Arc::new(Mutex::new(set)))),
+                expire: ExpirePolicy::Persistent,
+            },
             Value::Integer(changed_count),
         )
     }

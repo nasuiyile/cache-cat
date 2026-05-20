@@ -1,14 +1,14 @@
 use crate::error::ProtocolError;
 use crate::protocol::set::smembers::SMembersParams;
-use crate::raft::types::core::moka::cas::ComputeCommand;
-use crate::raft::types::core::moka::moka::{MyCache, MyValue, Update};
+use crate::raft::types::core::mocha::cas::ComputeCommand;
+use crate::raft::types::core::mocha::mocha::{MyCache, MyValue, Update};
 use crate::raft::types::core::response_value::Value;
 use crate::raft::types::core::value_object::{HashValue, ValueObject};
 use crate::raft::types::entry::bae_operation::{BaseOperation, SAddReq, SRemReq};
-use moka::ops::compute::Op;
 use parking_lot::Mutex;
 use std::collections::HashSet;
 use std::sync::Arc;
+use crate::mocha::{EntryRef, ExpirePolicy, MochaOperation};
 
 impl ComputeCommand for SRemReq {
     fn key(&self) -> Arc<Vec<u8>> {
@@ -19,34 +19,39 @@ impl ComputeCommand for SRemReq {
         BaseOperation::SRem(self.clone())
     }
 
-    fn mutate(self, mut data: MyValue, _write_clock: u64) -> (Op<MyValue>, Value) {
-        match &mut data.data {
+    fn mutate(
+        self,
+        entry: EntryRef<MyValue>,
+        _write_clock: u64,
+    ) -> (MochaOperation<MyValue>, Value) {
+        match &entry.value.data {
             ValueObject::Set(set) => {
-                let deleted_count = {
-                    let mut set = set.lock();
-                    let mut count = 0;
-                    for member in &self.members {
-                        if set.remove(member) {
-                            count += 1;
-                        }
-                    }
-                    count
-                };
-                if deleted_count == 0 {
-                    return (Op::Nop, Value::Integer(0));
-                }
-                // 空集合直接删 key
-                {
-                    let set = set.lock();
-                    if set.is_empty() {
-                        return (Op::Remove, Value::Integer(deleted_count));
+                let mut set = set.lock();
+                let mut deleted_count = 0;
+                for member in &self.members {
+                    if set.remove(member) {
+                        deleted_count += 1;
                     }
                 }
-                (Op::Put(data), Value::Integer(deleted_count))
-            }
+                let is_empty = set.is_empty();
+                drop(set);
 
+                if deleted_count == 0 {
+                    return (MochaOperation::Abort, Value::Integer(0));
+                }
+                if is_empty {
+                    return (MochaOperation::Remove, Value::Integer(deleted_count));
+                }
+                (
+                    MochaOperation::Insert {
+                        value: entry.value.clone(),
+                        expire: entry.get_expire_policy(),
+                    },
+                    Value::Integer(deleted_count),
+                )
+            }
             _ => (
-                Op::Nop,
+                MochaOperation::Abort,
                 Value::Error(
                     "WRONGTYPE Operation against a key holding the wrong kind of value".into(),
                 ),
@@ -54,9 +59,8 @@ impl ComputeCommand for SRemReq {
         }
     }
 
-    fn init(self) -> (Op<MyValue>, Value) {
-        // key 不存在时 SREM 返回 0
-        (Op::Remove, Value::Integer(0))
+    fn init(self) -> (MochaOperation<MyValue>, Value) {
+        (MochaOperation::Abort, Value::Integer(0))
     }
 }
 
@@ -69,40 +73,55 @@ impl ComputeCommand for SAddReq {
         BaseOperation::SAdd(self.clone())
     }
 
-    fn mutate(self, mut data: MyValue, write_clock: u64) -> (Op<MyValue>, Value) {
-        if let ValueObject::Set(map_arc) = &data.data {
-            let mut count = 0;
-            {
-                let mut map = map_arc.lock();
-                for v in &self.elements {
-                    if map.insert(v.clone()) {
-                        count += 1;
+    fn mutate(
+        self,
+        entry: EntryRef<MyValue>,
+        write_clock: u64,
+    ) -> (MochaOperation<MyValue>, Value) {
+        match &entry.value.data {
+            ValueObject::Set(set) => {
+                let mut count = 0;
+                {
+                    let mut set = set.lock();
+                    for v in &self.elements {
+                        if set.insert(v.clone()) {
+                            count += 1;
+                        }
                     }
                 }
-            } // map 在这里 drop
-            (Op::Put(data), Value::Integer(count))
-        } else {
-            (
-                Op::Nop,
+                (
+                    MochaOperation::Insert {
+                        value: entry.value.clone(),
+                        expire: entry.get_expire_policy(),
+                    },
+                    Value::Integer(count),
+                )
+            }
+            _ => (
+                MochaOperation::Abort,
                 Value::Error(
                     "WRONGTYPE Operation against a key holding the wrong kind of value".into(),
                 ),
-            )
+            ),
         }
     }
 
-    fn init(self) -> (Op<MyValue>, Value) {
+    fn init(self) -> (MochaOperation<MyValue>, Value) {
         let mut set = HashSet::new();
         let len = self.elements.len();
         for v in self.elements {
             set.insert(v);
         }
         (
-            Op::Put(MyValue::new(ValueObject::Set(Arc::new(Mutex::new(set))))),
+            MochaOperation::Insert {
+                value: MyValue::new(ValueObject::Set(Arc::new(Mutex::new(set)))),
+                expire: ExpirePolicy::Persistent,
+            },
             Value::Integer(len as i64),
         )
     }
 }
+
 
 impl MyCache {
     pub fn s_member(&self, param: SMembersParams, db_number: u16) -> Value {

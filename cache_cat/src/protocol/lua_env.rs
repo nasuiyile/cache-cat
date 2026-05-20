@@ -1,7 +1,7 @@
 use crate::error::ProtocolError;
 use crate::protocol::raft_command::RaftCommandFactory;
-use crate::raft::types::core::moka::moka::{MyCache, Update};
-use crate::raft::types::core::moka::request_handler::do_request;
+use crate::raft::types::core::mocha::mocha::{MyCache, Update};
+use crate::raft::types::core::mocha::request_handler::do_request;
 use crate::raft::types::core::response_value::Value;
 use lru::LruCache;
 use mlua::prelude::LuaError;
@@ -64,7 +64,7 @@ impl LuaEnv {
 
     /// 执行 Lua 脚本，类似 Redis EVAL
     ///
-    /// * `cache`   - 当前 Moka cache 的引用
+    /// * `cache`   - 当前 Mocha cache 的引用
     /// * `script`  - Lua 脚本内容
     /// * `keys`    - 传递给脚本的 KEYS 表（下标从 1 开始）
     /// * `args`    - 传递给脚本的 ARGV 表（下标从 1 开始）

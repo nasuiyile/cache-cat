@@ -1,16 +1,16 @@
 use crate::error::{CacheCatError, ProtocolError};
 use crate::protocol::hash::hget::HGetParams;
 use crate::protocol::hash::hmget::HMGetParams;
-use crate::raft::types::core::moka::cas::ComputeCommand;
-use crate::raft::types::core::moka::moka::{MyCache, MyValue, Update};
+use crate::raft::types::core::mocha::cas::ComputeCommand;
+use crate::raft::types::core::mocha::mocha::{MyCache, MyValue, Update};
 use crate::raft::types::core::response_value::Value;
 use crate::raft::types::core::value_object::{HashValue, ValueObject};
 use crate::raft::types::entry::bae_operation::{BaseOperation, HDelReq, HIncrReq, HSetReq};
 use crate::utils::parse_i64;
-use moka::ops::compute::Op;
 use parking_lot::Mutex;
 use std::collections::HashMap;
 use std::sync::Arc;
+use crate::mocha::{EntryRef, ExpirePolicy, MochaOperation};
 
 impl ComputeCommand for HSetReq {
     fn key(&self) -> Arc<Vec<u8>> {
@@ -21,34 +21,42 @@ impl ComputeCommand for HSetReq {
         BaseOperation::HSet(self.clone())
     }
 
-    fn mutate(self, mut data: MyValue, write_clock: u64) -> (Op<MyValue>, Value) {
-        if let ValueObject::Hash(map_arc) = &data.data {
-            let mut count = 0;
-            {
-                let mut map = map_arc.lock();
-
+    fn mutate(
+        self,
+        entry: EntryRef<MyValue>,
+        write_clock: u64,
+    ) -> (MochaOperation<MyValue>, Value) {
+        match &entry.value.data {
+            ValueObject::Hash(hash) => {
+                let mut count = 0;
+                let mut map = hash.lock();
                 for (k, v) in &self.elements {
                     let value = parse_i64(v)
                         .map(HashValue::Int)
                         .unwrap_or_else(|| HashValue::Str(v.clone()));
-
                     if map.insert(k.clone(), value).is_none() {
                         count += 1;
                     }
                 }
-            } // map 在这里 drop
-            (Op::Put(data), Value::Integer(count))
-        } else {
-            (
-                Op::Nop,
+                drop(map);
+                (
+                    MochaOperation::Insert {
+                        value: entry.value.clone(),
+                        expire: entry.get_expire_policy(),
+                    },
+                    Value::Integer(count),
+                )
+            }
+            _ => (
+                MochaOperation::Abort,
                 Value::Error(
                     "WRONGTYPE Operation against a key holding the wrong kind of value".into(),
                 ),
-            )
+            ),
         }
     }
 
-    fn init(self) -> (Op<MyValue>, Value) {
+    fn init(self) -> (MochaOperation<MyValue>, Value) {
         let mut map = HashMap::new();
         let len = self.elements.len();
         for (k, v) in self.elements {
@@ -59,7 +67,10 @@ impl ComputeCommand for HSetReq {
             }
         }
         (
-            Op::Put(MyValue::new(ValueObject::Hash(Arc::new(Mutex::new(map))))),
+            MochaOperation::Insert {
+                value: MyValue::new(ValueObject::Hash(Arc::new(Mutex::new(map)))),
+                expire: ExpirePolicy::Persistent,
+            },
             Value::Integer(len as i64),
         )
     }
@@ -73,34 +84,42 @@ impl ComputeCommand for HIncrReq {
         BaseOperation::HIncr(self.clone())
     }
 
-    fn mutate(self, mut data: MyValue, write_clock: u64) -> (Op<MyValue>, Value) {
-        match &mut data.data {
+    fn mutate(
+        self,
+        entry: EntryRef<MyValue>,
+        write_clock: u64,
+    ) -> (MochaOperation<MyValue>, Value) {
+        match &entry.value.data {
             ValueObject::Hash(hash) => {
-                let result = {
-                    let mut hash = hash.lock();
-                    let hash_value = hash.get(&self.field);
-                    match hash_value {
-                        Some(HashValue::Int(int)) => {
-                            let new_int = *int + self.value;
-                            hash.insert(self.field.clone(), HashValue::Int(new_int));
-                            Value::Integer(new_int)
-                        }
-                        Some(HashValue::Str(_)) => {
-                            return (
-                                Op::Nop,
-                                Value::Error("ERR hash value is not an integer".into()),
-                            );
-                        }
-                        None => {
-                            hash.insert(self.field.clone(), HashValue::Int(self.value));
-                            Value::Integer(self.value)
-                        }
+                let mut map = hash.lock();
+                let result = match map.get(&self.field) {
+                    Some(HashValue::Int(int)) => {
+                        let new_int = *int + self.value;
+                        map.insert(self.field.clone(), HashValue::Int(new_int));
+                        Value::Integer(new_int)
+                    }
+                    Some(HashValue::Str(_)) => {
+                        return (
+                            MochaOperation::Abort,
+                            Value::Error("ERR hash value is not an integer".into()),
+                        );
+                    }
+                    None => {
+                        map.insert(self.field.clone(), HashValue::Int(self.value));
+                        Value::Integer(self.value)
                     }
                 };
-                (Op::Put(data), result)
+                drop(map);
+                (
+                    MochaOperation::Insert {
+                        value: entry.value.clone(),
+                        expire: entry.get_expire_policy(),
+                    },
+                    result,
+                )
             }
             _ => (
-                Op::Nop,
+                MochaOperation::Abort,
                 Value::Error(
                     "WRONGTYPE Operation against a key holding the wrong kind of value".into(),
                 ),
@@ -108,16 +127,18 @@ impl ComputeCommand for HIncrReq {
         }
     }
 
-    fn init(self) -> (Op<MyValue>, Value) {
+    fn init(self) -> (MochaOperation<MyValue>, Value) {
         let mut map = HashMap::new();
         map.insert(self.field, HashValue::Int(self.value));
         (
-            Op::Put(MyValue::new(ValueObject::Hash(Arc::new(Mutex::new(map))))),
+            MochaOperation::Insert {
+                value: MyValue::new(ValueObject::Hash(Arc::new(Mutex::new(map)))),
+                expire: ExpirePolicy::Persistent,
+            },
             Value::Integer(self.value),
         )
     }
 }
-
 impl ComputeCommand for HDelReq {
     fn key(&self) -> Arc<Vec<u8>> {
         self.key.clone()
@@ -127,26 +148,34 @@ impl ComputeCommand for HDelReq {
         BaseOperation::HDel(self.clone())
     }
 
-    fn mutate(self, mut data: MyValue, write_clock: u64) -> (Op<MyValue>, Value) {
-        match &mut data.data {
+    fn mutate(
+        self,
+        entry: EntryRef<MyValue>,
+        write_clock: u64,
+    ) -> (MochaOperation<MyValue>, Value) {
+        match &entry.value.data {
             ValueObject::Hash(hash) => {
-                let deleted_count = {
-                    let mut hash = hash.lock();
-                    let mut count = 0;
-                    for field in &self.fields {
-                        if hash.remove(field).is_some() {
-                            count += 1;
-                        }
+                let mut map = hash.lock();
+                let mut deleted_count = 0;
+                for field in &self.fields {
+                    if map.remove(field).is_some() {
+                        deleted_count += 1;
                     }
-                    count
-                };
-                if deleted_count == 0 {
-                    return (Op::Nop, Value::Integer(deleted_count));
                 }
-                (Op::Put(data), Value::Integer(deleted_count))
+                drop(map);
+                if deleted_count == 0 {
+                    return (MochaOperation::Abort, Value::Integer(0));
+                }
+                (
+                    MochaOperation::Insert {
+                        value: entry.value.clone(),
+                        expire: entry.get_expire_policy(),
+                    },
+                    Value::Integer(deleted_count),
+                )
             }
             _ => (
-                Op::Nop,
+                MochaOperation::Abort,
                 Value::Error(
                     "WRONGTYPE Operation against a key holding the wrong kind of value".into(),
                 ),
@@ -154,9 +183,8 @@ impl ComputeCommand for HDelReq {
         }
     }
 
-    fn init(self) -> (Op<MyValue>, Value) {
-        //key本身不存在也返回9
-        (Op::Remove, Value::Integer(0))
+    fn init(self) -> (MochaOperation<MyValue>, Value) {
+        (MochaOperation::Abort, Value::Integer(0))
     }
 }
 

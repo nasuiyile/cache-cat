@@ -1,4 +1,4 @@
 pub mod cas;
-pub mod moka;
+pub mod mocha;
 pub mod snapshot;
 pub mod request_handler;

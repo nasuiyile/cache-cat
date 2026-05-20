@@ -1,18 +1,69 @@
 use crate::error::ProtocolError;
+use crate::mocha::{EntryRef, ExpirePolicy, MochaOperation};
 use crate::protocol::NO_EXPIRATION;
 use crate::protocol::string::get::GetParams;
 use crate::protocol::string::mget::MgetParams;
 use crate::protocol::string::mset::MsetParams;
 use crate::protocol::string::set::{Expiration, SetMode, SetParams};
-use crate::raft::types::core::moka::cas::ComputeCommand;
-use crate::raft::types::core::moka::moka::{MyCache, MyValue, Update, UpdateType};
+use crate::raft::types::core::mocha::cas::ComputeCommand;
+use crate::raft::types::core::mocha::mocha::{MyCache, MyValue, Update, UpdateType};
 use crate::raft::types::core::response_value::Value;
 use crate::raft::types::core::value_object::ValueObject;
 use crate::raft::types::entry::bae_operation::{AppendReq, BaseOperation, IncrReq, SetReq};
-use crate::raft::types::entry::request::AtomicRequest;
 use crate::utils::parse_i64;
-use moka::ops::compute::Op;
 use std::sync::Arc;
+
+impl ComputeCommand for SetReq {
+    fn key(&self) -> Arc<Vec<u8>> {
+        self.key.clone()
+    }
+
+    fn into_base_op(self) -> BaseOperation {
+        BaseOperation::Set(self.clone())
+    }
+
+    fn mutate(
+        self,
+        entry: EntryRef<MyValue>,
+        _write_clock: u64,
+    ) -> (MochaOperation<MyValue>, Value) {
+        let new_version = entry.value.version + 1;
+        let data = match parse_i64(&self.value) {
+            None => ValueObject::String(self.value.clone()),
+            Some(v) => ValueObject::Int(v),
+        };
+        let expire = if self.ex_time == 0 {
+            ExpirePolicy::Persistent
+        } else {
+            ExpirePolicy::Absolute(self.ex_time)
+        };
+        let new_value = MyValue {
+            version: new_version,
+            data,
+        };
+        (
+            MochaOperation::Insert {
+                value: new_value,
+                expire,
+            },
+            Value::ok(),
+        )
+    }
+
+    fn init(self) -> (MochaOperation<MyValue>, Value) {
+        let data = match parse_i64(&self.value) {
+            None => ValueObject::String(self.value.clone()),
+            Some(v) => ValueObject::Int(v),
+        };
+        let expire = if self.ex_time == 0 {
+            ExpirePolicy::Persistent
+        } else {
+            ExpirePolicy::Absolute(self.ex_time)
+        };
+        let value = MyValue { version: 1, data };
+        (MochaOperation::Insert { value, expire }, Value::ok())
+    }
+}
 
 impl ComputeCommand for IncrReq {
     fn key(&self) -> Arc<Vec<u8>> {
@@ -23,35 +74,50 @@ impl ComputeCommand for IncrReq {
         BaseOperation::Incr(self.clone())
     }
 
-    fn mutate(self, mut value: MyValue, write_clock: u64) -> (Op<MyValue>, Value) {
-        let result = match &mut value.data {
+    fn mutate(
+        self,
+        entry: EntryRef<MyValue>,
+        write_clock: u64,
+    ) -> (MochaOperation<MyValue>, Value) {
+        let (result, value) = match &entry.value.data {
             ValueObject::Int(n) => {
-                *n += self.value;
-                Value::Integer(*n)
+                let num = n + self.value;
+                (ValueObject::Int(num), Value::Integer(num))
             }
             ValueObject::String(s) => {
-                if let Some(v) = parse_i64(s) {
+                if let Some(v) = parse_i64(&s) {
                     let new_val = v + self.value;
-                    value.data = ValueObject::Int(new_val);
-                    Value::Integer(new_val)
+                    (ValueObject::Int(new_val), Value::Integer(new_val))
                 } else {
-                    return (Op::Nop, Value::Error("Value is not an integer".to_string()));
+                    return (
+                        MochaOperation::Abort,
+                        Value::Error("Value is not an integer".to_string()),
+                    );
                 }
             }
             _ => {
                 return (
-                    Op::Nop,
+                    MochaOperation::Abort,
                     Value::Error("Key exists but is not an Integer".to_string()),
                 );
             }
         };
-        (Op::Put(value), result)
+        (
+            MochaOperation::Insert {
+                value: MyValue::new(result),
+                expire: entry.get_expire_policy(),
+            },
+            value,
+        )
     }
 
-    fn init(self) -> (Op<MyValue>, Value) {
+    fn init(self) -> (MochaOperation<MyValue>, Value) {
         let v = self.value;
         (
-            Op::Put(MyValue::new(ValueObject::Int(v))),
+            MochaOperation::Insert {
+                value: MyValue::new(ValueObject::Int(v)),
+                expire: ExpirePolicy::Persistent,
+            },
             Value::Integer(v),
         )
     }
@@ -66,27 +132,40 @@ impl ComputeCommand for AppendReq {
         BaseOperation::Append(self.clone())
     }
 
-    fn mutate(self, mut data: MyValue, write_clock: u64) -> (Op<MyValue>, Value) {
-        match &mut data.data {
+    fn mutate(
+        self,
+        entry: EntryRef<MyValue>,
+        write_clock: u64,
+    ) -> (MochaOperation<MyValue>, Value) {
+        match &entry.value.data {
             ValueObject::String(data_arc) => {
-                let len = {
-                    let buf = Arc::make_mut(data_arc);
-                    buf.extend_from_slice(&self.value);
-                    buf.len() as i64
-                };
-                (Op::Put(data), Value::Integer(len))
+                // 构造新的字符串：原内容 + 追加内容
+                let mut new_buf = (**data_arc).clone();
+                new_buf.extend_from_slice(&self.value);
+                let len = new_buf.len() as i64;
+                let new_value = MyValue::new(ValueObject::String(Arc::new(new_buf)));
+                (
+                    MochaOperation::Insert {
+                        value: new_value,
+                        expire: entry.get_expire_policy(),
+                    },
+                    Value::Integer(len),
+                )
             }
             _ => (
-                Op::Nop,
+                MochaOperation::Abort,
                 Value::Error("Key exists but is not a String".to_string()),
             ),
         }
     }
 
-    fn init(self) -> (Op<MyValue>, Value) {
+    fn init(self) -> (MochaOperation<MyValue>, Value) {
         let len = self.value.len() as i64;
         (
-            Op::Put(MyValue::new(ValueObject::String(self.value))),
+            MochaOperation::Insert {
+                value: MyValue::new(ValueObject::String(self.value)),
+                expire: ExpirePolicy::Persistent,
+            },
             Value::Integer(len),
         )
     }
@@ -127,11 +206,11 @@ impl MyCache {
                     Ok(cache) => cache,
                 };
                 // Read existing value to get its expiration time
-                match cache.get(&params.key) {
+                match cache.get_entry(&params.key) {
                     None => NO_EXPIRATION,
                     Some(value) => {
-                        let ttl_ms = value.expires_at;
-                        existing_key = match value.data {
+                        let ttl_ms = value.expire_at.unwrap_or(0);
+                        existing_key = match value.value.data {
                             ValueObject::Int(v) => {
                                 ExistingKey::Data(Arc::from(v.to_string().into_bytes()))
                             }
@@ -246,78 +325,15 @@ impl MyCache {
         }
     }
 
-    pub fn set(&self, set_req: SetReq, update: &mut Update) -> Value {
-        let cache = match self.get_cache(update.db_number) {
-            Err(err) => return err,
-            Ok(cache) => cache,
-        };
-        let mut value = match parse_i64(&set_req.value) {
-            None => MyValue {
-                data: ValueObject::String(set_req.value.clone()),
-                expires_at: set_req.ex_time,
-                version: 1,
-            },
-            Some(v) => MyValue {
-                data: ValueObject::Int(v),
-                expires_at: set_req.ex_time,
-                version: 1,
-            },
-        };
-        match update.update_type {
-            UpdateType::None => {
-                cache.insert(set_req.key, value);
-                Value::ok()
-            }
-            UpdateType::Snapshot(queue) => {
-                let key = set_req.key.clone();
-                cache.entry(key).and_upsert_with(|old_entry| {
-                    value.version = if let Some(entry) = old_entry {
-                        entry.into_value().version + 1
-                    } else {
-                        1
-                    };
-                    queue.push(AtomicRequest {
-                        version: value.version,
-                        request: BaseOperation::Set(set_req),
-                        write_clock: update.write_clock,
-                    });
-                    value
-                });
-                Value::ok()
-            }
-            UpdateType::CAS(cas_version) => {
-                let key = set_req.key.clone();
-                cache.entry(key).and_upsert_with(|maybe_entry| {
-                    if let Some(entry) = maybe_entry {
-                        let current_val = entry.value();
-                        // 核心逻辑：只有传入的 version 与缓存中的 version 相同时才允许更新
-                        if *cas_version - 1 == current_val.version {
-                            value.version += 1;
-                            value
-                        } else {
-                            // 版本不匹配，直接返回旧值（即不更新）
-                            current_val.clone()
-                        }
-                    } else {
-                        let new_data = ValueObject::String(set_req.value);
-                        let ttl = set_req.ex_time;
-                        MyValue {
-                            data: new_data,
-                            expires_at: ttl,
-                            version: 1, // 初始版本
-                        }
-                    }
-                });
-                Value::ok()
-            }
-        }
+    pub fn set(&self, param: SetReq, update: &mut Update) -> Value {
+        self.execute_compute(param, update)
     }
 
-    pub fn incr(&self, incr_req: IncrReq, update: &mut Update) -> Value {
-        self.execute_compute(incr_req, update)
+    pub fn incr(&self, param: IncrReq, update: &mut Update) -> Value {
+        self.execute_compute(param, update)
     }
     //如果不是string就报错，如果是string就append，如果没有值就创建一个
-    pub fn append(&self, incr_req: AppendReq, update: &mut Update) -> Value {
-        self.execute_compute(incr_req, update)
+    pub fn append(&self, param: AppendReq, update: &mut Update) -> Value {
+        self.execute_compute(param, update)
     }
 }

@@ -32,7 +32,7 @@ tokio = { version = "1.50.0", features = ["net", "io-util", "fs", "rt", "rt-mult
 tokio-util = { version = "0.7.18", features = ["codec"] }
 bincode2 = "2.0.1"
 bytes = "1.11.1"
-moka = { version = "0.12.15", features = ["sync"] }
+#moka = { version = "0.12.15", features = ["sync"] }
 async-trait = "0.1.89"
 mimalloc = "0.1.50"
 crossbeam-utils = "0.8.21"
@@ -51,6 +51,8 @@ ordered-float = { version = "5.3.0", features = ["serde"] }
 mlua = { version = "0.11.6", features = ["lua51", "vendored", "send"] }
 lru = "0.18.0"
 sha1 = "0.11.0"
+flurry = "0.5.2"
+crossbeam-channel = "0.5.15"
 [dev-dependencies]
 anyhow = "1.0.102"
 tempfile = "3.27.0"
