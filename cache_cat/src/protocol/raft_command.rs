@@ -1,4 +1,7 @@
 use crate::error::ProtocolError;
+use crate::protocol::bitmap::getbit::GetBitCommand;
+use crate::protocol::bitmap::setbit::SetBitCommand;
+use crate::protocol::connection::time::TimeCommand;
 use crate::protocol::hash::hget::HGetCommand;
 use crate::protocol::hash::hincrby::HIncrByCommand;
 use crate::protocol::hash::hmget::HMGetCommand;
@@ -87,6 +90,8 @@ impl RaftCommandFactory {
         factory.register("HMGET", HMGetCommand);
         factory.register("EVAL", EvalCommand); //禁止套娃(就不禁止)
         factory.register("SREM", SRemCommand);
+        factory.register("SETBIT", SetBitCommand);
+        factory.register("GETBIT", GetBitCommand);
         factory
     }
 

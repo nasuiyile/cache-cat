@@ -21,9 +21,15 @@ pub fn do_request(
             ReadOperation::HGet(param) => my_cache.h_get(param, update.db_number),
             ReadOperation::SMembers(param) => my_cache.s_member(param, update.db_number),
             ReadOperation::HMGet(param) => my_cache.h_m_get(param, update.db_number),
+            ReadOperation::GetBit(param) => my_cache.get_bit(param, update.db_number),
         },
         Operation::Base(base) => match base {
-            BaseOperation::Empty => Value::ok(),
+            BaseOperation::Empty => {
+                for db in &my_cache.databases {
+                    db.mocha.active_expire_cycle_blocking();
+                }
+                Value::ok()
+            }
             BaseOperation::Set(param) => my_cache.set(param, update),
             BaseOperation::Expire(param) => my_cache.expire(param, update),
             BaseOperation::LPush(param) => my_cache.l_push(param, update),
@@ -38,6 +44,7 @@ pub fn do_request(
             BaseOperation::Insert(param) => my_cache.insert(param, update),
             BaseOperation::HDel(param) => my_cache.h_del(param, update),
             BaseOperation::SRem(param) => my_cache.s_rem(param, update),
+            BaseOperation::SetBit(param) => my_cache.set_bit(param, update),
         },
         Operation::Redis(redis) => match redis {
             RedisOperation::RedisDel(param) => my_cache.redis_del(param, update, external),

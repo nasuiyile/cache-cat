@@ -1,4 +1,5 @@
 use crate::error::ProtocolError;
+use crate::mocha::{EntrySnapshot, ExpirePolicy, MochaOperation};
 use crate::protocol::set::smembers::SMembersParams;
 use crate::raft::types::core::mocha::cas::ComputeCommand;
 use crate::raft::types::core::mocha::mocha::{MyCache, MyValue, Update};
@@ -8,7 +9,6 @@ use crate::raft::types::entry::bae_operation::{BaseOperation, SAddReq, SRemReq};
 use parking_lot::Mutex;
 use std::collections::HashSet;
 use std::sync::Arc;
-use crate::mocha::{EntryRef, ExpirePolicy, MochaOperation};
 
 impl ComputeCommand for SRemReq {
     fn key(&self) -> Arc<Vec<u8>> {
@@ -21,7 +21,7 @@ impl ComputeCommand for SRemReq {
 
     fn mutate(
         self,
-        entry: EntryRef<MyValue>,
+        entry: EntrySnapshot<MyValue>,
         _write_clock: u64,
     ) -> (MochaOperation<MyValue>, Value) {
         match &entry.value.data {
@@ -75,7 +75,7 @@ impl ComputeCommand for SAddReq {
 
     fn mutate(
         self,
-        entry: EntryRef<MyValue>,
+        entry: EntrySnapshot<MyValue>,
         write_clock: u64,
     ) -> (MochaOperation<MyValue>, Value) {
         match &entry.value.data {
@@ -121,7 +121,6 @@ impl ComputeCommand for SAddReq {
         )
     }
 }
-
 
 impl MyCache {
     pub fn s_member(&self, param: SMembersParams, db_number: u16) -> Value {

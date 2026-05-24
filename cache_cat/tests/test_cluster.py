@@ -58,3 +58,18 @@ print(r.hget('test16', 'test'))
 
 print(r.srem('test14', 'test'))
 print(r.smembers('test20'))
+
+
+key = "bitmap_test"
+r.setbit(key, 0, 1)
+# 设置第 7 位为 1
+r.setbit(key, 7, 1)
+# 设置第 10 位为 1
+r.setbit(key, 10, 1)
+
+print(r.getbit(key, 0))
+print(r.getbit(key, 7))
+print(r.getbit(key, 8))
+print(r.getbit(key, 10))
+
+print(r.time())

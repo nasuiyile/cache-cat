@@ -1,4 +1,5 @@
 use crate::error::ProtocolError;
+use crate::mocha::{EntrySnapshot, ExpirePolicy, MochaOperation};
 use crate::protocol::list::lrange::LRangeParams;
 use crate::raft::types::core::mocha::cas::ComputeCommand;
 use crate::raft::types::core::mocha::mocha::{MyCache, MyValue, Update};
@@ -8,7 +9,6 @@ use crate::raft::types::entry::bae_operation::{BaseOperation, LPushReq};
 use parking_lot::lock_api::Mutex;
 use std::collections::VecDeque;
 use std::sync::Arc;
-use crate::mocha::{EntryRef, ExpirePolicy, MochaOperation};
 
 impl ComputeCommand for LPushReq {
     fn key(&self) -> Arc<Vec<u8>> {
@@ -21,7 +21,7 @@ impl ComputeCommand for LPushReq {
 
     fn mutate(
         self,
-        entry: EntryRef<MyValue>,
+        entry: EntrySnapshot<MyValue>,
         write_clock: u64,
     ) -> (MochaOperation<MyValue>, Value) {
         match &entry.value.data {

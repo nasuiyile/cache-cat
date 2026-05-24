@@ -8,35 +8,14 @@ impl MyCache {
     // 流式序列化：遍历所有分片
     pub async fn dump_cache_to_writer<W>(&self, writer: &mut W) -> Result<(), io::Error>
     where
-        W: AsyncWrite + Unpin + Send,
+        W: AsyncWrite + Unpin + Send + io::AsyncSeek,
     {
         let shard_count = self.databases.len() as u64;
         writer.write_u64(shard_count).await?;
-
         for shard in &self.databases {
             // 一次遍历，收集当前分片所有存活快照
-            let mut entries = Vec::new();
-            shard.mocha.for_each_snapshot(|key, snapshot| {
-                entries.push((key.clone(), snapshot));
-            });
-
-            let entry_count = entries.len() as u64;
-            writer.write_u64(entry_count).await?;
-
-            // 异步写出
-            for (key, value) in entries {
-                let key_bytes = bincode2::serialize(&key)
-                    .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
-                let val_bytes = bincode2::serialize(&value)
-                    .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
-
-                writer.write_u64(key_bytes.len() as u64).await?;
-                writer.write_all(&key_bytes).await?;
-                writer.write_u64(val_bytes.len() as u64).await?;
-                writer.write_all(&val_bytes).await?;
-            }
+            shard.mocha.dump_snapshots_to_writer(writer).await?;
         }
-
         Ok(())
     }
 

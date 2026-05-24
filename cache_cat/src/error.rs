@@ -248,11 +248,11 @@ impl From<StorageError> for Error {
 impl Display for ErrorKind {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         match self {
-            ErrorKind::Retryable { reason } => write!(f, "retryable error: {}", reason),
-            ErrorKind::InvalidConfig(msg) => write!(f, "configuration error: {}", msg),
-            ErrorKind::Internal(msg) => write!(f, "internal error: {}", msg),
-            ErrorKind::Protocol(err) => write!(f, "protocol error: {}", err),
-            ErrorKind::Storage(err) => write!(f, "storage error: {}", err),
+            Retryable { reason } => write!(f, "retryable error: {}", reason),
+            InvalidConfig(msg) => write!(f, "configuration error: {}", msg),
+            Internal(msg) => write!(f, "internal error: {}", msg),
+            Protocol(err) => write!(f, "protocol error: {}", err),
+            Storage(err) => write!(f, "storage error: {}", err),
         }
     }
 }

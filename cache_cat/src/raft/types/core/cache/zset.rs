@@ -1,4 +1,5 @@
 use crate::error::ProtocolError;
+use crate::mocha::{EntrySnapshot, ExpirePolicy, MochaOperation};
 use crate::protocol::zset::zrange::ZRangeParams;
 use crate::raft::types::core::mocha::cas::ComputeCommand;
 use crate::raft::types::core::mocha::mocha::{MyCache, MyValue, Update};
@@ -8,7 +9,6 @@ use crate::raft::types::core::value_object::{SortedSet, ValueObject};
 use crate::raft::types::entry::bae_operation::{BaseOperation, ZAddReq};
 use parking_lot::Mutex;
 use std::sync::Arc;
-use crate::mocha::{EntryRef, ExpirePolicy, MochaOperation};
 
 impl ComputeCommand for ZAddReq {
     fn key(&self) -> Arc<Vec<u8>> {
@@ -21,7 +21,7 @@ impl ComputeCommand for ZAddReq {
 
     fn mutate(
         self,
-        entry: EntryRef<MyValue>,
+        entry: EntrySnapshot<MyValue>,
         write_clock: u64,
     ) -> (MochaOperation<MyValue>, Value) {
         match &entry.value.data {

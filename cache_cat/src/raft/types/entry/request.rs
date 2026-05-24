@@ -73,6 +73,7 @@ impl fmt::Display for Request {
                 ReadOperation::HGet(req) => write!(f, "HGet: {}", req),
                 ReadOperation::SMembers(req) => write!(f, "SMembers: {}", req),
                 ReadOperation::HMGet(req) => write!(f, "HMGet: {}", req),
+                ReadOperation::GetBit(req) => write!(f, "GetBit: {}", req),
             },
             Operation::Base(op) => match op {
                 BaseOperation::Empty => write!(f, "None"),
@@ -90,6 +91,7 @@ impl fmt::Display for Request {
                 BaseOperation::Insert(insert) => write!(f, "Insert: {}", insert),
                 BaseOperation::HDel(req) => write!(f, "HDel: {}", req),
                 BaseOperation::SRem(req) => write!(f, "SRem: {}", req),
+                BaseOperation::SetBit(req) => write!(f, "SetBit: {}", req),
             },
             Operation::Redis(op) => match op {
                 RedisOperation::RedisSet(req) => write!(f, "RedisSet: {}", req),

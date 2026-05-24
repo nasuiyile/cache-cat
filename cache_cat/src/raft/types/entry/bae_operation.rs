@@ -1,7 +1,9 @@
+use crate::protocol::bitmap::setbit::SetBitParams;
 use crate::protocol::key::expire::ExpireCondition;
 use crate::raft::types::core::value_object::ValueObject;
 use serde::{Deserialize, Serialize};
 use std::fmt;
+use std::fmt::Display;
 use std::sync::Arc;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -17,6 +19,7 @@ pub enum BaseOperation {
     Set(SetReq),
     Incr(IncrReq),
     Append(AppendReq),
+    SetBit(SetBitReq),
     // list
     LPush(LPushReq),
     //hash
@@ -29,6 +32,25 @@ pub enum BaseOperation {
     SAdd(SAddReq),
     SRem(SRemReq),
 }
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct SetBitReq {
+    pub key: Arc<Vec<u8>>,
+    pub offset: u64,
+    pub value: u8,
+}
+impl Display for SetBitReq {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(
+            f,
+            "SetBitReq {{ key: {}, offset: {}, value: {} }}",
+            String::from_utf8_lossy(&self.key),
+            self.offset,
+            self.value
+        )
+    }
+}
+
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct SRemReq {
     pub key: Arc<Vec<u8>>,

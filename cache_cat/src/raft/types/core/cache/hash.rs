@@ -1,4 +1,5 @@
-use crate::error::{CacheCatError, ProtocolError};
+use crate::error::ProtocolError;
+use crate::mocha::{EntrySnapshot, ExpirePolicy, MochaOperation};
 use crate::protocol::hash::hget::HGetParams;
 use crate::protocol::hash::hmget::HMGetParams;
 use crate::raft::types::core::mocha::cas::ComputeCommand;
@@ -10,7 +11,6 @@ use crate::utils::parse_i64;
 use parking_lot::Mutex;
 use std::collections::HashMap;
 use std::sync::Arc;
-use crate::mocha::{EntryRef, ExpirePolicy, MochaOperation};
 
 impl ComputeCommand for HSetReq {
     fn key(&self) -> Arc<Vec<u8>> {
@@ -23,7 +23,7 @@ impl ComputeCommand for HSetReq {
 
     fn mutate(
         self,
-        entry: EntryRef<MyValue>,
+        entry: EntrySnapshot<MyValue>,
         write_clock: u64,
     ) -> (MochaOperation<MyValue>, Value) {
         match &entry.value.data {
@@ -86,7 +86,7 @@ impl ComputeCommand for HIncrReq {
 
     fn mutate(
         self,
-        entry: EntryRef<MyValue>,
+        entry: EntrySnapshot<MyValue>,
         write_clock: u64,
     ) -> (MochaOperation<MyValue>, Value) {
         match &entry.value.data {
@@ -150,7 +150,7 @@ impl ComputeCommand for HDelReq {
 
     fn mutate(
         self,
-        entry: EntryRef<MyValue>,
+        entry: EntrySnapshot<MyValue>,
         write_clock: u64,
     ) -> (MochaOperation<MyValue>, Value) {
         match &entry.value.data {

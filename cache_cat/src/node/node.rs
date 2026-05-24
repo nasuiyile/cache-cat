@@ -43,10 +43,11 @@ impl RaftNode {
             election_timeout_max: config.election_timeout + 300, // 添加最大选举超时时间
             purge_batch_size: 256,                               //积累到一定一定数量后才进删除
             max_in_snapshot_log_to_keep: config.replication_lag_threshold + 100, //生成快照后要保留的日志数量（以供从节点同步数据）需要大于等于replication_lag_threshold,该参数会影响快照逻辑
-            max_append_entries: Some(5000000),
-            max_payload_entries: 5000000,
+            max_append_entries: Some(500000),
+            max_payload_entries: 500000,
             snapshot_policy: config.snapshot_policy.clone(), //LogsSinceLast(100),
             replication_lag_threshold: config.replication_lag_threshold, //需要大于snapshot_policy
+            install_snapshot_timeout: 60 * 1000,//60秒
             ..Default::default()
         });
         let group_id = 0;

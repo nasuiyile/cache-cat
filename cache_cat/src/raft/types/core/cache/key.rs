@@ -1,4 +1,4 @@
-use crate::mocha::{EntryRef, ExpirePolicy, MochaOperation};
+use crate::mocha::{EntrySnapshot, ExpirePolicy, MochaOperation};
 use crate::protocol::key::del::DelParams;
 use crate::protocol::key::exists::ExistsParams;
 use crate::protocol::key::expire::ExpireCondition;
@@ -23,7 +23,7 @@ impl ComputeCommand for ExpireReq {
 
     fn mutate(
         self,
-        entry: EntryRef<MyValue>,
+        entry: EntrySnapshot<MyValue>,
         write_clock: u64,
     ) -> (MochaOperation<MyValue>, Value) {
         let expires_at = self.expires_at + write_clock;
@@ -73,7 +73,7 @@ impl ComputeCommand for PersistReq {
 
     fn mutate(
         self,
-        entry: EntryRef<MyValue>,
+        entry: EntrySnapshot<MyValue>,
         write_clock: u64,
     ) -> (MochaOperation<MyValue>, Value) {
         if entry.expire_at.is_none() {
@@ -104,7 +104,7 @@ impl ComputeCommand for InsertReq {
 
     fn mutate(
         self,
-        entry: EntryRef<MyValue>,
+        entry: EntrySnapshot<MyValue>,
         _write_clock: u64,
     ) -> (MochaOperation<MyValue>, Value) {
         // 版本递增

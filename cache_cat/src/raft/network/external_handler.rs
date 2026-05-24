@@ -95,7 +95,7 @@ pub async fn write(
     app: Arc<CacheCatApp>,
     mut req: Request,
 ) -> Result<ClientWriteResponse<TypeConfig>, String> {
-    let write_clock = app.state_machine.data.kvs.get_new_write_clock();
+    let write_clock = app.state_machine.data.kvs.generate_new_write_clock();
     req.set_write_clock(write_clock);
     app.raft.client_write(req).await.map_err(|e| {
         tracing::error!("write error: {:?}", e);
@@ -162,6 +162,7 @@ async fn install_full_snapshot(
     app: Arc<CacheCatApp>,
     req: InstallFullSnapshotReq,
 ) -> Result<SnapshotResponse<TypeConfig>, String> {
+    info!("snapshot  received!!!!");
     let snapshot = Snapshot {
         meta: req.snapshot_meta,
         snapshot: req.snapshot,

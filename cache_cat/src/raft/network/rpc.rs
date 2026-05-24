@@ -1,12 +1,13 @@
-use futures::FutureExt;
 use crate::error::{CacheCatError, Error};
 use crate::protocol::command::CommandFactory;
 use crate::raft::network::external_handler::{HANDLER_TABLE, write};
+use crate::raft::network::redis_server;
 use crate::raft::network::redis_server::RedisServer;
 use crate::raft::store::snapshot::snapshot_handler::get_snapshot_file_name;
 use crate::raft::types::entry::request::Request;
 use crate::raft::types::raft_types::CacheCatApp;
 use bytes::{Buf, BufMut, Bytes, BytesMut};
+use futures::FutureExt;
 use futures::stream::FuturesOrdered;
 use futures::{SinkExt, StreamExt};
 use std::net::SocketAddr;
@@ -36,15 +37,13 @@ impl Server {
         startup_tx: Sender<StdResult<(), String>>,
         redis_addr: String,
     ) -> Self {
+        let redis_server =
+            RedisServer::new(app.clone(), redis_addr, Arc::new(CommandFactory::init()));
         Server {
             app: app.clone(),
             addr,
             startup_tx,
-            redis_server: RedisServer {
-                app: app.clone(),
-                redis_addr,
-                cmd_factory: Arc::new(CommandFactory::init()),
-            },
+            redis_server,
         }
     }
     pub async fn start_server(

@@ -50,7 +50,7 @@ pub struct CacheCatApp {
 
 impl CacheCatApp {
     pub async fn write(&self, op: Operation, db_number: u16) -> Result<Value, CacheCatError> {
-        let write_clock = self.state_machine.data.kvs.get_new_write_clock();
+        let write_clock = self.state_machine.data.kvs.generate_new_write_clock();
         let request = Request::new(write_clock, db_number, op);
         let res = self
             .raft

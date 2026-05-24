@@ -7,8 +7,7 @@ use crate::raft::store::snapshot::snapshot_handler::{
 use crate::raft::types::core::mocha::mocha::{MyCache, Update, UpdateType};
 use crate::raft::types::core::mocha::request_handler::do_request;
 use crate::raft::types::core::response_value::Value;
-use crate::raft::types::entry::bae_operation::{BaseOperation, DelReq, InsertReq, SetReq};
-use crate::raft::types::entry::read_operation::ReadOperation;
+use crate::raft::types::entry::bae_operation::{BaseOperation, InsertReq, SetReq};
 use crate::raft::types::entry::request::{AtomicRequest, Operation, RedisOperation};
 use crate::raft::types::file_operator::FileOperator;
 use crate::raft::types::raft_types::{NodeId, TypeConfig};
@@ -186,9 +185,7 @@ impl RaftStateMachine<TypeConfig> for StateMachineStore {
             raft_meta.last_applied_log_id = Some(entry.log_id);
             let st = &self.data.kvs;
             let response = match entry.payload {
-                EntryPayload::Blank => {
-                    Value::ok()
-                }
+                EntryPayload::Blank => Value::ok(),
                 EntryPayload::Normal(req) => {
                     let (time, db_number) = req.split_u64();
                     let write_clock = st.set_write_clock(time);
@@ -282,6 +279,9 @@ impl RaftStateMachine<TypeConfig> for StateMachineStore {
                 }
                 BaseOperation::SRem(param) => {
                     self.data.kvs.s_rem(param, &mut update);
+                }
+                BaseOperation::SetBit(param) => {
+                    self.data.kvs.set_bit(param, &mut update);
                 }
             }
         }

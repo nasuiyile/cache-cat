@@ -1,26 +1,23 @@
 mod test;
 
-use crossbeam_channel::{Receiver, Sender, after, bounded, select, unbounded};
-use flurry::{Guard, HashMap};
+use crate::utils::now_ms;
+use crossbeam_channel::{Receiver, Sender, bounded, select, unbounded};
+use papaya::{Compute, Equivalent, HashMap, LocalGuard, Operation};
 use serde::{Deserialize, Serialize};
 use std::borrow::Borrow;
 use std::hash::Hash;
+use std::io::SeekFrom;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::thread;
-use std::time::Duration;
-use tokio::task::JoinHandle;
+use tokio::io;
+use tokio::io::{AsyncSeek, AsyncSeekExt, AsyncWrite, AsyncWriteExt};
 
 const WHEEL_BITS: usize = 8;
 const WHEEL_SIZE: usize = 1 << WHEEL_BITS;
 const WHEEL_MASK: u64 = (WHEEL_SIZE as u64) - 1;
 const WHEEL_LEVELS: usize = 8;
 const LARGE_ADVANCE_THRESHOLD: u64 = 4096;
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct Expiry {
-    pub at: u64,
-}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ExpirePolicy {
@@ -35,13 +32,7 @@ pub struct EntrySnapshot<V> {
     pub expire_at: Option<u64>,
 }
 
-#[derive(Clone, Copy, Debug)]
-pub struct EntryRef<'a, V> {
-    pub value: &'a V,
-    pub expire_at: Option<u64>,
-}
-
-impl<'a, V> EntryRef<'a, V> {
+impl<V> EntrySnapshot<V> {
     pub fn get_expire_policy(&self) -> ExpirePolicy {
         match self.expire_at {
             None => ExpirePolicy::Persistent,
@@ -97,6 +88,7 @@ enum ExpireCommand<K> {
     Schedule { key: K, expire_at: u64 },
     Advance,
     AdvanceAndWait(Sender<()>),
+    HasExpiredByLocalClock { now: u64, done: Sender<bool> },
 }
 
 #[derive(Debug)]
@@ -134,6 +126,23 @@ impl<K> HierarchicalTimeWheel<K> {
         let slot = Self::slot_for(item.expire_at, level);
 
         self.wheels[level][slot].push(item);
+    }
+
+    fn has_due<F>(&self, now: u64, mut is_current: F) -> bool
+    where
+        F: FnMut(&K, u64) -> bool,
+    {
+        for level in 0..WHEEL_LEVELS {
+            for slot in 0..WHEEL_SIZE {
+                for item in &self.wheels[level][slot] {
+                    if item.expire_at <= now && is_current(&item.key, item.expire_at) {
+                        return true;
+                    }
+                }
+            }
+        }
+
+        false
     }
 
     fn advance_to<F>(&mut self, now: u64, mut expire: F)
@@ -230,7 +239,7 @@ where
     K: Clone + Eq + Hash + Ord + Send + Sync + 'static,
     V: Clone + Send + Sync + 'static,
 {
-    map: HashMap<K, Entry<V>>,
+    map: Arc<HashMap<K, Entry<V>>>,
     logic_clock: Arc<AtomicU64>,
     expire_tx: Sender<ExpireCommand<K>>,
 }
@@ -240,21 +249,26 @@ where
     K: Hash + Eq + Ord + Clone + Send + Sync + 'static,
     V: Clone + Send + Sync + 'static,
 {
-    pub fn new(logic_clock: Arc<AtomicU64>, idle_expire_interval: Duration) -> Arc<Self> {
+    pub fn new(logic_clock: Arc<AtomicU64>) -> Self {
         let (expire_tx, expire_rx) = unbounded();
-        let mocha = Arc::new(Self {
-            map: HashMap::new(),
+        let map = Arc::new(HashMap::new());
+
+        Self::spawn_active_expirer(map.clone(), logic_clock.clone(), expire_rx);
+
+        Self {
+            map,
             logic_clock,
             expire_tx,
-        });
-        let _ = mocha
-            .clone()
-            .spawn_active_expirer(expire_rx, idle_expire_interval);
-        mocha
+        }
     }
 
     fn now_logical(&self) -> u64 {
         self.logic_clock.load(Ordering::Relaxed)
+    }
+
+    #[inline(always)]
+    fn now_local() -> u64 {
+        now_ms()
     }
 
     fn resolve_expire_at(&self, policy: ExpirePolicy) -> Option<u64> {
@@ -280,38 +294,42 @@ where
         }
     }
 
-    fn write_entry(&self, key: K, value: V, policy: ExpirePolicy) -> EntrySnapshot<V> {
+    pub fn insert_entry(&self, key: K, value: V, policy: ExpirePolicy) -> EntrySnapshot<V> {
         let new_entry = self.make_entry(value, policy);
         let snapshot = new_entry.snapshot();
         let expire_at = new_entry.expire_at;
-
-        {
-            let mg = self.map.pin();
-            mg.insert(key.clone(), new_entry);
-        }
-
+        let mg = self.map.pin();
+        mg.insert(key.clone(), new_entry);
         self.enqueue_expiry(key, expire_at);
         snapshot
     }
-
-    fn remove_expired_if_current(&self, key: K, expire_at: u64) -> bool {
-        let now = self.now_logical();
-        let mut removed = false;
-
-        {
-            let mg = self.map.pin();
-
-            mg.compute_if_present(&key, |_, entry| {
-                if entry.expire_at == Some(expire_at) && now >= expire_at {
-                    removed = true;
-                    None
-                } else {
-                    Some(entry.clone())
+    
+    fn remove_expired_if_current_from(
+        map: &HashMap<K, Entry<V>>,
+        logic_clock: &AtomicU64,
+        key: K,
+        expire_at: u64,
+    ) -> bool {
+        let now = logic_clock.load(Ordering::Relaxed);
+        let mg = map.pin();
+        matches!(
+            mg.compute(key, |entry| match entry {
+                Some((_, entry)) if entry.expire_at == Some(expire_at) && now >= expire_at => {
+                    Operation::Remove
                 }
-            });
-        }
+                _ => Operation::Abort(()),
+            }),
+            Compute::Removed(_, _)
+        )
+    }
 
-        removed
+    fn has_expired_if_current_from(map: &HashMap<K, Entry<V>>, key: &K, expire_at: u64) -> bool {
+        let mg = map.pin();
+
+        matches!(
+            mg.get(key),
+            Some(entry) if entry.expire_at == Some(expire_at)
+        )
     }
 
     pub fn insert_snapshot(&self, key: K, snapshot: EntrySnapshot<V>) -> EntrySnapshot<V> {
@@ -320,43 +338,39 @@ where
             Some(at) => ExpirePolicy::Absolute(at),
         };
 
-        self.write_entry(key, snapshot.value, policy)
+        self.insert_entry(key, snapshot.value, policy)
     }
 
     pub fn insert(&self, key: K, value: V, ttl: u64) -> EntrySnapshot<V> {
-        self.write_entry(key, value, ExpirePolicy::Ttl(ttl))
+        self.insert_entry(key, value, ExpirePolicy::Ttl(ttl))
     }
 
     pub fn insert_absolute(&self, key: K, value: V, expire_at: u64) -> EntrySnapshot<V> {
-        self.write_entry(key, value, ExpirePolicy::Absolute(expire_at))
+        self.insert_entry(key, value, ExpirePolicy::Absolute(expire_at))
     }
 
     pub fn insert_persistent(&self, key: K, value: V) -> EntrySnapshot<V> {
-        self.write_entry(key, value, ExpirePolicy::Persistent)
+        self.insert_entry(key, value, ExpirePolicy::Persistent)
     }
 
     pub fn get_entry<Q>(&self, key: &Q) -> Option<EntrySnapshot<V>>
     where
-        K: Borrow<Q>,
-        Q: ?Sized + Hash + Ord,
+        Q: ?Sized + Hash + Equivalent<K>,
     {
         let now = self.now_logical();
         let mg = self.map.pin();
-        // 1. 先读
-        let expired_at = match mg.get(key) {
-            Some(entry) => match entry.expire_at {
-                Some(at) if now >= at => at,
+        let (expired_key, expired_at) = match mg.get_key_value(key) {
+            Some((stored_key, entry)) => match entry.expire_at {
+                Some(at) if now >= at => (stored_key.clone(), at),
                 _ => return Some(entry.snapshot()),
             },
             None => return None,
         };
-        // 2. 只有过期才走 compute_if_present 做惰性删除
-        mg.compute_if_present(key, |_, entry| {
-            if entry.expire_at == Some(expired_at) && now >= expired_at {
-                None
-            } else {
-                Some(entry.clone())
+        mg.compute(expired_key, |entry| match entry {
+            Some((_, entry)) if entry.expire_at == Some(expired_at) && now >= expired_at => {
+                Operation::Remove
             }
+            _ => Operation::Abort(()),
         });
         None
     }
@@ -390,30 +404,21 @@ where
 
     fn set_expire_policy(&self, key: &K, policy: ExpirePolicy) -> Option<EntrySnapshot<V>> {
         let now = self.now_logical();
-        let mut snapshot = None;
-        let mut new_expire_at = None;
-
-        {
-            let mg = self.map.pin();
-
-            mg.compute_if_present(key, |_, entry| {
-                if entry.expire_at.is_some_and(|at| now >= at) {
-                    None
-                } else {
-                    let new_entry = self.make_entry(entry.value.clone(), policy);
-
-                    snapshot = Some(new_entry.snapshot());
-                    new_expire_at = new_entry.expire_at;
-
-                    Some(new_entry)
-                }
-            });
+        let mg = self.map.pin();
+        let result = mg.compute(key.clone(), |entry| match entry {
+            Some((_, entry)) if entry.expire_at.is_some_and(|at| now >= at) => Operation::Remove,
+            Some((_, entry)) => Operation::Insert(self.make_entry(entry.value.clone(), policy)),
+            None => Operation::Abort(()),
+        });
+        let snapshot = match result {
+            Compute::Updated {
+                new: (_, entry), ..
+            } => Some(entry.snapshot()),
+            _ => None,
+        };
+        if let Some(snapshot) = &snapshot {
+            self.enqueue_expiry(key.clone(), snapshot.expire_at);
         }
-
-        if snapshot.is_some() {
-            self.enqueue_expiry(key.clone(), new_expire_at);
-        }
-
         snapshot
     }
 
@@ -435,241 +440,84 @@ where
         }
     }
 
-    pub fn update_or_insert_with<U, F>(
-        &self,
-        key: K,
-        update: U,
-        insert: F,
-        expire: ExpirePolicy,
-    ) -> EntrySnapshot<V>
-    where
-        U: Fn(&V) -> V,
-        F: Fn() -> V,
-    {
-        loop {
-            let now = self.now_logical();
-            let mut snapshot = None;
-            let mut new_expire_at = None;
-
-            {
-                let mg = self.map.pin();
-
-                let touched = mg
-                    .compute_if_present(&key, |_, entry| {
-                        let expired = entry.expire_at.is_some_and(|at| now >= at);
-
-                        let value = if expired {
-                            insert()
-                        } else {
-                            update(&entry.value)
-                        };
-
-                        let new_entry = self.make_entry(value, expire);
-
-                        snapshot = Some(new_entry.snapshot());
-                        new_expire_at = new_entry.expire_at;
-
-                        Some(new_entry)
-                    })
-                    .is_some();
-
-                if touched {
-                    drop(mg);
-                    self.enqueue_expiry(key, new_expire_at);
-                    return snapshot.unwrap();
-                }
-
-                let new_entry = self.make_entry(insert(), expire);
-                let snap = new_entry.snapshot();
-                let expire_at = new_entry.expire_at;
-
-                if mg.try_insert(key.clone(), new_entry).is_ok() {
-                    drop(mg);
-                    self.enqueue_expiry(key, expire_at);
-                    return snap;
-                }
-            }
-        }
-    }
-
-    pub fn compute<F>(&self, key: K, f: F) -> MochaCompute<K, V>
-    where
-        F: for<'a> FnOnce(Option<EntryRef<'a, V>>) -> MochaOperation<V>,
-    {
-        let now = self.now_logical();
-        let mut f_holder = Some(f);
-        let mut result = None;
-        let mut new_expire_at = None;
-
-        {
-            let mg = self.map.pin();
-
-            mg.compute_if_present(&key, |k, entry| {
-                if entry.expire_at.is_some_and(|at| now >= at) {
-                    return None;
-                }
-
-                let user_f = f_holder
-                    .take()
-                    .expect("compute closure must be invoked at most once");
-
-                let old_snapshot = entry.snapshot();
-
-                match user_f(Some(EntryRef {
-                    value: &entry.value,
-                    expire_at: entry.expire_at,
-                })) {
-                    MochaOperation::Insert { value, expire } => {
-                        let new_entry = self.make_entry(value, expire);
-                        let new_snapshot = new_entry.snapshot();
-
-                        new_expire_at = new_entry.expire_at;
-
-                        result = Some(MochaCompute::Updated {
-                            old: (k.clone(), old_snapshot),
-                            new: (k.clone(), new_snapshot),
-                        });
-
-                        Some(new_entry)
-                    }
-                    MochaOperation::Remove => {
-                        result = Some(MochaCompute::Removed(k.clone(), old_snapshot));
-                        None
-                    }
-                    MochaOperation::Abort => {
-                        result = Some(MochaCompute::Unchanged);
-                        Some(entry.clone())
-                    }
-                }
-            });
-        }
-
-        if let Some(user_f) = f_holder.take() {
-            match user_f(None) {
-                MochaOperation::Insert { value, expire } => {
-                    let new_entry = self.make_entry(value, expire);
-                    let new_snapshot = new_entry.snapshot();
-                    let expire_at = new_entry.expire_at;
-
-                    let inserted = {
-                        let mg = self.map.pin();
-                        mg.try_insert(key.clone(), new_entry).is_ok()
-                    };
-
-                    if inserted {
-                        self.enqueue_expiry(key.clone(), expire_at);
-                        return MochaCompute::Inserted(key, new_snapshot);
-                    }
-
-                    return MochaCompute::Unchanged;
-                }
-                MochaOperation::Remove | MochaOperation::Abort => {
-                    return MochaCompute::Unchanged;
-                }
-            }
-        }
-
-        if let Some(result) = result {
-            if matches!(result, MochaCompute::Updated { .. }) {
-                self.enqueue_expiry(key, new_expire_at);
-            }
-
-            result
-        } else {
-            MochaCompute::Unchanged
-        }
-    }
-
-    pub fn for_each<F>(&self, mut f: F)
-    where
-        F: FnMut(&K, EntryRef<'_, V>),
-    {
-        let guard = self.map.guard();
-        let now = self.now_logical();
-
-        for (k, entry) in self.map.iter(&guard) {
-            if entry.expire_at.is_some_and(|at| now >= at) {
-                continue;
-            }
-
-            f(
-                k,
-                EntryRef {
-                    value: &entry.value,
-                    expire_at: entry.expire_at,
-                },
-            );
-        }
-    }
-
     fn spawn_active_expirer(
-        self: Arc<Self>,
+        map: Arc<HashMap<K, Entry<V>>>,
+        logic_clock: Arc<AtomicU64>,
         expire_rx: Receiver<ExpireCommand<K>>,
-        idle_expire_interval: Duration,
     ) -> thread::JoinHandle<()> {
         thread::spawn(move || {
-            self.expire_worker(expire_rx, idle_expire_interval);
+            Self::expire_worker(map, logic_clock, expire_rx);
         })
     }
 
     fn expire_worker(
-        self: Arc<Self>,
+        map: Arc<HashMap<K, Entry<V>>>,
+        logic_clock: Arc<AtomicU64>,
         expire_rx: Receiver<ExpireCommand<K>>,
-        idle_expire_interval: Duration,
     ) {
-        let mut wheel = HierarchicalTimeWheel::new(self.now_logical());
+        let mut wheel = HierarchicalTimeWheel::new(logic_clock.load(Ordering::Relaxed));
 
         loop {
-            let timeout = after(idle_expire_interval);
-
             select! {
                 recv(expire_rx) -> msg => {
                     let Ok(cmd) = msg else {
                         return;
                     };
 
-                    self.handle_expire_command(&mut wheel, cmd);
+                    Self::handle_expire_command(&map, &logic_clock, &mut wheel, cmd);
 
                     while let Ok(cmd) = expire_rx.try_recv() {
-                        self.handle_expire_command(&mut wheel, cmd);
+                        Self::handle_expire_command(&map, &logic_clock, &mut wheel, cmd);
                     }
-                }
-
-                recv(timeout) -> _ => {
-                    self.advance_wheel(&mut wheel);
                 }
             }
         }
     }
 
-    fn handle_expire_command(&self, wheel: &mut HierarchicalTimeWheel<K>, cmd: ExpireCommand<K>) {
+    fn handle_expire_command(
+        map: &HashMap<K, Entry<V>>,
+        logic_clock: &AtomicU64,
+        wheel: &mut HierarchicalTimeWheel<K>,
+        cmd: ExpireCommand<K>,
+    ) {
         match cmd {
             ExpireCommand::Schedule { key, expire_at } => {
-                self.advance_wheel(wheel);
+                Self::advance_wheel(map, logic_clock, wheel);
 
-                let now = self.now_logical();
+                let now = logic_clock.load(Ordering::Relaxed);
 
                 if expire_at <= now {
-                    self.remove_expired_if_current(key, expire_at);
+                    Self::remove_expired_if_current_from(map, logic_clock, key, expire_at);
                 } else {
                     wheel.insert(TimerItem { key, expire_at });
                 }
             }
             ExpireCommand::Advance => {
-                self.advance_wheel(wheel);
+                Self::advance_wheel(map, logic_clock, wheel);
             }
             ExpireCommand::AdvanceAndWait(done) => {
-                self.advance_wheel(wheel);
+                Self::advance_wheel(map, logic_clock, wheel);
                 let _ = done.send(());
+            }
+            ExpireCommand::HasExpiredByLocalClock { now, done } => {
+                let has_expired = wheel.has_due(now, |key, expire_at| {
+                    Self::has_expired_if_current_from(map, key, expire_at)
+                });
+
+                let _ = done.send(has_expired);
             }
         }
     }
 
-    fn advance_wheel(&self, wheel: &mut HierarchicalTimeWheel<K>) {
-        let now = self.now_logical();
+    fn advance_wheel(
+        map: &HashMap<K, Entry<V>>,
+        logic_clock: &AtomicU64,
+        wheel: &mut HierarchicalTimeWheel<K>,
+    ) {
+        let now = logic_clock.load(Ordering::Relaxed);
 
         wheel.advance_to(now, |key, expire_at| {
-            self.remove_expired_if_current(key, expire_at);
+            Self::remove_expired_if_current_from(map, logic_clock, key, expire_at);
         });
     }
 
@@ -708,66 +556,77 @@ where
         let _ = done_rx.recv();
     }
 
-    pub fn guard(&self) -> Guard<'_> {
+    pub fn has_expired_by_local_clock(&self) -> bool {
+        let (done_tx, done_rx) = bounded(1);
+
+        if self
+            .expire_tx
+            .send(ExpireCommand::HasExpiredByLocalClock {
+                now: Self::now_local(),
+                done: done_tx,
+            })
+            .is_err()
+        {
+            return false;
+        }
+        done_rx.recv().unwrap_or(false)
+    }
+    pub async fn has_expired_by_local_clock_async(&self) -> bool {
+        let (done_tx, done_rx) = bounded(1);
+
+        if self
+            .expire_tx
+            .send(ExpireCommand::HasExpiredByLocalClock {
+                now: Self::now_local(),
+                done: done_tx,
+            })
+            .is_err()
+        {
+            return false;
+        }
+        tokio::task::spawn_blocking(move || done_rx.recv().unwrap_or(false))
+            .await
+            .unwrap_or(false)
+    }
+
+    pub fn guard(&self) -> LocalGuard<'_> {
         self.map.guard()
     }
 
-    pub fn iter<'g>(
-        &'g self,
-        guard: &'g Guard<'_>,
-    ) -> impl Iterator<Item = (&'g K, EntryRef<'g, V>)> + 'g {
-        let now = self.now_logical();
-
-        self.map.iter(guard).filter_map(move |(k, entry)| {
-            if entry.expire_at.is_some_and(|at| now >= at) {
-                None
-            } else {
-                Some((
-                    k,
-                    EntryRef {
-                        value: &entry.value,
-                        expire_at: entry.expire_at,
-                    },
-                ))
-            }
-        })
-    }
-
-    pub fn keys<'g>(&'g self, guard: &'g Guard<'_>) -> impl Iterator<Item = &'g K> + 'g {
-        self.iter(guard).map(|(k, _)| k)
-    }
-
-    pub fn iter_snapshots<'g>(
-        &'g self,
-        guard: &'g Guard<'_>,
-    ) -> impl Iterator<Item = (K, EntrySnapshot<V>)> + 'g {
-        let now = self.now_logical();
-
-        self.map.iter(guard).filter_map(move |(k, entry)| {
-            if entry.expire_at.is_some_and(|at| now >= at) {
-                None
-            } else {
-                Some((k.clone(), entry.snapshot()))
-            }
-        })
-    }
-
-    pub fn for_each_snapshot<F>(&self, mut f: F)
+    pub async fn dump_snapshots_to_writer<W>(&self, writer: &mut W) -> Result<u64, io::Error>
     where
-        F: FnMut(&K, EntrySnapshot<V>),
+        W: AsyncWrite + AsyncSeek + Unpin + Send,
+        K: Serialize,
+        V: Serialize,
     {
-        let guard = self.map.guard();
+        let count_pos = writer.seek(SeekFrom::Current(0)).await?;
+        writer.write_u64(0).await?;
+        let mut entry_count = 0u64;
+        let map = self.map.pin_owned();
         let now = self.now_logical();
-
-        for (k, entry) in self.map.iter(&guard) {
+        for (key, entry) in map.iter() {
             if entry.expire_at.is_some_and(|at| now >= at) {
                 continue;
             }
-
-            f(k, entry.snapshot());
+            let snapshot = entry.snapshot();
+            let key_bytes = bincode2::serialize(key)
+                .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
+            let val_bytes = bincode2::serialize(&snapshot)
+                .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
+            writer.write_u64(key_bytes.len() as u64).await?;
+            writer.write_all(&key_bytes).await?;
+            writer.write_u64(val_bytes.len() as u64).await?;
+            writer.write_all(&val_bytes).await?;
+            entry_count = entry_count
+                .checked_add(1)
+                .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "too many entries"))?;
         }
+        let end_pos = writer.seek(SeekFrom::Current(0)).await?;
+        writer.seek(SeekFrom::Start(count_pos)).await?;
+        writer.write_u64(entry_count).await?;
+        writer.seek(SeekFrom::Start(end_pos)).await?;
+        Ok(entry_count)
     }
-
     pub fn clear(&self) -> usize {
         let mg = self.map.pin();
         let count = mg.len();

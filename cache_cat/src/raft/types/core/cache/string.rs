@@ -1,5 +1,5 @@
 use crate::error::ProtocolError;
-use crate::mocha::{EntryRef, ExpirePolicy, MochaOperation};
+use crate::mocha::{EntrySnapshot, ExpirePolicy, MochaOperation};
 use crate::protocol::NO_EXPIRATION;
 use crate::protocol::string::get::GetParams;
 use crate::protocol::string::mget::MgetParams;
@@ -9,9 +9,12 @@ use crate::raft::types::core::mocha::cas::ComputeCommand;
 use crate::raft::types::core::mocha::mocha::{MyCache, MyValue, Update, UpdateType};
 use crate::raft::types::core::response_value::Value;
 use crate::raft::types::core::value_object::ValueObject;
-use crate::raft::types::entry::bae_operation::{AppendReq, BaseOperation, IncrReq, SetReq};
+use crate::raft::types::entry::bae_operation::{
+    AppendReq, BaseOperation, IncrReq, SetBitReq, SetReq,
+};
 use crate::utils::parse_i64;
 use std::sync::Arc;
+
 
 impl ComputeCommand for SetReq {
     fn key(&self) -> Arc<Vec<u8>> {
@@ -24,7 +27,7 @@ impl ComputeCommand for SetReq {
 
     fn mutate(
         self,
-        entry: EntryRef<MyValue>,
+        entry: EntrySnapshot<MyValue>,
         _write_clock: u64,
     ) -> (MochaOperation<MyValue>, Value) {
         let new_version = entry.value.version + 1;
@@ -76,7 +79,7 @@ impl ComputeCommand for IncrReq {
 
     fn mutate(
         self,
-        entry: EntryRef<MyValue>,
+        entry: EntrySnapshot<MyValue>,
         write_clock: u64,
     ) -> (MochaOperation<MyValue>, Value) {
         let (result, value) = match &entry.value.data {
@@ -134,7 +137,7 @@ impl ComputeCommand for AppendReq {
 
     fn mutate(
         self,
-        entry: EntryRef<MyValue>,
+        entry: EntrySnapshot<MyValue>,
         write_clock: u64,
     ) -> (MochaOperation<MyValue>, Value) {
         match &entry.value.data {
@@ -170,6 +173,9 @@ impl ComputeCommand for AppendReq {
         )
     }
 }
+
+
+
 
 impl MyCache {
     pub fn redis_mset(&self, params: MsetParams, update: &mut Update<'_>, external: bool) -> Value {
@@ -324,6 +330,7 @@ impl MyCache {
             },
         }
     }
+
 
     pub fn set(&self, param: SetReq, update: &mut Update) -> Value {
         self.execute_compute(param, update)
