@@ -1,4 +1,5 @@
 pub mod client;
+pub mod connector;
 pub mod external_handler;
 pub mod model;
 pub mod network;

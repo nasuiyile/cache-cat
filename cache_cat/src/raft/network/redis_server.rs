@@ -1,3 +1,4 @@
+use crate::error::CacheCatError;
 use crate::protocol::command::{Client, CommandFactory};
 use crate::protocol::resp::Parser;
 use crate::raft::network::pub_sub::PubSub;
@@ -11,7 +12,6 @@ use std::sync::Arc;
 use tokio::net::{TcpListener, TcpStream};
 use tokio_util::codec::{Decoder, Encoder, Framed};
 use tracing::{error, info};
-use crate::error::CacheCatError;
 
 #[derive(Clone)]
 pub struct RedisServer {
@@ -53,11 +53,12 @@ impl RedisServer {
         redis_addr: String,
         cmd_factory: Arc<CommandFactory>,
     ) -> Self {
+        let broadcast = app.broadcast.clone();
         Self {
             app,
             redis_addr,
             cmd_factory,
-            broadcast: Arc::new(PubSub::new()),
+            broadcast,
         }
     }
 

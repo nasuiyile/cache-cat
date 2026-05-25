@@ -9,6 +9,7 @@
 
 use crate::error::{CacheCatError, ProtocolError};
 use crate::protocol::command::{Client, Command};
+use crate::raft::network::model::PublishReq;
 use crate::raft::network::redis_server::RedisServer;
 use crate::raft::types::core::response_value::Value;
 use async_trait::async_trait;
@@ -72,8 +73,17 @@ impl Command for PublishCommand {
         // 直接传入原始消息，让 publish_message 封装
         server
             .broadcast
-            .publish_message(&params.channel, params.message)
+            .publish_message(&params.channel, params.message.clone())
             .await;
+        let req = PublishReq {
+            channel: params.channel,
+            message: params.message,
+        };
+        let s = server.clone();
+        tokio::spawn(async move {
+            _ = s.app.leader_rpc_call::<PublishReq, ()>(11, req).await;
+        });
+
         Ok(Value::SimpleString(String::from("QUEUED")))
     }
 }
