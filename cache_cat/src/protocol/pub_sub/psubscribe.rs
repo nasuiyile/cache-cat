@@ -1,81 +1,82 @@
-//! SUBSCRIBE command implementation
+//! PSUBSCRIBE command implementation
 //!
-//! SUBSCRIBE channel [channel ...]
-//! Subscribes the client to the specified channels.
+//! PSUBSCRIBE pattern [pattern ...]
+//! Subscribes the client to the specified patterns.
 //!
 //! Once the client enters the subscribed state, it is not supposed to
 //! issue any other commands, except for additional SUBSCRIBE, PSUBSCRIBE,
 //! UNSUBSCRIBE, PUNSUBSCRIBE, PING, RESET and QUIT commands.
 //!
 //! Returns:
-//! - For each channel subscribed: a multi-bulk reply with three elements:
-//!   - "subscribe"
-//!   - channel name
-//!   - number of channels the client is currently subscribed to
+//! - For each pattern subscribed: a multi-bulk reply with three elements:
+//!   - "psubscribe"
+//!   - pattern
+//!   - number of patterns the client is currently subscribed to
 
 use crate::error::{CacheCatError, ProtocolError};
 use crate::protocol::command::{BlockCommand, Client, ParsedCommand};
 use crate::protocol::connection::ping::PingParam;
-use crate::protocol::pub_sub::unsubscribe::UnsubscribeParams;
+use crate::protocol::pub_sub::punsubscribe::PunsubscribeParams;
 use crate::raft::network::redis_server::RedisServer;
 use crate::raft::types::core::response_value::Value;
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use std::fmt::{Display, Formatter};
 use tokio::sync::watch;
-use crate::protocol::pub_sub::psubscribe::PsubscribeParams;
-use crate::protocol::pub_sub::punsubscribe::PunsubscribeParams;
 
-/// SUBSCRIBE command parameters
+/// PSUBSCRIBE command parameters
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct SubscribeParams {
-    pub channels: Vec<Vec<u8>>,
+pub struct PsubscribeParams {
+    pub patterns: Vec<Vec<u8>>,
 }
 
-impl SubscribeParams {
-    /// Parse SUBSCRIBE command parameters from RESP array items
-    /// Format: SUBSCRIBE channel [channel ...]
+impl PsubscribeParams {
+    /// Parse PSUBSCRIBE command parameters from RESP array items
+    /// Format: PSUBSCRIBE pattern [pattern ...]
     pub fn parse(items: &[Value]) -> Result<Self, ProtocolError> {
-        // Need at least: SUBSCRIBE channel (2 items)
+        // Need at least: PSUBSCRIBE pattern (2 items)
         if items.len() < 2 {
-            return Err(ProtocolError::WrongArgCount("subscribe"));
+            return Err(ProtocolError::WrongArgCount("psubscribe"));
         }
 
-        let mut channels = Vec::with_capacity(items.len() - 1);
+        let mut patterns = Vec::with_capacity(items.len() - 1);
 
-        // Parse all channel arguments
+        // Parse all pattern arguments
         for item in &items[1..] {
-            let channel = match item {
+            let pattern = match item {
                 Value::BulkString(Some(data)) => data.clone(),
                 Value::SimpleString(s) => s.as_bytes().to_vec(),
-                _ => return Err(ProtocolError::WrongArgCount("subscribe")),
+                _ => return Err(ProtocolError::WrongArgCount("psubscribe")),
             };
-            channels.push(channel);
+            patterns.push(pattern);
         }
 
-        Ok(SubscribeParams { channels })
+        Ok(PsubscribeParams { patterns })
     }
 }
 
-impl Display for SubscribeParams {
+impl Display for PsubscribeParams {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        write!(f, "SubscribeReq {{ channels: {:?} }}", self.channels)
+        write!(f, "PsubscribeReq {{ patterns: {:?} }}", self.patterns)
     }
 }
 
-/// SUBSCRIBE command executor
-pub struct SubscribeCommand;
+/// PSUBSCRIBE command executor
+pub struct PsubscribeCommand;
 
 #[async_trait]
-impl BlockCommand for SubscribeCommand {
+impl BlockCommand for PsubscribeCommand {
     async fn execute(
         &self,
         client: &mut Client,
         items: &[Value],
         server: &RedisServer,
     ) -> Result<(Value, watch::Receiver<Option<Value>>), CacheCatError> {
-        let params = SubscribeParams::parse(items)?;
-        Ok(server.broadcast.subscribe(params.channels, client.id).await)
+        let params = PsubscribeParams::parse(items)?;
+        Ok(server
+            .broadcast
+            .psubscribe(params.patterns, client.id)
+            .await)
     }
 
     async fn execute_during_block(
@@ -106,7 +107,8 @@ impl BlockCommand for SubscribeCommand {
                 .await
                 .0)
         } else if cmd.name == "UNSUBSCRIBE" {
-            let params = crate::protocol::pub_sub::unsubscribe::UnsubscribeParams::parse(&cmd.items)?;
+            let params =
+                crate::protocol::pub_sub::unsubscribe::UnsubscribeParams::parse(&cmd.items)?;
             let result = match params.channels {
                 None => server.broadcast.unsubscribe_all_channels(client.id).await,
                 Some(channels) => server.broadcast.unsubscribe(channels, client.id).await,

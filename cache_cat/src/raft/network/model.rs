@@ -7,6 +7,12 @@ use serde::{Deserialize, Serialize};
 use std::hash::Hasher;
 use std::sync::Arc;
 
+#[derive(Serialize, Deserialize, Debug, PartialEq, Clone)]
+pub struct PublishReq {
+    pub message: Vec<u8>,
+    pub channel: Vec<u8>,
+}
+
 #[derive(Serialize, Deserialize, Debug, PartialEq)]
 pub struct PrintTestReq {
     pub message: String,

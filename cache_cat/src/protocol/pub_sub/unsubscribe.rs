@@ -15,7 +15,7 @@
 //!   - number of channels the client is currently subscribed to
 
 use crate::error::{CacheCatError, ProtocolError};
-use crate::protocol::command::{BlockCommand, Client, Command};
+use crate::protocol::command::{ Client, Command};
 use crate::raft::network::redis_server::RedisServer;
 use crate::raft::types::core::response_value::Value;
 use async_trait::async_trait;
@@ -34,7 +34,7 @@ pub struct UnsubscribeParams {
 impl UnsubscribeParams {
     /// Parse UNSUBSCRIBE command parameters from RESP array items
     /// Format: UNSUBSCRIBE [channel [channel ...]]
-    fn parse(items: &[Value]) -> Result<Self, ProtocolError> {
+    pub fn parse(items: &[Value]) -> Result<Self, ProtocolError> {
         match items.len() {
             // UNSUBSCRIBE with no arguments - unsubscribe from all
             1 => Ok(UnsubscribeParams { channels: None }),

@@ -1,7 +1,7 @@
 use crate::error::ProtocolError;
 use crate::protocol::bitmap::getbit::GetBitCommand;
 use crate::protocol::bitmap::setbit::SetBitCommand;
-use crate::protocol::connection::time::TimeCommand;
+use crate::protocol::server::time::TimeCommand;
 use crate::protocol::hash::hget::HGetCommand;
 use crate::protocol::hash::hincrby::HIncrByCommand;
 use crate::protocol::hash::hmget::HMGetCommand;

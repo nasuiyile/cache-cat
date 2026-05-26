@@ -190,6 +190,9 @@ impl RpcMultiClient {
             Err(_) => Err(RPCError::Timeout(err)),
         }
     }
+    
+    
+    
 
     fn decode_response<Res>(response_bytes: Bytes) -> Result<Res, RPCError<TypeConfig>>
     where

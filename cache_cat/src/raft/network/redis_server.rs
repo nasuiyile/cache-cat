@@ -1,17 +1,17 @@
+use crate::error::CacheCatError;
 use crate::protocol::command::{Client, CommandFactory};
 use crate::protocol::resp::Parser;
 use crate::raft::network::pub_sub::PubSub;
 use crate::raft::types::core::response_value::Value;
 use crate::raft::types::raft_types::CacheCatApp;
 use bytes::{Buf, BytesMut};
-use futures::{FutureExt, SinkExt, StreamExt, future::BoxFuture, stream::FuturesOrdered};
-use parking_lot::Mutex;
+use futures::{future::BoxFuture, stream::FuturesOrdered};
 use std::io::Result as IoResult;
 use std::net::SocketAddr;
 use std::sync::Arc;
 use tokio::net::{TcpListener, TcpStream};
 use tokio_util::codec::{Decoder, Encoder, Framed};
-use tracing::{debug, error, info, warn};
+use tracing::{error, info};
 
 #[derive(Clone)]
 pub struct RedisServer {
@@ -53,11 +53,12 @@ impl RedisServer {
         redis_addr: String,
         cmd_factory: Arc<CommandFactory>,
     ) -> Self {
+        let broadcast = app.broadcast.clone();
         Self {
             app,
             redis_addr,
             cmd_factory,
-            broadcast: Arc::new(PubSub::new()),
+            broadcast,
         }
     }
 
@@ -66,13 +67,14 @@ impl RedisServer {
         stream: TcpStream,
         peer_addr: SocketAddr,
         client_id: u64,
-    ) -> IoResult<()> {
+    ) -> Result<(), CacheCatError> {
         stream.set_nodelay(true)?;
         let mut framed = Framed::new(stream, RespCodec);
         let client = Client {
             db_number: 0,
             transaction_queue: None,
             id: client_id,
+            closed: false,
         };
         self.cmd_factory
             .process_connection(&self, &mut framed, client)

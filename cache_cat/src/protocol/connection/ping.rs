@@ -1,47 +1,77 @@
-//! PING command implementation
-//!
-//! PING [message]
-//! Returns PONG if no argument is provided, otherwise returns the message.
-
 use crate::error::{CacheCatError, ProtocolError};
 use crate::protocol::command::{Client, Command};
 use crate::raft::network::redis_server::RedisServer;
 use crate::raft::types::core::response_value::Value;
 use async_trait::async_trait;
 
+/// Parsed PING arguments
+#[derive(Debug)]
+pub struct PingParam {
+    pub message: Option<Vec<u8>>,
+}
+
 /// PING command handler
 pub struct PingCommand;
+
+impl PingParam {
+    /// Parse arguments from RESP items
+    /// Format: PING [message]
+    pub fn parse(items: &[Value]) -> Result<PingParam, ProtocolError> {
+        match items.len() {
+            1 => {
+                // PING (no argument)
+                Ok(PingParam { message: None })
+            }
+            2 => {
+                // PING message
+                let message = match &items[1] {
+                    Value::BulkString(data) => {
+                        // BulkString with data or null bulk string
+                        data.clone()
+                    }
+                    Value::SimpleString(s) => {
+                        // Simple string, convert to bytes
+                        Some(s.as_bytes().to_vec())
+                    }
+                    Value::Integer(i) => {
+                        // Integer, convert to string representation
+                        Some(i.to_string().into_bytes())
+                    }
+                    _ => {
+                        return Err(ProtocolError::InvalidArgument(
+                            "ping supports only string/integer arguments",
+                        ));
+                    }
+                };
+                Ok(PingParam { message })
+            }
+            _ => {
+                // Too many arguments
+                Err(ProtocolError::WrongArgCount("ping"))
+            }
+        }
+    }
+}
 
 #[async_trait]
 impl Command for PingCommand {
     async fn execute(
         &self,
-        _client: &mut Client,
+        client: &mut Client,
         items: &[Value],
-        _server: &RedisServer,
+        server: &RedisServer,
     ) -> Result<Value, CacheCatError> {
-        // PING can have 0 or 1 argument
-        // PING -> PONG
-        // PING message -> message
-
-        if items.len() > 2 {
-            return Err(ProtocolError::WrongArgCount("ping").into());
-        }
-
-        if items.len() == 1 {
-            // No argument, return PONG
-            Ok(Value::SimpleString("PONG".to_string()))
-        } else {
-            // Return the provided message
-            match &items[1] {
-                Value::BulkString(Some(data)) => Ok(Value::BulkString(Some(data.clone()))),
-                Value::BulkString(None) => Ok(Value::BulkString(None)),
-                Value::SimpleString(s) => Ok(Value::SimpleString(s.clone())),
-                Value::Integer(i) => Ok(Value::Integer(*i)),
-                Value::Array(_) => Err(ProtocolError::InvalidArgument("argument type").into()),
-                Value::Error(e) => Ok(Value::Error(e.clone())),
-                _ => Err(ProtocolError::InvalidArgument("argument type").into()),
-            }
+        // Parse arguments first
+        let params = match PingParam::parse(items) {
+            Ok(p) => p,
+            Err(e) => return Err(e.into()),
+        };
+        // Check if we're in a transaction
+        if let Some(vec) = client.transaction_queue.as_mut() {}
+        // Execute the command
+        match params.message {
+            None => Ok(Value::SimpleString("PONG".to_string())),
+            Some(message) => Ok(Value::BulkString(Some(message))),
         }
     }
 }

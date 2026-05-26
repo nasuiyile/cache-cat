@@ -3,9 +3,11 @@
 //! This module provides a unified error type that hides internal complexity
 //! behind a simple, user-facing interface.
 
-use crate::error::ErrorKind::{Internal, InvalidConfig, Protocol, Retryable, Storage};
+use crate::error::ErrorKind::{Internal, InvalidConfig, Protocol, Retryable, Storage, RPC};
 use crate::raft::types::core::response_value::Value;
+use crate::raft::types::raft_types::TypeConfig;
 use mlua::prelude::LuaError;
+use openraft::error::{RPCError, Timeout, Unreachable, NetworkError, RemoteError};
 use std::error::Error as StdError;
 use std::fmt;
 use std::fmt::Display;
@@ -132,6 +134,10 @@ pub enum ErrorKind {
     /// Storage-level error
     #[error(transparent)]
     Storage(#[from] StorageError),
+
+    /// RPC-level error
+    #[error(transparent)]
+    RPC(#[from] RpcError),
 }
 
 /// Storage-related errors (Raft, RocksDB operations)
@@ -157,6 +163,7 @@ pub enum StorageError {
     #[error("delete failed: {0}")]
     DeleteFailed(String),
 }
+
 /// Protocol-related errors (RESP parsing, command validation)
 #[derive(thiserror::Error, Clone, Debug, PartialEq, Eq)]
 pub enum ProtocolError {
@@ -196,6 +203,9 @@ pub enum ProtocolError {
     #[error("WRONGTYPE Operation against a key holding the wrong kind of value")]
     WrongType,
 
+    #[error("READONLY This instance is not the master. Write operations are only allowed on the master node.")]
+    ReadOnly,
+
     /// Value is not a valid integer
     #[error("ERR value is not an integer or out of range")]
     NotAnInteger,
@@ -208,6 +218,27 @@ pub enum ProtocolError {
     #[error("{0}")]
     Custom(&'static str),
 }
+
+/// RPC-related errors
+#[derive(thiserror::Error, Clone, Debug, PartialEq, Eq)]
+pub enum RpcError {
+    /// RPC call timed out
+    #[error("RPC timeout")]
+    Timeout,
+
+    /// Node is unreachable
+    #[error("node unreachable: {0}")]
+    Unreachable(String),
+
+    /// Network error
+    #[error("network error: {0}")]
+    Network(String),
+
+    /// Remote node returned an error
+    #[error("remote error: {0}")]
+    Remote(String),
+}
+
 impl From<LuaError> for ProtocolError {
     fn from(err: LuaError) -> Self {
         match err {
@@ -227,6 +258,7 @@ impl From<LuaError> for Error {
         ProtocolError::from(err).into()
     }
 }
+
 impl From<ProtocolError> for Error {
     fn from(err: ProtocolError) -> Self {
         Self {
@@ -245,6 +277,28 @@ impl From<StorageError> for Error {
     }
 }
 
+impl From<RpcError> for Error {
+    fn from(err: RpcError) -> Self {
+        Self {
+            kind: ErrorKind::from(err), // 利用 #[from]
+            source: None,
+        }
+    }
+}
+
+// RPCError<TypeConfig> 自动转换为 Error
+impl From<RPCError<TypeConfig>> for Error {
+    fn from(err: RPCError<TypeConfig>) -> Self {
+        let rpc_err = match err {
+            RPCError::Timeout(_) => RpcError::Timeout,
+            RPCError::Unreachable(e) => RpcError::Unreachable(e.to_string()),
+            RPCError::Network(e) => RpcError::Network(e.to_string()),
+            RPCError::RemoteError(e) => RpcError::Remote(e.to_string()),
+        };
+        rpc_err.into()
+    }
+}
+
 impl Display for ErrorKind {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         match self {
@@ -253,6 +307,7 @@ impl Display for ErrorKind {
             Internal(msg) => write!(f, "internal error: {}", msg),
             Protocol(err) => write!(f, "protocol error: {}", err),
             Storage(err) => write!(f, "storage error: {}", err),
+            RPC(err) => write!(f, "RPC error: {}", err),
         }
     }
 }
@@ -337,14 +392,17 @@ impl From<CacheCatError> for Value {
             Internal(e) => Value::error(format!("ERR {}", e)),
             InvalidConfig(e) => Value::error(format!("ERR {}", e)),
             Retryable { reason: e } => Value::error(format!("ERR {}", e)),
+            RPC(e) => Value::error(format!("ERR {}", e)),
         }
     }
 }
+
 impl From<ProtocolError> for Value {
     fn from(err: ProtocolError) -> Self {
         Value::error(err.to_string())
     }
 }
+
 impl From<io::Error> for Error {
     fn from(e: io::Error) -> Self {
         // IO errors are generally retryable (network issues, etc.)

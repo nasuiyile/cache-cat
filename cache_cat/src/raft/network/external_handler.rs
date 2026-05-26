@@ -1,6 +1,8 @@
+use crate::error::ErrorKind::RPC;
 use crate::error::{CacheCatError, Error};
 use crate::raft::network::model::{
-    AppendEntriesReq, GetReq, GetRes, InstallFullSnapshotReq, PrintTestReq, PrintTestRes, VoteReq,
+    AppendEntriesReq, GetReq, GetRes, InstallFullSnapshotReq, PrintTestReq, PrintTestRes,
+    PublishReq, VoteReq,
 };
 use crate::raft::types::core::value_object::ValueObject;
 use crate::raft::types::entry::membership::JoinRequest;
@@ -38,6 +40,7 @@ pub static HANDLER_TABLE: &[HandlerEntry] = &[
     }),
     (9, || Box::new(RpcMethod { func: add_node })),
     (10, || Box::new(RpcMethod { func: batch_write })),
+    (11, || Box::new(RpcMethod { func: publish })),
 ];
 #[async_trait]
 pub trait RpcHandler: Send + Sync {
@@ -88,6 +91,11 @@ where
 async fn print_test(_app: Arc<CacheCatApp>, d: PrintTestReq) -> Result<PrintTestRes, String> {
     // sleep(std::time::Duration::from_secs(10));
     Ok(PrintTestRes { message: d.message })
+}
+
+async fn publish(app: Arc<CacheCatApp>, param: PublishReq) -> Result<(), String> {
+    app.broadcast.publish(&param.channel, param.message).await;
+    Ok(())
 }
 
 // 主节点才能成功调用这个方法，其他节点会失败

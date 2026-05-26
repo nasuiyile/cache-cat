@@ -1,13 +1,16 @@
 use crate::error::{Error, Result};
 use crate::node::parsed_config::ParsedConfig;
 use crate::raft::network::client::RpcClient;
+use crate::raft::network::connector::Connector;
 use crate::raft::network::network::NetworkFactory;
+use crate::raft::network::pub_sub::PubSub;
 use crate::raft::network::rpc::Server;
 use crate::raft::store::log_store::LogStore;
 use crate::raft::store::raft_engine::create_raft_engine;
 use crate::raft::store::statemachine::StateMachineStore;
 use crate::raft::types::entry::membership::JoinRequest;
 use crate::raft::types::raft_types::{CacheCatApp, Node, NodeId};
+use openraft::async_runtime::WatchReceiver;
 use openraft::error::{InitializeError, RaftError};
 use parking_lot::Mutex;
 use std::collections::BTreeMap;
@@ -47,7 +50,7 @@ impl RaftNode {
             max_payload_entries: 500000,
             snapshot_policy: config.snapshot_policy.clone(), //LogsSinceLast(100),
             replication_lag_threshold: config.replication_lag_threshold, //需要大于snapshot_policy
-            install_snapshot_timeout: 60 * 1000,//60秒
+            install_snapshot_timeout: 60 * 1000,             //60秒
             ..Default::default()
         });
         let group_id = 0;
@@ -64,10 +67,12 @@ impl RaftNode {
         .await
         .map_err(|e| Error::internal(format!("Failed to create raft: {}", e)))?;
         let app = CacheCatApp {
+            connector: Connector::new(),
             node_id,
             raft,
             state_machine: sm_store,
             path: dir.join(""),
+            broadcast: Arc::new(PubSub::new()),
         };
 
         let node = Self {
