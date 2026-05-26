@@ -1,7 +1,7 @@
 use super::endpoint::Endpoint;
 use crate::error::{CacheCatError, ProtocolError, StorageError};
-use crate::raft::network::connector::Connector;
-use crate::raft::network::pub_sub::PubSub;
+use crate::raft::application::connector::Connector;
+use crate::raft::application::pub_sub::PubSub;
 use crate::raft::store::statemachine::StateMachineStore;
 use crate::raft::types::core::mocha::mocha::MyValue;
 use crate::raft::types::core::response_value::Value;
