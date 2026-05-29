@@ -13,13 +13,15 @@ pub struct ParsedConfig {
 
     pub raft_advertise_endpoint: Endpoint,
 
-    pub redis_addr: String,
+    pub redis_port: u32,
 
     pub raft_single: bool,
 
     pub raft_join: Vec<String>,
 
     pub log_path: String,
+
+    pub sentinel_master_name: String,
 
     /// 选举超时时间，节点之间的时钟偏移不能超过该值 需要大于500
     pub election_timeout: u64,
@@ -37,10 +39,12 @@ pub struct ParsedConfig {
 
 impl ParsedConfig {
     pub fn from(config: &Config) -> Result<Self> {
-        let raft_endpoint = Endpoint::parse(&config.raft.address)?;
-        let raft_advertise_endpoint =
-            Endpoint::new(&config.raft.advertise_host, raft_endpoint.port());
-
+        let raft_endpoint = Endpoint::parse(&config.raft.address, config.redis.redis_port)?;
+        let raft_advertise_endpoint = Endpoint::new(
+            &config.raft.advertise_host,
+            config.redis.redis_port,
+            raft_endpoint.port(),
+        );
         let snapshot_policy = if config.raft.snapshot_policy == 0 {
             SnapshotPolicy::Never
         } else {
@@ -51,15 +55,16 @@ impl ParsedConfig {
             node_id: config.node_id as NodeId,
             raft_endpoint,
             raft_advertise_endpoint,
-            redis_addr: config.redis_addr.clone(),
+            redis_port: config.redis.redis_port,
             raft_single: config.raft.single,
             raft_join: config.raft.join.clone(),
             log_path: config.raft.log_path.clone(),
+            sentinel_master_name: config.redis.sentinel_master_name.clone(),
             election_timeout,
             snapshot_policy,
             replication_lag_threshold: config.raft.replication_lag_threshold,
-            cleaning_interval: config.cleaning_interval,
-            db_number: config.databases,
+            cleaning_interval: config.redis.cleaning_interval,
+            db_number: config.redis.databases,
         })
     }
 }

@@ -1,6 +1,6 @@
-use crate::error::{CacheCatError, ProtocolError};
+use crate::error::CacheCatError;
 use crate::node::parsed_config::ParsedConfig;
-use crate::protocol::string::set::{SetMode, SetParams};
+use crate::protocol::string::set::SetParams;
 use crate::raft::store::snapshot::snapshot_handler::{
     dump_cache_to_path, get_snapshot_file_name, load_cache_from_path,
 };
@@ -59,6 +59,7 @@ pub struct StateMachineStore {
 
 #[derive(Debug, Clone)]
 pub struct StateMachineData {
+    
     /// State built from applying the raft logs
     pub kvs: Arc<MyCache>,
     //增量日志队列

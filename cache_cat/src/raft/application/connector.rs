@@ -1,12 +1,13 @@
 use crate::error::{CacheCatError, RpcError};
 use crate::raft::network::client::RpcMultiClient;
 use crate::raft::types::raft_types::TypeConfig;
-use openraft::error::Timeout;
+use openraft::error::{RPCError, Timeout};
 use serde::Serialize;
 use serde::de::DeserializeOwned;
 use std::collections::HashMap;
 use std::time::Duration;
 use tokio::sync::RwLock;
+use tokio::time::timeout;
 
 pub struct Connector {
     connection: RwLock<HashMap<String, RpcMultiClient>>,
@@ -21,7 +22,7 @@ impl Connector {
 
     pub async fn send_msg<Req, Res>(
         &self,
-        addr: &str,
+        addr: String,
         func_id: u32,
         req: Req,
         duration: Duration,
@@ -33,14 +34,22 @@ impl Connector {
     {
         let client = {
             let guard = self.connection.read().await;
-            guard.get(addr).cloned()
+            guard.get(&addr).cloned()
         };
+
         let client = match client {
             Some(c) => c,
             None => {
-                let new_client = RpcMultiClient::connect_with_num(addr, 1)
-                    .await
-                    .map_err(|e| RpcError::Network(e.to_string()))?;
+                let connect_future = RpcMultiClient::connect_with_num(&addr, 1);
+
+                let new_client = match timeout(duration, connect_future).await {
+                    Ok(result) => {
+                        result.map_err(|e| RpcError::Network(e.to_string()))?
+                    }
+                    Err(_) => {
+                        return Err(RPCError::Timeout(err).into());
+                    }
+                };
                 self.connection
                     .write()
                     .await
@@ -51,6 +60,7 @@ impl Connector {
         let result = client
             .call_with_timeout::<Req, Res>(func_id, req, duration, err)
             .await?;
+
         Ok(result)
     }
 }

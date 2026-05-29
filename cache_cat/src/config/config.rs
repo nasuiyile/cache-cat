@@ -1,26 +1,31 @@
-use std::fs;
-use std::net::SocketAddr;
-
-use serde::Deserialize;
-use serde::Serialize;
-
 use super::default::default_raft_config;
 use crate::error::{Error, Result};
+use serde::Deserialize;
+use serde::Serialize;
+use std::fs;
+use std::net::SocketAddr;
 use std::result::Result as StdResult;
 
 #[derive(Debug, Deserialize, Serialize, Clone, Default)]
 pub struct Config {
     pub node_id: u64,
 
-    pub redis_addr: String,
+    pub redis: RedisConfig,
+
+    #[serde(default = "default_raft_config")]
+    pub raft: RaftConfig,
+}
+
+#[derive(Debug, Deserialize, Serialize, Clone, Default)]
+pub struct RedisConfig {
+    pub redis_port: u32,
 
     /// 在没有请求到来时 多少秒进行一次key的清理 0表示不清理
     pub cleaning_interval: u64,
 
-    pub databases: u16,
+    pub sentinel_master_name: String,
 
-    #[serde(default = "default_raft_config")]
-    pub raft: RaftConfig,
+    pub databases: u16,
 }
 
 #[derive(Debug, Deserialize, Serialize, Clone, Default)]

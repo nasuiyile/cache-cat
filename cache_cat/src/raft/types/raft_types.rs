@@ -1,15 +1,15 @@
 use super::endpoint::Endpoint;
 use crate::error::{CacheCatError, ProtocolError, StorageError};
-use crate::raft::network::connector::Connector;
-use crate::raft::network::pub_sub::PubSub;
+use crate::node::parsed_config::ParsedConfig;
+use crate::raft::application::cluster::Cluster;
+use crate::raft::application::connector::Connector;
+use crate::raft::application::pub_sub::PubSub;
 use crate::raft::store::statemachine::StateMachineStore;
 use crate::raft::types::core::mocha::mocha::MyValue;
 use crate::raft::types::core::response_value::Value;
 use crate::raft::types::entry::request::{Operation, Request};
 use crate::raft::types::file_operator::FileOperator;
 use openraft::RPCTypes::Vote;
-use openraft::ReadPolicy::LeaseRead;
-use openraft::async_runtime::WatchReceiver;
 use openraft::error::Timeout;
 use serde::Deserialize;
 use serde::Serialize;
@@ -20,6 +20,8 @@ use std::fmt::Result as FmtResult;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
+use futures::future::join_all;
+use tokio::sync::broadcast;
 
 pub type SnapshotData = tokio::fs::File;
 
@@ -49,15 +51,19 @@ openraft::declare_raft_types!(
 );
 
 pub struct CacheCatApp {
-    pub node_id: NodeId,
-    pub raft: Raft,
+    pub config: ParsedConfig,
+    pub cluster: Cluster,
     pub state_machine: StateMachineStore,
     pub path: PathBuf,
     pub connector: Connector,
-    pub broadcast: Arc<PubSub>,
+    pub pubsub: Arc<PubSub>,
+    pub shutdown_tx: broadcast::Sender<()>,
 }
 
 impl CacheCatApp {
+    pub async fn shutdown(&self) {
+        _ = self.shutdown_tx.send(());
+    }
     pub async fn leader_rpc_call<Req, Res>(
         &self,
         func_id: u32,
@@ -67,40 +73,36 @@ impl CacheCatApp {
         Req: Serialize + Clone + Send,
         Res: DeserializeOwned + Send,
     {
-        if !self.raft.is_leader() {
+        if !self.cluster.is_leader() {
             return Err(ProtocolError::ReadOnly.into());
         }
-        // 用作用域确保所有 guard 提前释放
-        let nodes = {
-            let metrics_guard = self.raft.metrics();
-            let metrics = metrics_guard.borrow_watched();
-            metrics
-                .membership_config
-                .nodes()
-                .map(|(node_id, node)| (*node_id, node.clone()))
-                .collect::<Vec<_>>()
-        };
+        let nodes = self.cluster.nodes();
+        let mut futures = Vec::new();
         for (node_id, node) in nodes {
-            if node_id == self.node_id {
+            if node_id == self.cluster.node_id() {
                 continue;
             }
+            // 关键：将地址转为拥有所有权的 String，避免引用 node 造成生命周期问题
+            let addr = node.endpoint.raft_addr().to_owned();
+            let req = req.clone();
             let timeout = Timeout {
                 action: Vote,
                 target: node_id,
-                timeout: Duration::from_secs(5),
-                id: self.node_id,
+                timeout: Duration::from_secs(2),
+                id: self.cluster.node_id(),
             };
-            self.connector
-                .send_msg::<Req, Res>(
-                    &node.endpoint.to_string(),
-                    func_id,
-                    req.clone(),
-                    Duration::from_secs(5),
-                    timeout,
-                )
-                .await?;
+            // 构造一个 Future 但不立即 .await
+            let fut = self.connector.send_msg::<Req, Res>(
+                addr,               // 现在可以安全 move 进入 Future
+                func_id,
+                req,
+                Duration::from_secs(2),
+                timeout,
+            );
+            futures.push(fut);
         }
-
+        // 并发执行所有请求，忽略结果
+        let _ = join_all(futures).await;
         Ok(())
     }
 
@@ -108,7 +110,7 @@ impl CacheCatApp {
         let write_clock = self.state_machine.data.kvs.generate_new_write_clock();
         let request = Request::new(write_clock, db_number, op);
         let res = self
-            .raft
+            .cluster
             .client_write(request)
             .await
             .map_err(|e| StorageError::WriteFailed(e.to_string()))?;
@@ -119,15 +121,7 @@ impl CacheCatApp {
         key: Vec<u8>,
         db_number: u16,
     ) -> Result<Option<MyValue>, CacheCatError> {
-        let linearizer = self
-            .raft
-            .get_read_linearizer(LeaseRead)
-            .await
-            .map_err(|e| StorageError::ReadFailed(e.to_string()))?;
-        linearizer
-            .await_ready(&self.raft)
-            .await
-            .map_err(|e| StorageError::WriteFailed(e.to_string()))?;
+        self.cluster.lease_read().await?;
         let read_lock = self.state_machine.data.kvs.read_lock.read();
         let my_value = self
             .state_machine
@@ -143,18 +137,9 @@ impl CacheCatApp {
         keys: Vec<Vec<u8>>,
         db_number: u16,
     ) -> Result<Vec<Option<MyValue>>, CacheCatError> {
-        let linearizer = self
-            .raft
-            .get_read_linearizer(LeaseRead)
-            .await
-            .map_err(|e| StorageError::ReadFailed(e.to_string()))?;
-        linearizer
-            .await_ready(&self.raft)
-            .await
-            .map_err(|e| StorageError::WriteFailed(e.to_string()))?;
+        self.cluster.lease_read().await?;
         let _write_lock = self.state_machine.data.kvs.write_lock.lock().await;
         let _read_lock = self.state_machine.data.kvs.read_lock.read();
-
         let mut vec = Vec::new();
         for key in keys {
             let my_value = self

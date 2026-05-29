@@ -1,12 +1,10 @@
 use crate::error::CacheCatError;
 use crate::protocol::command::{Client, CommandFactory};
 use crate::protocol::resp::Parser;
-use crate::raft::network::pub_sub::PubSub;
+use crate::raft::application::pub_sub::PubSub;
 use crate::raft::types::core::response_value::Value;
 use crate::raft::types::raft_types::CacheCatApp;
 use bytes::{Buf, BytesMut};
-use futures::{future::BoxFuture, stream::FuturesOrdered};
-use std::io::Result as IoResult;
 use std::net::SocketAddr;
 use std::sync::Arc;
 use tokio::net::{TcpListener, TcpStream};
@@ -51,9 +49,9 @@ impl RedisServer {
     pub fn new(
         app: Arc<CacheCatApp>,
         redis_addr: String,
-        cmd_factory: Arc<CommandFactory>,
     ) -> Self {
-        let broadcast = app.broadcast.clone();
+        let cmd_factory = Arc::new(CommandFactory::init());
+        let broadcast = app.pubsub.clone();
         Self {
             app,
             redis_addr,

@@ -2,17 +2,14 @@ use crate::error::CacheCatError;
 use crate::error::ProtocolError;
 use crate::protocol::bitmap::getbit::GetBitCommand;
 use crate::protocol::bitmap::setbit::SetBitCommand;
-use crate::protocol::server::bgsave::BgsaveCommand;
 use crate::protocol::connection::echo::EchoCommand;
 use crate::protocol::connection::ping::PingCommand;
 use crate::protocol::connection::quit::QuitCommand;
-use crate::protocol::server::save::SaveCommand;
 use crate::protocol::connection::select::SelectCommand;
-use crate::protocol::server::time::TimeCommand;
 use crate::protocol::hash::hdel::HDelCommand;
 use crate::protocol::hash::hget::HGetCommand;
 use crate::protocol::hash::hincrby::HIncrByCommand;
-use crate::protocol::hash::hmget::{HMGetCommand, HMGetParams};
+use crate::protocol::hash::hmget::HMGetCommand;
 use crate::protocol::hash::hset::HSetCommand;
 use crate::protocol::key::del::DelCommand;
 use crate::protocol::key::exists::ExistsCommand;
@@ -23,13 +20,17 @@ use crate::protocol::list::lpush::LPushCommand;
 use crate::protocol::list::lrange::LRangeCommand;
 use crate::protocol::lua::eval::EvalCommand;
 use crate::protocol::lua::evalsha::EvalShaCommand;
-use crate::protocol::lua::script::{ScriptCommand, ScriptParam};
+use crate::protocol::lua::script::ScriptCommand;
 use crate::protocol::pub_sub::psubscribe::PsubscribeCommand;
 use crate::protocol::pub_sub::publish::PublishCommand;
 use crate::protocol::pub_sub::pubsub::PubSubCommand;
 use crate::protocol::pub_sub::punsubscribe::PunsubscribeCommand;
-use crate::protocol::pub_sub::subscribe::{SubscribeCommand, SubscribeParams};
+use crate::protocol::pub_sub::subscribe::SubscribeCommand;
 use crate::protocol::pub_sub::unsubscribe::UnsubscribeCommand;
+use crate::protocol::sentinel::sentinel::SentinelCommand;
+use crate::protocol::server::bgsave::BgsaveCommand;
+use crate::protocol::server::save::SaveCommand;
+use crate::protocol::server::time::TimeCommand;
 use crate::protocol::set::sadd::SAddCommand;
 use crate::protocol::set::smembers::SMembersCommand;
 use crate::protocol::set::srem::SRemCommand;
@@ -45,7 +46,7 @@ use crate::protocol::transaction::exec::ExecCommand;
 use crate::protocol::transaction::multi::MultiCommand;
 use crate::protocol::zset::zadd::ZAddCommand;
 use crate::protocol::zset::zrange::ZRangeCommand;
-use crate::raft::network::redis_server::{RedisServer, RespCodec};
+use crate::raft::network::redis_server::RedisServer;
 use crate::raft::types::core::response_value::Value;
 use crate::raft::types::entry::request::Operation;
 use async_trait::async_trait;
@@ -55,6 +56,7 @@ use std::collections::HashMap;
 use tokio::select;
 use tokio::sync::watch;
 use tracing::{error, warn};
+use crate::protocol::server::shutdown::ShutdownCommand;
 
 #[async_trait]
 pub trait Command: Send + Sync {
@@ -176,6 +178,7 @@ impl CommandFactory {
         // Connection management
         factory.register("BGSAVE", BgsaveCommand);
         factory.register("SAVE", SaveCommand);
+        factory.register("SHUTDOWN", ShutdownCommand);
         // Pub/Sub commands
         factory.register("PUBLISH", PublishCommand);
         factory.register_block("SUBSCRIBE", SubscribeCommand);
@@ -183,6 +186,9 @@ impl CommandFactory {
         factory.register_block("PSUBSCRIBE", PsubscribeCommand);
         factory.register("PUNSUBSCRIBE", PunsubscribeCommand);
         factory.register("PUBSUB", PubSubCommand);
+        //Sentinel
+        factory.register("SENTINEL", SentinelCommand::new());
+
 
         factory
     }

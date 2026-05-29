@@ -1,7 +1,5 @@
 use crate::error::{CacheCatError, Error};
-use crate::protocol::command::CommandFactory;
 use crate::raft::network::external_handler::{HANDLER_TABLE, write};
-use crate::raft::network::redis_server;
 use crate::raft::network::redis_server::RedisServer;
 use crate::raft::store::snapshot::snapshot_handler::get_snapshot_file_name;
 use crate::raft::types::entry::request::Request;
@@ -38,7 +36,7 @@ impl Server {
         redis_addr: String,
     ) -> Self {
         let redis_server =
-            RedisServer::new(app.clone(), redis_addr, Arc::new(CommandFactory::init()));
+            RedisServer::new(app.clone(), redis_addr);
         Server {
             app: app.clone(),
             addr,
@@ -102,13 +100,10 @@ async fn handle_connection(
     if let Err(e) = socket.set_nodelay(true) {
         warn!("Failed to set TCP_NODELAY for {}: {}", peer_addr, e);
     }
-
     debug!("New connection from {}", peer_addr);
-
     // 读取第一个字节识别模式
     let mut protocol_byte = [0u8; 1];
     socket.read_exact(&mut protocol_byte).await?;
-
     if protocol_byte[0] == 0 {
         // RPC 模式
         rpc_mode(app, socket, peer_addr).await;

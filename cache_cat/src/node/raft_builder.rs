@@ -1,68 +1,87 @@
 use crate::config::config::Config;
 use crate::error::Result;
-use crate::node::node::RaftNode;
 use crate::node::parsed_config::ParsedConfig;
+use crate::node::raft_node::RaftNode;
+use crate::raft::application::cluster::NodeState;
 use crate::raft::types::entry::bae_operation::BaseOperation;
 use crate::raft::types::entry::request::{Operation, Request};
 use crate::utils::times::time_gap;
+use sha1::digest::typenum::op;
 use std::sync::Arc;
 use std::time::Duration;
+use tokio::sync::broadcast::Receiver;
 use tokio::time;
 use tracing::info;
 
 pub struct RaftNodeBuilder;
 
 impl RaftNodeBuilder {
-    pub async fn build(config: &Config) -> Result<Arc<RaftNode>> {
+    pub async fn build(config: &Config) -> Result<(Arc<RaftNode>, Receiver<()>)> {
         config.validate()?;
         let config = ParsedConfig::from(config)?;
-        let duration = 1;
-
-        let raft_node = RaftNode::create(config).await?;
+        let cleaning_interval = config.cleaning_interval;
+        let (raft_node, shutdown_rx) = RaftNode::create(config).await?;
         let arc = Arc::new(raft_node);
-
         RaftNode::start(arc.clone()).await?;
+        let handle = arc.clone();
+        timed_expiration(handle.clone(), cleaning_interval);
+        let state_synchronization_interval = 1;
+        cluster_state_sync(handle, state_synchronization_interval);
+        Ok((arc, shutdown_rx))
+    }
+}
 
-        // 只 clone 一次用于后台任务
-        let cleanup_handle = arc.clone();
-        tokio::spawn(async move {
-            let mut interval = time::interval(Duration::from_secs(1));
-            loop {
-                interval.tick().await;
-                let write_clock = cleanup_handle.app.state_machine.data.kvs.get_write_clock();
+//主节点定期告诉所有节点当前集群的状态
+pub fn cluster_state_sync(raft: Arc<RaftNode>, duration: u64) {
+    tokio::spawn(async move {
+        let mut interval = time::interval(Duration::from_secs(duration));
+        loop {
+            interval.tick().await;
+            let Some(state) = raft.app.cluster.nodes_state() else {
+                continue; // 没有值 代表不是leader，跳过本次循环
+            };
+            //设置自己的状态，然后同步给所有人
+            raft.app.cluster.set_nodes_state(state.clone()).await;
+            _ = raft.app.leader_rpc_call::<NodeState, ()>(12, state).await;
+        }
+    });
+}
 
-                if time_gap(write_clock) < duration {
-                    continue;
-                }
-                if !cleanup_handle.app.raft.is_leader() {
-                    continue;
-                }
-                let mut have_expired = false;
-                let kvs = &cleanup_handle.app.state_machine.data.kvs;
-                for x in &kvs.databases {
-                    if x.mocha.has_expired_by_local_clock_async().await {
-                        have_expired = true;
-                    }
-                }
-                if !have_expired {
-                    continue;
-                }
-                info!("cleaning expired data");
-                let res = cleanup_handle
-                    .app
-                    .raft
-                    .client_write(Request::new(
-                        kvs.generate_new_write_clock(),
-                        0,
-                        Operation::Base(BaseOperation::Empty),
-                    ))
-                    .await;
-                if res.is_err() {
-                    info!("cleaning expired data failed");
+pub fn timed_expiration(raft: Arc<RaftNode>, duration: u64) {
+    tokio::spawn(async move {
+        let mut interval = time::interval(Duration::from_secs(duration));
+        loop {
+            interval.tick().await;
+            let write_clock = raft.app.state_machine.data.kvs.get_write_clock();
+            if time_gap(write_clock) < duration {
+                continue;
+            }
+            if !raft.app.cluster.is_leader() {
+                continue;
+            }
+            let mut have_expired = false;
+            let kvs = &raft.app.state_machine.data.kvs;
+            for x in &kvs.databases {
+                if x.mocha.has_expired_by_local_clock_async().await {
+                    have_expired = true;
                 }
             }
-        });
-
-        Ok(arc) // 直接返回，无需再 clone
-    }
+            if !have_expired {
+                continue;
+            }
+            info!("cleaning expired data");
+            let res = raft
+                .app
+                .cluster
+                .client_write(Request::new(
+                    kvs.generate_new_write_clock(),
+                    0,
+                    Operation::Base(BaseOperation::Empty),
+                ))
+                .await;
+            if res.is_err() {
+                info!("cleaning expired data failed");
+            }
+        }
+    });
 }

@@ -35,12 +35,8 @@ impl Command for SaveCommand {
         }
         //进行快照
         let mut receiver = server.app.state_machine.data.snapshot_message.subscribe();
-        let result = server.app.raft.trigger().snapshot().await;
+        server.app.cluster.trigger_snapshot().await?;
         let _ = receiver.recv().await;
-        result.map_err(|e| {
-            error!("snapshot error: {}", e);
-            ProtocolError::Custom("snapshot error")
-        })?;
         Ok(Value::ok())
     }
 }

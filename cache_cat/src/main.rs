@@ -34,7 +34,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
     // Load configuration first (without logging)
     let config = load_config(&config_path)?;
 
-    let _raft_node = RaftNodeBuilder::build(&config).await?;
+    let (_raft_node, mut shutdown_rx) = RaftNodeBuilder::build(&config).await?;
     // if config.node_id == 1 {
     //     let app_clone = raft_node.app.clone();
     //     tokio::spawn(async move {
@@ -42,8 +42,17 @@ async fn main() -> Result<(), Box<dyn Error>> {
     //     });
     // }
     // Wait for Ctrl+C
+
     info!("Press Ctrl+C to shutdown...");
-    signal::ctrl_c().await?;
+
+    tokio::select! {
+         _ = signal::ctrl_c() => {
+            info!("Received Ctrl+C");
+        }
+         _ = shutdown_rx.recv()=>{
+            info!("Received shutdown signal");
+        }
+    }
 
     info!("Shutting down Raft node...");
     // raft_node.shutdown().await?;
@@ -74,7 +83,7 @@ async fn benchmark_requests(apps: Arc<CacheCatApp>) {
                         ex_time: 0,
                     })),
                 );
-                apps_clone.raft.client_write(request).await.unwrap();
+                apps_clone.cluster.client_write(request).await.unwrap();
             }
         });
         handles.push(handle);
