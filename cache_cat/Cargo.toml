@@ -19,8 +19,6 @@ strip = true
 opt-level = 0
 debug = true
 
-
-
 [dependencies]
 #openraft = { version = "0.9.21", features = ["type-alias"] }
 openraft = { git = "https://github.com/databendlabs/openraft", tag = "v0.10.0-alpha.13", features = ["type-alias", "serde"] }
@@ -32,16 +30,13 @@ tokio = { version = "1.50.0", features = ["net", "io-util", "fs", "rt", "rt-mult
 tokio-util = { version = "0.7.18", features = ["codec"] }
 bincode2 = "2.0.1"
 bytes = "1.11.1"
-#moka = { version = "0.12.15", features = ["sync"] }
 async-trait = "0.1.89"
 mimalloc = "0.1.50"
 crossbeam-utils = "0.8.21"
 parking_lot = "0.12.5"
 raft-engine = { git = "https://github.com/nasuiyile/raft-engine-serde" }
-
 tracing-subscriber = { version = "0.3.23", features = ["env-filter", "fmt"] }
 uuid = { version = "1.23.1", features = ["v4", "serde"] }
-
 #遥测相关默认不启用
 console-subscriber = { version = "0.5", optional = true }
 tracing-flame = { version = "0.2", optional = true }
@@ -56,7 +51,6 @@ papaya = "0.2.4"
 [dev-dependencies]
 anyhow = "1.0.102"
 tempfile = "3.27.0"
-
 
 [features]
 default = []

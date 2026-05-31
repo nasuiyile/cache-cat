@@ -98,17 +98,15 @@ impl PubSub {
             }
         }
 
-        // 从客户端状态中移除这些频道的记录
+        // 从客户端状态中移除这些频道的记录，并在无订阅时清理
         {
             let mut clients = self.clients.write().await;
             if let Some(state) = clients.get_mut(&client_id) {
                 for channel in &channels {
                     state.subscribed_channels.remove(channel);
                 }
-                // 如果没有订阅了，清理客户端
-                if state.subscribed_channels.is_empty() && state.subscribed_patterns.is_empty() {
-                    clients.remove(&client_id);
-                }
+                // 如果该客户端不再有任何订阅，发送关闭信号并清理
+                Self::cleanup_client_if_empty(&mut clients, client_id);
             }
         }
 
@@ -179,14 +177,13 @@ impl PubSub {
         }
         drop(subs);
 
-        // 清理客户端状态
+        // 清理客户端状态，如果没有任何订阅则发送关闭信号
         {
             let mut clients = self.clients.write().await;
             if let Some(state) = clients.get_mut(&client_id) {
                 state.subscribed_channels.clear();
-                if state.subscribed_patterns.is_empty() {
-                    clients.remove(&client_id);
-                }
+                // 只有在模式也为空时才清理，否则保留模式订阅
+                Self::cleanup_client_if_empty(&mut clients, client_id);
             }
         }
 
@@ -318,16 +315,16 @@ impl PubSub {
         });
         drop(patterns);
 
-        // 移除客户端状态，sender 被 drop 后，所有 Receiver 会收到 RecvError::Closed
-        self.clients.write().await.remove(&client_id);
+        // 强制移除客户端状态，并先发送空消息通知所有 Receiver
+        let mut clients = self.clients.write().await;
+        if let Some(state) = clients.get_mut(&client_id) {
+            let _ = state.sender.send(None); // 发送关闭信号
+        }
+        clients.remove(&client_id);
     }
 
     /// 退订多个模式（外部调用）
-    pub async fn punsubscribe(
-        &self,
-        patterns: Vec<Vec<u8>>,
-        client_id: u64,
-    ) -> Value {
+    pub async fn punsubscribe(&self, patterns: Vec<Vec<u8>>, client_id: u64) -> Value {
         let mut responses = Vec::new();
         for pattern in &patterns {
             let resp = self.punsubscribe_single(pattern.clone(), client_id).await;
@@ -336,17 +333,14 @@ impl PubSub {
             }
         }
 
-        // 从客户端状态中移除这些模式的记录
+        // 从客户端状态中移除这些模式的记录，并在无订阅时清理
         {
             let mut clients = self.clients.write().await;
             if let Some(state) = clients.get_mut(&client_id) {
                 for pattern in &patterns {
                     state.subscribed_patterns.remove(pattern);
                 }
-                // 如果没有订阅了，清理客户端
-                if state.subscribed_channels.is_empty() && state.subscribed_patterns.is_empty() {
-                    clients.remove(&client_id);
-                }
+                Self::cleanup_client_if_empty(&mut clients, client_id);
             }
         }
 
@@ -415,19 +409,18 @@ impl PubSub {
         }
         drop(pats);
 
-        // 清理客户端状态
+        // 清理客户端状态，如果没有任何订阅则发送关闭信号
         {
             let mut clients = self.clients.write().await;
             if let Some(state) = clients.get_mut(&client_id) {
                 state.subscribed_patterns.clear();
-                if state.subscribed_channels.is_empty() {
-                    clients.remove(&client_id);
-                }
+                Self::cleanup_client_if_empty(&mut clients, client_id);
             }
         }
 
         Value::Array(Some(responses))
     }
+
     /// PUBSUB CHANNELS [pattern]
     /// 列出当前活跃的频道，可选 pattern 进行 glob 过滤
     pub async fn pubsub_channels(&self, pattern: Option<&[u8]>) -> Value {
@@ -465,6 +458,41 @@ impl PubSub {
         let patterns = self.patterns.read().await;
         Value::Integer(patterns.len() as i64)
     }
+
+    /// 获取客户端当前订阅的精确频道数量
+    pub async fn client_subscription_count(&self, client_id: u64) -> u64 {
+        let clients = self.clients.read().await;
+        clients
+            .get(&client_id)
+            .map(|state| state.subscribed_channels.len() as u64)
+            .unwrap_or(0)
+    }
+
+    /// 获取客户端当前订阅的模式数量
+    pub async fn client_pattern_count(&self, client_id: u64) -> u64 {
+        let clients = self.clients.read().await;
+        clients
+            .get(&client_id)
+            .map(|state| state.subscribed_patterns.len() as u64)
+            .unwrap_or(0)
+    }
+
+    // ------------------ 私有辅助函数 ------------------
+
+    /// 当客户端不再有任何订阅时，发送空消息并移除客户端状态。
+    /// 调用前需保证已持有 `clients` 的写锁，并已更新完订阅集合。
+    fn cleanup_client_if_empty(
+        clients: &mut HashMap<u64, ClientState>,
+        client_id: u64,
+    ) {
+        if let Some(state) = clients.get_mut(&client_id) {
+            if state.subscribed_channels.is_empty() && state.subscribed_patterns.is_empty() {
+                // 发送一个 None 作为关闭信号，通知所有 Receiver 订阅已结束
+                let _ = state.sender.send(None);
+                clients.remove(&client_id);
+            }
+        }
+    }
 }
 
 /// 简单的 glob 风格模式匹配（支持 * 和 ?）
@@ -472,7 +500,6 @@ pub fn matches_pattern(channel: &[u8], pattern: &[u8]) -> bool {
     if pattern.is_empty() {
         return channel.is_empty();
     }
-
     match pattern[0] {
         b'*' => {
             for i in 0..=channel.len() {

@@ -44,6 +44,7 @@ impl Command for ExecCommand {
             .app
             .write(Operation::Redis(params), client.db_number)
             .await?;
+        client.flag.multi = false;
         Ok(value)
     }
 }

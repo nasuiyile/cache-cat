@@ -17,6 +17,8 @@ pub struct ParsedConfig {
 
     pub raft_single: bool,
 
+    pub password: Option<String>,
+
     pub raft_join: Vec<String>,
 
     pub log_path: String,
@@ -52,6 +54,7 @@ impl ParsedConfig {
         };
         let election_timeout = max(config.raft.election_timeout, 500);
         Ok(ParsedConfig {
+            password: config.redis.requirepass.clone(),
             node_id: config.node_id as NodeId,
             raft_endpoint,
             raft_advertise_endpoint,

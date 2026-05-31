@@ -16,15 +16,14 @@
 use crate::error::{CacheCatError, ProtocolError};
 use crate::protocol::command::{BlockCommand, Client, ParsedCommand};
 use crate::protocol::connection::ping::PingParam;
-use crate::protocol::pub_sub::unsubscribe::UnsubscribeParams;
+use crate::protocol::pub_sub::psubscribe::PsubscribeParams;
+use crate::protocol::pub_sub::punsubscribe::PunsubscribeParams;
 use crate::raft::network::redis_server::RedisServer;
 use crate::raft::types::core::response_value::Value;
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use std::fmt::{Display, Formatter};
 use tokio::sync::watch;
-use crate::protocol::pub_sub::psubscribe::PsubscribeParams;
-use crate::protocol::pub_sub::punsubscribe::PunsubscribeParams;
 
 /// SUBSCRIBE command parameters
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -75,6 +74,7 @@ impl BlockCommand for SubscribeCommand {
         server: &RedisServer,
     ) -> Result<(Value, watch::Receiver<Option<Value>>), CacheCatError> {
         let params = SubscribeParams::parse(items)?;
+        client.flag.in_sub = true;
         Ok(server.broadcast.subscribe(params.channels, client.id).await)
     }
 
@@ -106,7 +106,8 @@ impl BlockCommand for SubscribeCommand {
                 .await
                 .0)
         } else if cmd.name == "UNSUBSCRIBE" {
-            let params = crate::protocol::pub_sub::unsubscribe::UnsubscribeParams::parse(&cmd.items)?;
+            let params =
+                crate::protocol::pub_sub::unsubscribe::UnsubscribeParams::parse(&cmd.items)?;
             let result = match params.channels {
                 None => server.broadcast.unsubscribe_all_channels(client.id).await,
                 Some(channels) => server.broadcast.unsubscribe(channels, client.id).await,

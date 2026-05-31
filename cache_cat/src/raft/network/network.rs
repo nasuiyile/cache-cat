@@ -1,9 +1,6 @@
 use crate::raft::network::client::RpcMultiClient;
 use crate::raft::network::model::{AppendEntriesReq, InstallFullSnapshotReq, VoteReq};
 use crate::raft::types::raft_types::{Node, NodeId, TypeConfig};
-use std::sync::Arc;
-use std::time::Duration;
-
 use crate::utils::now_ms;
 use openraft::RPCTypes::{InstallSnapshot, Vote};
 use openraft::alias::VoteOf;
@@ -14,7 +11,8 @@ use openraft::raft::{
 };
 use openraft::{OptionalSend, RaftNetworkFactory, RaftNetworkV2, Snapshot};
 use parking_lot::RwLock;
-use tokio::time::sleep;
+use std::sync::Arc;
+use std::time::Duration;
 use tracing::info;
 
 pub struct NetworkFactory {}
@@ -50,11 +48,6 @@ impl TcpNetwork {
             }
         }
 
-        // 如果不存在，尝试连接
-        info!(
-            "Attempting to connect to node {} at {}",
-            self.target, self.addr
-        );
         match RpcMultiClient::connect(&self.addr).await {
             Ok(client) => {
                 let mut guard = self.nodes.write();
@@ -93,9 +86,7 @@ impl RaftNetworkV2<TypeConfig> for TcpNetwork {
         let req = AppendEntriesReq {
             append_entries: rpc,
         };
-
         let client = self.get_or_connect_client().await?;
-
         client
             .call_with_timeout(
                 7,

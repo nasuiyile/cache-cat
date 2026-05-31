@@ -46,10 +46,7 @@ impl Encoder<Value> for RespCodec {
 }
 
 impl RedisServer {
-    pub fn new(
-        app: Arc<CacheCatApp>,
-        redis_addr: String,
-    ) -> Self {
+    pub fn new(app: Arc<CacheCatApp>, redis_addr: String) -> Self {
         let cmd_factory = Arc::new(CommandFactory::init());
         let broadcast = app.pubsub.clone();
         Self {
@@ -67,16 +64,11 @@ impl RedisServer {
         client_id: u64,
     ) -> Result<(), CacheCatError> {
         stream.set_nodelay(true)?;
-        let mut framed = Framed::new(stream, RespCodec);
-        let client = Client {
-            db_number: 0,
-            transaction_queue: None,
-            id: client_id,
-            closed: false,
-        };
-        self.cmd_factory
-            .process_connection(&self, &mut framed, client)
-            .await?;
+        let framed = Framed::new(stream, RespCodec);
+        let auth = self.app.config.password.is_none();
+        let client = Client::new(client_id, framed, auth);
+        self.cmd_factory.process_connection(&self, client).await?;
+        self.app.pubsub.remove_client(client_id).await;
         info!("Connection handler ended for {}", peer_addr);
         Ok(())
     }

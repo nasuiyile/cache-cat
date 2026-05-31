@@ -2,6 +2,8 @@ use crate::error::CacheCatError;
 use crate::error::ProtocolError;
 use crate::protocol::bitmap::getbit::GetBitCommand;
 use crate::protocol::bitmap::setbit::SetBitCommand;
+use crate::protocol::connection::auth::AuthCommand;
+use crate::protocol::connection::client::client::ClientCommand;
 use crate::protocol::connection::echo::EchoCommand;
 use crate::protocol::connection::ping::PingCommand;
 use crate::protocol::connection::quit::QuitCommand;
@@ -30,6 +32,7 @@ use crate::protocol::pub_sub::unsubscribe::UnsubscribeCommand;
 use crate::protocol::sentinel::sentinel::SentinelCommand;
 use crate::protocol::server::bgsave::BgsaveCommand;
 use crate::protocol::server::save::SaveCommand;
+use crate::protocol::server::shutdown::ShutdownCommand;
 use crate::protocol::server::time::TimeCommand;
 use crate::protocol::set::sadd::SAddCommand;
 use crate::protocol::set::smembers::SMembersCommand;
@@ -46,17 +49,22 @@ use crate::protocol::transaction::exec::ExecCommand;
 use crate::protocol::transaction::multi::MultiCommand;
 use crate::protocol::zset::zadd::ZAddCommand;
 use crate::protocol::zset::zrange::ZRangeCommand;
-use crate::raft::network::redis_server::RedisServer;
+use crate::raft::network::redis_server::{RedisServer, RespCodec};
 use crate::raft::types::core::response_value::Value;
 use crate::raft::types::entry::request::Operation;
+use crate::utils::now_ms;
+use crate::utils::times::now_us;
 use async_trait::async_trait;
 use futures::StreamExt;
 use futures::{Sink, SinkExt, Stream};
 use std::collections::HashMap;
+use std::fmt;
+use std::fmt::{Display, Formatter};
+use tokio::net::{TcpListener, TcpStream};
 use tokio::select;
 use tokio::sync::watch;
+use tokio_util::codec::Framed;
 use tracing::{error, warn};
-use crate::protocol::server::shutdown::ShutdownCommand;
 
 #[async_trait]
 pub trait Command: Send + Sync {
@@ -87,12 +95,83 @@ pub trait BlockCommand: Send + Sync {
     ) -> Result<Value, CacheCatError>;
 }
 
-#[derive(Debug)]
+/// Command trait for sub-command registration
+#[async_trait]
+pub trait SubCommand: Send + Sync {
+    async fn execute(
+        &self,
+        client: &mut Client,
+        items: &[Value],
+        server: &RedisServer,
+    ) -> Result<Value, CacheCatError>;
+}
+
 pub struct Client {
     pub id: u64,
     pub db_number: u16,
     pub transaction_queue: Option<Vec<Operation>>,
     pub closed: bool,
+    pub authenticated: bool,
+    pub framed: Framed<TcpStream, RespCodec>,
+    pub name: String,
+    pub connection_time: u64,
+    pub last_interaction: u64,
+    pub flag: ClientFlag,
+    pub last_cmd: String,
+}
+
+impl Client {
+    pub fn new(id: u64, framed: Framed<TcpStream, RespCodec>, auth: bool) -> Self {
+        Self {
+            id,
+            db_number: 0,
+            transaction_queue: None,
+            closed: false,
+            authenticated: auth,
+            framed,
+            name: "".to_string(),
+            connection_time: now_ms(),
+            last_interaction: now_ms(),
+            flag: ClientFlag::new(),
+            last_cmd: "".to_string(),
+        }
+    }
+}
+pub struct ClientFlag {
+    pub in_sub: bool,
+    pub multi: bool,
+    pub blocking: bool,
+}
+
+impl ClientFlag {
+    pub fn new() -> Self {
+        Self {
+            in_sub: false,
+            multi: false,
+            blocking: false,
+        }
+    }
+}
+
+impl Display for ClientFlag {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        let mut flags = String::new();
+
+        if self.in_sub {
+            flags.push('P');
+        }
+        if self.multi {
+            flags.push('x');
+        }
+        if self.blocking {
+            flags.push('b');
+        }
+        // Redis 的规则：没有其它 flag 时显示 N
+        if flags.is_empty() {
+            flags.push('N');
+        }
+        write!(f, "{flags}")
+    }
 }
 
 /// Parsed command information
@@ -128,13 +207,14 @@ impl CommandFactory {
     /// Initialize the command factory with all supported commands
     pub fn init() -> Self {
         let mut factory = Self::new();
-
         // Register connection commands
         factory.register("PING", PingCommand);
         factory.register("ECHO", EchoCommand);
         factory.register("TIME", TimeCommand);
         factory.register("SELECT", SelectCommand);
         factory.register("QUIT", QuitCommand);
+        factory.register("AUTH", AuthCommand);
+        factory.register("CLIENT", ClientCommand::new());
         // Register data commands
         factory.register("GET", GetCommand);
         factory.register("SET", SetCommand);
@@ -189,7 +269,6 @@ impl CommandFactory {
         //Sentinel
         factory.register("SENTINEL", SentinelCommand::new());
 
-
         factory
     }
 
@@ -215,61 +294,32 @@ impl CommandFactory {
         }
     }
 
-    /// Execute a regular command and return its response (without sending)
-    async fn execute_regular_command(
-        &self,
-        cmd_name: &str,
-        client: &mut Client,
-        items: &[Value],
-        server: &RedisServer,
-    ) -> Result<Value, CacheCatError> {
-        match self.commands.get(cmd_name) {
-            Some(cmd) => cmd.execute(client, items, server).await,
-            None => Err(CacheCatError::from(ProtocolError::UnknownCommand(
-                cmd_name.to_string(),
-            ))),
-        }
-    }
-
     /// Handle a command in blocking context (checking if it's allowed)
-    async fn handle_command_in_blocking_context<RW>(
+    async fn handle_command_in_blocking_context(
         &self,
         parsed: ParsedCommand,
         client: &mut Client,
         server: &RedisServer,
-        transport: &mut RW,
         block_cmd: &dyn BlockCommand,
-    ) -> Result<(), CacheCatError>
-    where
-        RW: Stream<Item = Result<Value, std::io::Error>>
-            + Sink<Value, Error = std::io::Error>
-            + Unpin,
-    {
+    ) -> Result<(), CacheCatError> {
         let resp = block_cmd
             .execute_during_block(client, &parsed, server)
             .await?;
-        transport.send(resp).await?;
+        client.framed.send(resp).await?;
         Ok(())
     }
 
     /// Process the blocking command subscription stream
-    async fn process_blocking_stream<RW>(
+    async fn process_blocking_stream(
         &self,
         client: &mut Client,
         server: &RedisServer,
-        transport: &mut RW,
         block_cmd: &dyn BlockCommand,
         initial_resp: Value,
         mut stream: watch::Receiver<Option<Value>>,
-    ) -> Result<(), CacheCatError>
-    where
-        RW: Stream<Item = Result<Value, std::io::Error>>
-            + Sink<Value, Error = std::io::Error>
-            + Unpin,
-    {
+    ) -> Result<(), CacheCatError> {
         // Send initial response
-        transport.send(initial_resp).await?;
-
+        client.framed.send(initial_resp).await?;
         // Enter blocking mode: listen to both subscription stream and new commands
         loop {
             select! {
@@ -281,7 +331,7 @@ impl CommandFactory {
                             match val {
                                 None => return Ok(()), // Subscription ended
                                 Some(v) => {
-                                    transport.send(v).await?;
+                                    client.framed.send(v).await?;
                                 }
                             }
                         }
@@ -290,13 +340,13 @@ impl CommandFactory {
                 }
 
                 // Client sent a new command
-                maybe_cmd = transport.next() => {
+                maybe_cmd = client.framed.next() => {
                     match maybe_cmd {
                         Some(Ok(value)) => {
                             let parsed = match Self::parse_command(&value) {
                                 Ok(cmd) => cmd,
                                 Err(e) => {
-                                    transport.send(Value::from(e)).await?;
+                                    client.framed.send(Value::from(e)).await?;
                                     continue;
                                 }
                             };
@@ -305,7 +355,6 @@ impl CommandFactory {
                                 parsed,
                                 client,
                                 server,
-                                transport,
                                 block_cmd,
                             ).await?;
                             if client.closed{
@@ -323,20 +372,14 @@ impl CommandFactory {
         }
     }
 
-    pub async fn process_connection<RW>(
+    pub async fn process_connection(
         &self,
         server: &RedisServer,
-        transport: &mut RW,
         mut client: Client,
-    ) -> Result<(), CacheCatError>
-    where
-        RW: Stream<Item = Result<Value, std::io::Error>>
-            + Sink<Value, Error = std::io::Error>
-            + Unpin,
-    {
+    ) -> Result<(), CacheCatError> {
         loop {
             // Read a command from the transport
-            let value = match transport.next().await {
+            let value = match client.framed.next().await {
                 Some(Ok(v)) => v,
                 Some(Err(e)) => {
                     error!("Read error: {}", e);
@@ -344,11 +387,8 @@ impl CommandFactory {
                 }
                 None => return Ok(()), // Connection closed
             };
-
             // Parse and execute the command
-            self.execute_command(&mut client, server, transport, value)
-                .await?;
-
+            self.execute_command(&mut client, server, value).await?;
             if client.closed {
                 return Ok(());
             }
@@ -356,40 +396,41 @@ impl CommandFactory {
     }
 
     /// Execute a single command, including handling blocking command subscription streams
-    async fn execute_command<RW>(
+    async fn execute_command(
         &self,
         client: &mut Client,
         server: &RedisServer,
-        transport: &mut RW,
         value: Value,
-    ) -> Result<(), CacheCatError>
-    where
-        RW: Stream<Item = Result<Value, std::io::Error>>
-            + Sink<Value, Error = std::io::Error>
-            + Unpin,
-    {
+    ) -> Result<(), CacheCatError> {
+        client.last_interaction = now_ms();
         // Parse the command
         let parsed = match Self::parse_command(&value) {
             Ok(cmd) => cmd,
             Err(e) => {
-                transport.send(Value::from(e)).await?;
+                client.framed.send(Value::from(e)).await?;
                 return Ok(());
             }
         };
+        client.last_cmd = parsed.name.clone();
+        if !client.authenticated {
+            if parsed.name != "AUTH" && parsed.name != "QUIT" {
+                client
+                    .framed
+                    .send(Value::from(ProtocolError::NotAuthenticated))
+                    .await?;
+                return Ok(());
+            }
+        }
 
-        // Try regular command first
-        if self.commands.contains_key(&parsed.name) {
-            let resp = match self
-                .execute_regular_command(&parsed.name, client, &parsed.items, server)
-                .await
-            {
+        if let Some(cmd) = self.commands.get(&parsed.name) {
+            let resp = match cmd.execute(client, &parsed.items, server).await {
                 Ok(v) => v,
                 Err(e) => {
                     warn!("Command '{}' error: {}", parsed.name, e);
                     Value::from(e)
                 }
             };
-            transport.send(resp).await?;
+            client.framed.send(resp).await?;
             return Ok(());
         }
 
@@ -397,19 +438,16 @@ impl CommandFactory {
         if let Some(cmd) = self.block_commands.get(&parsed.name) {
             match cmd.execute(client, &parsed.items, server).await {
                 Ok((initial_resp, stream)) => {
-                    return self
-                        .process_blocking_stream(
-                            client,
-                            server,
-                            transport,
-                            cmd.as_ref(),
-                            initial_resp,
-                            stream,
-                        )
+                    client.flag.blocking = true;
+                    let result = self
+                        .process_blocking_stream(client, server, cmd.as_ref(), initial_resp, stream)
                         .await;
+                    client.flag.blocking = false;
+                    client.flag.in_sub = false;
+                    return result;
                 }
                 Err(e) => {
-                    transport.send(Value::from(e)).await?;
+                    client.framed.send(Value::from(e)).await?;
                     return Ok(());
                 }
             }
@@ -417,7 +455,7 @@ impl CommandFactory {
 
         // Unknown command
         let resp = Value::from(ProtocolError::UnknownCommand(parsed.name));
-        transport.send(resp).await?;
+        client.framed.send(resp).await?;
         Ok(())
     }
 }

@@ -73,6 +73,7 @@ impl BlockCommand for PsubscribeCommand {
         server: &RedisServer,
     ) -> Result<(Value, watch::Receiver<Option<Value>>), CacheCatError> {
         let params = PsubscribeParams::parse(items)?;
+        client.flag.in_sub = true;
         Ok(server
             .broadcast
             .psubscribe(params.patterns, client.id)

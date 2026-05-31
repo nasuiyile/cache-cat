@@ -1,7 +1,6 @@
 use crate::error::ProtocolError;
 use crate::protocol::bitmap::getbit::GetBitCommand;
 use crate::protocol::bitmap::setbit::SetBitCommand;
-use crate::protocol::server::time::TimeCommand;
 use crate::protocol::hash::hget::HGetCommand;
 use crate::protocol::hash::hincrby::HIncrByCommand;
 use crate::protocol::hash::hmget::HMGetCommand;
@@ -14,6 +13,7 @@ use crate::protocol::key::rename::RenameCommand;
 use crate::protocol::list::lpush::LPushCommand;
 use crate::protocol::list::lrange::LRangeCommand;
 use crate::protocol::lua::eval::EvalCommand;
+use crate::protocol::server::time::TimeCommand;
 use crate::protocol::set::sadd::SAddCommand;
 use crate::protocol::set::smembers::SMembersCommand;
 use crate::protocol::set::srem::SRemCommand;
@@ -109,7 +109,10 @@ impl RaftCommandFactory {
                     Err(e.into()) // Error → Value::Error
                 }
             },
-            None => Err(ProtocolError::UnknownCommand(cmd_name)),
+            None => {
+                warn!("Unknown command: {}", cmd_name);
+                Err(ProtocolError::UnknownCommand(cmd_name))
+            }
         }
     }
 }

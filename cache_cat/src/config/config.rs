@@ -20,6 +20,8 @@ pub struct Config {
 pub struct RedisConfig {
     pub redis_port: u32,
 
+    pub requirepass: Option<String>,
+
     /// 在没有请求到来时 多少秒进行一次key的清理 0表示不清理
     pub cleaning_interval: u64,
 

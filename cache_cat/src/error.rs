@@ -3,11 +3,11 @@
 //! This module provides a unified error type that hides internal complexity
 //! behind a simple, user-facing interface.
 
-use crate::error::ErrorKind::{Internal, InvalidConfig, Protocol, Retryable, Storage, RPC};
+use crate::error::ErrorKind::{Internal, InvalidConfig, Protocol, RPC, Retryable, Storage};
 use crate::raft::types::core::response_value::Value;
 use crate::raft::types::raft_types::TypeConfig;
 use mlua::prelude::LuaError;
-use openraft::error::{RPCError, Timeout, Unreachable, NetworkError, RemoteError};
+use openraft::error::{NetworkError, RPCError, RemoteError, Timeout, Unreachable};
 use std::error::Error as StdError;
 use std::fmt;
 use std::fmt::Display;
@@ -203,7 +203,9 @@ pub enum ProtocolError {
     #[error("WRONGTYPE Operation against a key holding the wrong kind of value")]
     WrongType,
 
-    #[error("READONLY This instance is not the master. Write operations are only allowed on the master node.")]
+    #[error(
+        "READONLY This instance is not the master. Write operations are only allowed on the master node."
+    )]
     ReadOnly,
 
     /// Value is not a valid integer
@@ -217,6 +219,9 @@ pub enum ProtocolError {
     /// Custom error with full Redis error message
     #[error("{0}")]
     Custom(&'static str),
+
+    #[error("ERR Client sent AUTH, but no password is set")]
+    NotAuthenticated,
 }
 
 /// RPC-related errors

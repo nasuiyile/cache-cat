@@ -211,7 +211,6 @@ async fn add_node(app: Arc<CacheCatApp>, req: JoinRequest) -> Result<(), String>
 }
 
 async fn set_nodes_state(app: Arc<CacheCatApp>, req: NodeState) -> Result<(), String> {
-    info!("set_nodes_state: {:?}", req);
     app.cluster.set_nodes_state(req).await;
     Ok(())
 }
