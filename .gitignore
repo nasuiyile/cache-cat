@@ -35,6 +35,7 @@ Thumbs.db
 
 # 编辑器/IDE 文件
 .vscode/
+.data/
 .idea/
 *.swp
 *.swo

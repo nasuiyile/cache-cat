@@ -1,11 +1,10 @@
-use cache_cat::config::config::load_config;
+use cache_cat::config::cli_arg::load_config_with_cli;
 use cache_cat::node::raft_builder::RaftNodeBuilder;
 use cache_cat::raft::types::entry::bae_operation::BaseOperation::Set;
 use cache_cat::raft::types::entry::bae_operation::SetReq;
 use cache_cat::raft::types::entry::request::{Operation, Request};
 use cache_cat::raft::types::raft_types::CacheCatApp;
 use mimalloc::MiMalloc;
-use std::env;
 use std::error::Error;
 use std::sync::Arc;
 use tokio::signal;
@@ -16,23 +15,12 @@ use tracing::{error, info};
 static GLOBAL: MiMalloc = MiMalloc;
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn Error>> {
+    let config = load_config_with_cli()?;
+
     //设置日志级别
     tracing_subscriber::fmt()
         .with_max_level(tracing::Level::INFO)
         .init();
-
-    // Parse command line arguments first to get config path
-    let args: Vec<String> = env::args().collect();
-    let config_path = if args.len() > 2 && args[1] == "--conf" {
-        args[2].clone()
-    } else {
-        eprintln!("Usage: {} --conf <config-file>", args[0]);
-        eprintln!("Example: {} --conf conf/node1.toml", args[0]);
-        std::process::exit(1);
-    };
-
-    // Load configuration first (without logging)
-    let config = load_config(&config_path)?;
 
     let (_raft_node, mut shutdown_rx) = RaftNodeBuilder::build(&config).await?;
     // if config.node_id == 1 {

@@ -1,4 +1,6 @@
+use super::default::default_node_id;
 use super::default::default_raft_config;
+use super::default::default_redis_config;
 use crate::error::{Error, Result};
 use serde::Deserialize;
 use serde::Serialize;
@@ -8,8 +10,10 @@ use std::result::Result as StdResult;
 
 #[derive(Debug, Deserialize, Serialize, Clone, Default)]
 pub struct Config {
-    pub node_id: u64,
+    #[serde(default = "default_node_id")]
+    pub node_id: u16,
 
+    #[serde(default = "default_redis_config")]
     pub redis: RedisConfig,
 
     #[serde(default = "default_raft_config")]

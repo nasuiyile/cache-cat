@@ -375,6 +375,7 @@ dependencies = [
  "async-trait",
  "bincode2",
  "bytes",
+ "clap",
  "console-subscriber",
  "crossbeam-channel",
  "crossbeam-utils",

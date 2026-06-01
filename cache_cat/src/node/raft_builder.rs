@@ -6,7 +6,6 @@ use crate::raft::application::cluster::NodeState;
 use crate::raft::types::entry::bae_operation::BaseOperation;
 use crate::raft::types::entry::request::{Operation, Request};
 use crate::utils::times::time_gap;
-use sha1::digest::typenum::op;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::broadcast::Receiver;
