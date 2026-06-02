@@ -33,6 +33,7 @@ impl MyValue {
 pub struct Database {
     // pub cache: Cache<Arc<Vec<u8>>, MyValue>,
     pub mocha: Mocha<Arc<Vec<u8>>, MyValue>,
+
 }
 impl Clone for Database {
     fn clone(&self) -> Self {
