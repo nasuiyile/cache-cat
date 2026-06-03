@@ -1,5 +1,6 @@
 use crate::protocol::key::del::DelParams;
 use crate::protocol::key::rename::RenameParams;
+use crate::protocol::list::blpop::BLPopParams;
 use crate::protocol::lua::eval::EvalParams;
 use crate::protocol::string::mset::MsetParams;
 use crate::protocol::string::set::SetParams;
@@ -9,7 +10,6 @@ use crate::raft::types::entry::read_operation::ReadOperation;
 use crate::utils::merge_u64;
 use serde::{Deserialize, Serialize};
 use std::fmt;
-use crate::protocol::list::blpop::BLPopParams;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum Operation {
@@ -60,7 +60,7 @@ pub enum RedisOperation {
     RedisRename(RenameParams),
     RedisEval(EvalParams),
     RedisExec(ExecParams),
-    RedisBLPop(BLPopParams)
+    RedisBLPop(BLPopParams),
 }
 
 impl fmt::Display for Request {
@@ -94,6 +94,7 @@ impl fmt::Display for Request {
                 BaseOperation::HDel(req) => write!(f, "HDel: {}", req),
                 BaseOperation::SRem(req) => write!(f, "SRem: {}", req),
                 BaseOperation::SetBit(req) => write!(f, "SetBit: {}", req),
+                BaseOperation::LPop(req) => write!(f, "LPop: {}", req),
             },
             Operation::Redis(op) => match op {
                 RedisOperation::RedisSet(req) => write!(f, "RedisSet: {}", req),
@@ -102,7 +103,7 @@ impl fmt::Display for Request {
                 RedisOperation::RedisRename(req) => write!(f, "RedisRename: {}", req),
                 RedisOperation::RedisEval(req) => write!(f, "RedisEval: {}", req),
                 RedisOperation::RedisExec(req) => write!(f, "RedisExec: {}", req),
-                RedisOperation::RedisBLPop(req) =>  write!(f, "RedisBLPop: {}", req),
+                RedisOperation::RedisBLPop(req) => write!(f, "RedisBLPop: {}", req),
             },
         }
     }

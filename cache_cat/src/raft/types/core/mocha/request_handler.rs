@@ -45,6 +45,7 @@ pub fn do_request(
             BaseOperation::HDel(param) => my_cache.h_del(param, update),
             BaseOperation::SRem(param) => my_cache.s_rem(param, update),
             BaseOperation::SetBit(param) => my_cache.set_bit(param, update),
+            BaseOperation::LPop(param) => my_cache.l_pop(param, update),
         },
         Operation::Redis(redis) => match redis {
             RedisOperation::RedisDel(param) => my_cache.redis_del(param, update, external),

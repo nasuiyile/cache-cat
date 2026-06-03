@@ -59,7 +59,6 @@ pub struct StateMachineStore {
 
 #[derive(Debug, Clone)]
 pub struct StateMachineData {
-    
     /// State built from applying the raft logs
     pub kvs: Arc<MyCache>,
     //增量日志队列
@@ -283,6 +282,9 @@ impl RaftStateMachine<TypeConfig> for StateMachineStore {
                 }
                 BaseOperation::SetBit(param) => {
                     self.data.kvs.set_bit(param, &mut update);
+                }
+                BaseOperation::LPop(param) => {
+                    self.data.kvs.l_pop(param, &mut update);
                 }
             }
         }

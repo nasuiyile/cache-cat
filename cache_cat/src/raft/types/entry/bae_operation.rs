@@ -22,6 +22,7 @@ pub enum BaseOperation {
     SetBit(SetBitReq),
     // list
     LPush(LPushReq),
+    LPop(LPopReq),
     //hash
     HSet(HSetReq),
     HIncr(HIncrReq),
@@ -31,6 +32,22 @@ pub enum BaseOperation {
     // set
     SAdd(SAddReq),
     SRem(SRemReq),
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct LPopReq {
+    pub key: Arc<Vec<u8>>,
+    pub count: u64,
+}
+impl Display for LPopReq {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(
+            f,
+            "LPopReq {{ key: {}, count: {} }}",
+            String::from_utf8_lossy(&self.key),
+            self.count
+        )
+    }
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
