@@ -1,6 +1,7 @@
-use crate::error::ProtocolError;
+use crate::error::{CacheCatError, ProtocolError};
 use crate::mocha::{EntrySnapshot, ExpirePolicy, MochaOperation};
 use crate::protocol::zset::zrange::ZRangeParams;
+use crate::protocol::zset::zrangegetscore::{ZRangeByScoreCommand, ZRangeByScoreParams};
 use crate::raft::types::core::mocha::cas::ComputeCommand;
 use crate::raft::types::core::mocha::mocha::{MyCache, MyValue, Update};
 use crate::raft::types::core::response_value::Value;
@@ -56,6 +57,34 @@ impl ComputeCommand for ZAddReq {
 }
 
 impl MyCache {
+    pub fn z_range_by_score(&self, params: ZRangeByScoreParams, db_number: u16) -> Value {
+        let cache = match self.get_cache(db_number) {
+            Err(err) => return err,
+            Ok(cache) => cache,
+        };
+        match cache.get(&params.key) {
+            None => Value::Array(Some(vec![])),
+            Some(v) => match v.data {
+                ZSet(list) => {
+                    let zset = list.lock();
+                    let res = zset.zrangebyscore(
+                        params.min,
+                        params.max,
+                        params.with_scores,
+                        params.limit,
+                    );
+
+                    let mut vec = Vec::with_capacity(res.len());
+                    for v in res {
+                        vec.push(Value::BulkString(Some(v)));
+                    }
+                    Value::Array(Some(vec))
+                }
+                _ => CacheCatError::from(ProtocolError::WrongType).into(),
+            },
+        }
+    }
+
     pub fn z_range(&self, params: ZRangeParams, db_number: u16) -> Value {
         let cache = match self.get_cache(db_number) {
             Err(err) => return err,

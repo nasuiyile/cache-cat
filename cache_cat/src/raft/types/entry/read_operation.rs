@@ -8,6 +8,7 @@ use crate::protocol::hash::hmget::HMGetParams;
 use crate::protocol::set::smembers::SMembersParams;
 use crate::protocol::string::get::GetParams;
 use serde::{Deserialize, Serialize};
+use crate::protocol::zset::zrangegetscore::ZRangeByScoreParams;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum ReadOperation {
@@ -20,4 +21,5 @@ pub enum ReadOperation {
     SMembers(SMembersParams),
     HMGet(HMGetParams),
     GetBit(GetBitParams),
+    ZRangeByScore(ZRangeByScoreParams),
 }

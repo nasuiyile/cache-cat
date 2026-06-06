@@ -10,6 +10,7 @@ use crate::protocol::key::exists::ExistsCommand;
 use crate::protocol::key::expire::ExpireCommand;
 use crate::protocol::key::persist::PersistCommand;
 use crate::protocol::key::rename::RenameCommand;
+use crate::protocol::list::lpop::LPopCommand;
 use crate::protocol::list::lpush::LPushCommand;
 use crate::protocol::list::lrange::LRangeCommand;
 use crate::protocol::lua::eval::EvalCommand;
@@ -23,9 +24,11 @@ use crate::protocol::string::incr::IncrCommand;
 use crate::protocol::string::incrby::IncrByCommand;
 use crate::protocol::string::mget::MgetCommand;
 use crate::protocol::string::mset::MsetCommand;
+use crate::protocol::string::psetex::PSetExCommand;
 use crate::protocol::string::set::SetCommand;
 use crate::protocol::zset::zadd::ZAddCommand;
 use crate::protocol::zset::zrange::ZRangeCommand;
+use crate::protocol::zset::zrangegetscore::ZRangeByScoreCommand;
 use crate::raft::types::core::response_value::Value;
 use crate::raft::types::entry::request::Operation;
 use std::collections::HashMap;
@@ -81,6 +84,7 @@ impl RaftCommandFactory {
         factory.register("HGET", HGetCommand);
         factory.register("ZADD", ZAddCommand);
         factory.register("ZRANGE", ZRangeCommand);
+        factory.register("ZRANGEBYSCORE", ZRangeByScoreCommand);
         factory.register("SADD", SAddCommand);
         factory.register("HINCRBY", HIncrByCommand);
         factory.register("EXISTS", ExistsCommand);
@@ -92,6 +96,8 @@ impl RaftCommandFactory {
         factory.register("SREM", SRemCommand);
         factory.register("SETBIT", SetBitCommand);
         factory.register("GETBIT", GetBitCommand);
+        factory.register("LPOP", LPopCommand);
+        factory.register("PSETEX", PSetExCommand);
         factory
     }
 

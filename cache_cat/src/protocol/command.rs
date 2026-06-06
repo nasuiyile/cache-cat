@@ -43,18 +43,21 @@ use crate::protocol::string::incr::IncrCommand;
 use crate::protocol::string::incrby::IncrByCommand;
 use crate::protocol::string::mget::MgetCommand;
 use crate::protocol::string::mset::MsetCommand;
+use crate::protocol::string::psetex::PSetExCommand;
 use crate::protocol::string::set::SetCommand;
 use crate::protocol::transaction::discard::DiscardCommand;
 use crate::protocol::transaction::exec::ExecCommand;
 use crate::protocol::transaction::multi::MultiCommand;
 use crate::protocol::zset::zadd::ZAddCommand;
 use crate::protocol::zset::zrange::ZRangeCommand;
+use crate::protocol::zset::zrangegetscore::ZRangeByScoreCommand;
 use crate::raft::network::redis_server::{RedisServer, RespCodec};
 use crate::raft::types::core::response_value::Value;
 use crate::raft::types::entry::request::Operation;
 use crate::utils::now_ms;
 use crate::utils::times::now_us;
 use async_trait::async_trait;
+use clap::builder::Str;
 use futures::StreamExt;
 use futures::{Sink, SinkExt, Stream};
 use std::collections::HashMap;
@@ -118,6 +121,8 @@ pub struct Client {
     pub last_interaction: u64,
     pub flag: ClientFlag,
     pub last_cmd: String,
+    pub lib_name: String,
+    pub lib_ver: String,
 }
 
 impl Client {
@@ -134,6 +139,8 @@ impl Client {
             last_interaction: now_ms(),
             flag: ClientFlag::new(),
             last_cmd: "".to_string(),
+            lib_name: "".to_string(),
+            lib_ver: "".to_string(),
         }
     }
 }
@@ -228,6 +235,7 @@ impl CommandFactory {
         factory.register("EXISTS", ExistsCommand);
         factory.register("PERSIST", PersistCommand);
         factory.register("RENAME", RenameCommand);
+        factory.register("PSETEX", PSetExCommand);
         // List commands
         factory.register("LPUSH", LPushCommand);
         factory.register("LRANGE", LRangeCommand);
@@ -244,6 +252,7 @@ impl CommandFactory {
         // ZSet commands
         factory.register("ZADD", ZAddCommand);
         factory.register("ZRANGE", ZRangeCommand);
+        factory.register("ZRANGEBYSCORE", ZRangeByScoreCommand);
         // Bitmap commands
         factory.register("SETBIT", SetBitCommand);
         factory.register("GETBIT", GetBitCommand);

@@ -105,6 +105,50 @@ impl SortedSet {
         }
         result
     }
+    pub fn zrangebyscore(
+        &self,
+        min: f64,
+        max: f64,
+        with_scores: bool,
+        limit: Option<(usize, usize)>,
+    ) -> Vec<Vec<u8>> {
+        if self.tree.is_empty() {
+            return vec![];
+        }
+
+        let min_score = OrderedFloat(min);
+        let max_score = OrderedFloat(max);
+
+        // 直接遍历整个 BTreeMap，在迭代中进行分数过滤
+        // 这样避免了边界值问题，且不需要 collect
+        let skip_count = limit.map(|(offset, _)| offset).unwrap_or(0);
+        let take_count = limit.map(|(_, count)| count).unwrap_or(usize::MAX);
+
+        let mut result = Vec::new();
+        let mut skipped = 0;
+        let mut taken = 0;
+
+        for ((score, member), _) in self.tree.range(
+            (min_score, Arc::new(vec![]))..=(max_score, Arc::new(vec![]))
+        ) {
+            if skipped < skip_count {
+                skipped += 1;
+                continue;
+            }
+
+            if taken >= take_count {
+                break;
+            }
+
+            result.push((**member).clone());
+            if with_scores {
+                result.push(score.0.to_string().into_bytes());
+            }
+            taken += 1;
+        }
+
+        result
+    }
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum HashValue {

@@ -5,6 +5,7 @@ use crate::raft::network::redis_server::RedisServer;
 use crate::raft::types::core::response_value::Value;
 use async_trait::async_trait;
 use std::collections::HashMap;
+use crate::protocol::connection::client::setinfo::SetInfoCommand;
 use crate::protocol::connection::client::setname::SetNameCommand;
 
 /// Sentinel command handler
@@ -17,6 +18,7 @@ impl ClientCommand {
         let mut sub_commands: HashMap<String, Box<dyn SubCommand>> = HashMap::new();
         sub_commands.insert("INFO".to_string(), Box::new(ClientInfoCommand));
         sub_commands.insert("SETNAME".to_string(), Box::new(SetNameCommand));
+        sub_commands.insert("SETINFO".to_string(), Box::new(SetInfoCommand));
         Self { sub_commands }
     }
 }

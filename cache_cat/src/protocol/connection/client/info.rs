@@ -70,11 +70,15 @@ impl SubCommand for ClientInfoCommand {
 
         map.insert("cmd".to_string(), client.last_cmd.to_string());
 
+        map.insert("lib_name".to_string(), client.lib_name.to_string());
+        map.insert("lib_ver".to_string(), client.lib_ver.to_string());
+
         let sub = server.broadcast.client_subscription_count(client.id).await;
         map.insert("sub".to_string(), sub.to_string());
 
         let psub = server.broadcast.client_pattern_count(client.id).await;
         map.insert("psub".to_string(), psub.to_string());
+
 
         let res = map_to_string(&map);
 
