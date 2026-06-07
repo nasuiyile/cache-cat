@@ -3,6 +3,7 @@ use crate::protocol::key::del::DelParams;
 use crate::protocol::key::exists::ExistsParams;
 use crate::protocol::key::expire::ExpireCondition;
 use crate::protocol::key::rename::RenameParams;
+use crate::protocol::key::renamenx::RenameNxParams;
 use crate::raft::types::core::mocha::cas::ComputeCommand;
 use crate::raft::types::core::mocha::mocha::{MyCache, MyValue, Update, UpdateType};
 use crate::raft::types::core::response_value::Value;
@@ -171,6 +172,47 @@ impl MyCache {
         };
         self.insert(insert, update);
         Value::ok()
+    }
+
+    pub fn redis_rename_nx(
+        &self,
+        params: RenameNxParams,
+        update: &mut Update<'_>,
+        external: bool,
+    ) -> Value {
+        if external {
+            let _exclusive_lock = self.read_lock.write();
+        }
+        let cached = match self.get_cache(update.db_number) {
+            Err(err) => return err,
+            Ok(cache) => cache,
+        };
+        // Check if new_key already exists - if so, return 0 without renaming
+        if cached.get_entry(&params.new_key).is_some() {
+            return Value::Integer(0);
+        }
+        // Check if source key exists
+        let my_value = match cached.get_entry(&params.key) {
+            None => return Value::Error("no such key".to_string()),
+            Some(value) => value,
+        };
+        // Delete the old key
+        let del = DelReq {
+            key: Arc::from(params.key),
+        };
+        self.del(del, update);
+
+        // Insert with the new key
+        let new_key: Arc<Vec<u8>> = Arc::from(params.new_key);
+        let insert = InsertReq {
+            key: new_key.clone(),
+            value: my_value.value.data,
+            expires_at: my_value.expire_at.unwrap_or(0),
+        };
+        self.insert(insert, update);
+
+        // Return 1 to indicate successful rename
+        Value::Integer(1)
     }
 
     pub fn redis_del(&self, params: DelParams, update: &mut Update<'_>, external: bool) -> Value {

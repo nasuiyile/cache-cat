@@ -53,6 +53,7 @@ pub fn do_request(
             RedisOperation::RedisSet(param) => my_cache.redis_set(param, update),
             RedisOperation::RedisMset(param) => my_cache.redis_mset(param, update, external),
             RedisOperation::RedisRename(param) => my_cache.redis_rename(param, update, external),
+            RedisOperation::RedisRenameNx(param) => my_cache.redis_rename_nx(param, update, external),
             RedisOperation::RedisEval(param) => {
                 if external {
                     let _exclusive_lock = my_cache.read_lock.write();

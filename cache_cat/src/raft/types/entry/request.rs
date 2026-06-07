@@ -10,6 +10,7 @@ use crate::raft::types::entry::read_operation::ReadOperation;
 use crate::utils::merge_u64;
 use serde::{Deserialize, Serialize};
 use std::fmt;
+use crate::protocol::key::renamenx::RenameNxParams;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum Operation {
@@ -58,6 +59,7 @@ pub enum RedisOperation {
     RedisMset(MsetParams),
     RedisDel(DelParams),
     RedisRename(RenameParams),
+    RedisRenameNx(RenameNxParams),
     RedisEval(EvalParams),
     RedisExec(ExecParams),
     RedisBLPop(BLPopParams),
@@ -105,6 +107,7 @@ impl fmt::Display for Request {
                 RedisOperation::RedisEval(req) => write!(f, "RedisEval: {}", req),
                 RedisOperation::RedisExec(req) => write!(f, "RedisExec: {}", req),
                 RedisOperation::RedisBLPop(req) => write!(f, "RedisBLPop: {}", req),
+                RedisOperation::RedisRenameNx(req) => write!(f, "RedisRenameNx: {}", req),
             },
         }
     }

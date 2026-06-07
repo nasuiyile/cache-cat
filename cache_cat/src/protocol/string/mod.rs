@@ -4,5 +4,7 @@ pub mod incr;
 pub mod incrby;
 pub mod mget;
 pub mod mset;
-pub mod set;
 pub mod psetex;
+pub mod set;
+pub mod setex;
+pub mod setnx;

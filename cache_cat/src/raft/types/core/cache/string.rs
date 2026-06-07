@@ -236,6 +236,24 @@ impl MyCache {
             },
             None => NO_EXPIRATION, // No expiration
         };
+        
+        if matches!(existing_key, ExistingKey::None) && (params.mode.is_some() || params.get) {
+            let cache = match self.get_cache(update.db_number) {
+                Err(err) => return err,
+                Ok(cache) => cache,
+            };
+            match cache.get_entry(&params.key) {
+                None => { /* remains None */ }
+                Some(value) => {
+                    existing_key = match value.value.data {
+                        ValueObject::Int(v) => ExistingKey::Data(Arc::from(v.to_string().into_bytes())),
+                        ValueObject::String(v) => ExistingKey::Data(v),
+                        _ => ExistingKey::OtherType,
+                    };
+                }
+            }
+        }
+
         let key_exists = matches!(existing_key, ExistingKey::Data(_) | ExistingKey::OtherType);
 
         // Apply NX/XX mode logic
