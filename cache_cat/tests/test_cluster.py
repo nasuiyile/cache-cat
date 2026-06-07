@@ -85,6 +85,9 @@ r.psetex(
     time_ms=50,
     value="Bella"
 )
-# sleep(0.01)
-print(r.get("123123"))
 
+r.set("my_key","1111")
+# SETNX: 只有在key不存在时才设置
+result = r.setnx("my_key", 'my_value')
+
+print(r.get("my_key"))

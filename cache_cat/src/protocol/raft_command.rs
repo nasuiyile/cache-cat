@@ -26,6 +26,7 @@ use crate::protocol::string::mget::MgetCommand;
 use crate::protocol::string::mset::MsetCommand;
 use crate::protocol::string::psetex::PSetExCommand;
 use crate::protocol::string::set::SetCommand;
+use crate::protocol::string::setex::SetExCommand;
 use crate::protocol::zset::zadd::ZAddCommand;
 use crate::protocol::zset::zrange::ZRangeCommand;
 use crate::protocol::zset::zrangegetscore::ZRangeByScoreCommand;
@@ -34,6 +35,7 @@ use crate::raft::types::entry::request::Operation;
 use std::collections::HashMap;
 use std::fmt;
 use tracing::warn;
+use crate::protocol::string::setnx::SetNxCommand;
 
 pub trait RaftCommand: Send + Sync {
     fn raft_request(&self, items: &[Value]) -> Result<Operation, ProtocolError>;
@@ -98,6 +100,8 @@ impl RaftCommandFactory {
         factory.register("GETBIT", GetBitCommand);
         factory.register("LPOP", LPopCommand);
         factory.register("PSETEX", PSetExCommand);
+        factory.register("SETEX", SetExCommand);
+        factory.register("SETNX", SetNxCommand);
         factory
     }
 

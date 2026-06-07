@@ -45,6 +45,8 @@ use crate::protocol::string::mget::MgetCommand;
 use crate::protocol::string::mset::MsetCommand;
 use crate::protocol::string::psetex::PSetExCommand;
 use crate::protocol::string::set::SetCommand;
+use crate::protocol::string::setex::SetExCommand;
+use crate::protocol::string::setnx::SetNxCommand;
 use crate::protocol::transaction::discard::DiscardCommand;
 use crate::protocol::transaction::exec::ExecCommand;
 use crate::protocol::transaction::multi::MultiCommand;
@@ -236,6 +238,8 @@ impl CommandFactory {
         factory.register("PERSIST", PersistCommand);
         factory.register("RENAME", RenameCommand);
         factory.register("PSETEX", PSetExCommand);
+        factory.register("SETEX", SetExCommand);
+        factory.register("SETNX", SetNxCommand);
         // List commands
         factory.register("LPUSH", LPushCommand);
         factory.register("LRANGE", LRangeCommand);
