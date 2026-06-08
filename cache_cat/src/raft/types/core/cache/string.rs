@@ -14,7 +14,7 @@ use crate::raft::types::entry::bae_operation::{
 };
 use crate::utils::parse_i64;
 use std::sync::Arc;
-
+use crate::protocol::string::len::StrLenParams;
 
 impl ComputeCommand for SetReq {
     fn key(&self) -> Arc<Vec<u8>> {
@@ -347,6 +347,23 @@ impl MyCache {
                 _ => ProtocolError::WrongType.into(),
             },
         }
+    }
+
+
+    pub fn str_len(&self, param: StrLenParams, db_number: u16) -> Value {
+        let cache = match self.get_cache(db_number) {
+            Err(err) => return err,
+            Ok(cache) => cache,
+        };
+        let len = match cache.get(&param.key) {
+            None => 0,
+            Some(v) => match v.data {
+                ValueObject::String(ref bytes) => bytes.len(),
+                ValueObject::Int(ref i) => i.to_string().len(),
+                _ => return (ProtocolError::WrongType.into()),
+            },
+        };
+        (Value::Integer(len as i64))
     }
 
 

@@ -71,6 +71,7 @@ use tokio::select;
 use tokio::sync::watch;
 use tokio_util::codec::Framed;
 use tracing::{error, warn};
+use crate::protocol::string::len::StrLenCommand;
 
 #[async_trait]
 pub trait Command: Send + Sync {
@@ -242,6 +243,7 @@ impl CommandFactory {
         factory.register("PSETEX", PSetExCommand);
         factory.register("SETEX", SetExCommand);
         factory.register("SETNX", SetNxCommand);
+        factory.register("STRLEN", StrLenCommand);
         // List commands
         factory.register("LPUSH", LPushCommand);
         factory.register("LRANGE", LRangeCommand);

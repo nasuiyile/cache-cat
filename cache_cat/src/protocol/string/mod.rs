@@ -8,3 +8,4 @@ pub mod psetex;
 pub mod set;
 pub mod setex;
 pub mod setnx;
+pub mod len;

@@ -37,6 +37,7 @@ use crate::raft::types::entry::request::Operation;
 use std::collections::HashMap;
 use std::fmt;
 use tracing::warn;
+use crate::protocol::string::len::StrLenCommand;
 
 pub trait RaftCommand: Send + Sync {
     fn raft_request(&self, items: &[Value]) -> Result<Operation, ProtocolError>;
@@ -104,6 +105,7 @@ impl RaftCommandFactory {
         factory.register("PSETEX", PSetExCommand);
         factory.register("SETEX", SetExCommand);
         factory.register("SETNX", SetNxCommand);
+        factory.register("STRLEN", StrLenCommand);
         factory
     }
 
