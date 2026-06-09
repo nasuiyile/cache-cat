@@ -22,7 +22,11 @@ pub fn do_request(
             ReadOperation::SMembers(param) => my_cache.s_member(param, update.db_number),
             ReadOperation::HMGet(param) => my_cache.h_m_get(param, update.db_number),
             ReadOperation::GetBit(param) => my_cache.get_bit(param, update.db_number),
-            ReadOperation::ZRangeByScore(param) => my_cache.z_range_by_score(param, update.db_number),
+            ReadOperation::ZRangeByScore(param) => {
+                my_cache.z_range_by_score(param, update.db_number)
+            }
+            ReadOperation::StrLen(param) => my_cache.str_len(param, update.db_number),
+            ReadOperation::HGetAll(param) => my_cache.h_get_all(param, update.db_number),
         },
         Operation::Base(base) => match base {
             BaseOperation::Empty => {
@@ -53,7 +57,9 @@ pub fn do_request(
             RedisOperation::RedisSet(param) => my_cache.redis_set(param, update),
             RedisOperation::RedisMset(param) => my_cache.redis_mset(param, update, external),
             RedisOperation::RedisRename(param) => my_cache.redis_rename(param, update, external),
-            RedisOperation::RedisRenameNx(param) => my_cache.redis_rename_nx(param, update, external),
+            RedisOperation::RedisRenameNx(param) => {
+                my_cache.redis_rename_nx(param, update, external)
+            }
             RedisOperation::RedisEval(param) => {
                 if external {
                     let _exclusive_lock = my_cache.read_lock.write();

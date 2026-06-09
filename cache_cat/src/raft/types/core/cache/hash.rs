@@ -1,4 +1,4 @@
-use crate::error::ProtocolError;
+use crate::error::{CacheCatError, ProtocolError};
 use crate::mocha::{EntrySnapshot, ExpirePolicy, MochaOperation};
 use crate::protocol::hash::hget::HGetParams;
 use crate::protocol::hash::hmget::HMGetParams;
@@ -11,6 +11,7 @@ use crate::utils::parse_i64;
 use parking_lot::Mutex;
 use std::collections::HashMap;
 use std::sync::Arc;
+use crate::protocol::hash::hgetall::HGetAllParams;
 
 impl ComputeCommand for HSetReq {
     fn key(&self) -> Arc<Vec<u8>> {
@@ -220,6 +221,37 @@ impl MyCache {
             },
         }
     }
+
+    pub fn h_get_all(&self, param: HGetAllParams, db_number: u16) -> Value {
+        let cache = match self.get_cache(db_number) {
+            Err(err) => return err,
+            Ok(cache) => cache,
+        };
+        match cache.get(&param.key) {
+            None => (Value::Array(Some(vec![]))),
+            Some(v) => match v.data {
+                ValueObject::Hash(map) => {
+                    let guard = map.lock();
+                    let mut result = Vec::with_capacity(guard.len() * 2);
+                    for (field, value) in guard.iter() {
+                        // field
+                        result.push(Value::BulkString(Some(field.as_ref().clone())));
+                        // value
+                        let value_bytes = match value {
+                            HashValue::Str(str) => str.as_ref().clone(),
+                            HashValue::Int(int) => int.to_string().into_bytes(),
+                        };
+
+                        result.push(Value::BulkString(Some(value_bytes)));
+                    }
+
+                    (Value::Array(Some(result)))
+                }
+                _ => CacheCatError::from(ProtocolError::WrongType).into(),
+            },
+        }
+    }
+
     pub fn h_get(&self, param: HGetParams, db_number: u16) -> Value {
         let cache = match self.get_cache(db_number) {
             Err(err) => return err,
