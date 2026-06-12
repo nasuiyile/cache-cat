@@ -1,15 +1,15 @@
 use crate::error::{CacheCatError, ProtocolError};
 use crate::protocol::command::{Client, Command};
+use crate::protocol::raft_command::{RaftCommand, ReadRaftCommand};
 use crate::raft::network::redis_server::RedisServer;
 use crate::raft::types::core::response_value::Value;
 use crate::raft::types::core::value_object::ValueObject;
+use crate::raft::types::entry::read_operation::ReadOperation;
+use crate::raft::types::entry::request::Operation;
 use crate::utils::lrange;
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use std::fmt::Display;
-use crate::protocol::raft_command::RaftCommand;
-use crate::raft::types::entry::read_operation::ReadOperation;
-use crate::raft::types::entry::request::Operation;
 
 pub struct LRangeCommand;
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -60,13 +60,11 @@ fn parse_i64(value: &Value) -> Result<i64, ProtocolError> {
     }
 }
 
-impl RaftCommand for LRangeCommand {
-    fn raft_request(&self, items: &[Value]) -> Result<Operation, ProtocolError> {
-        let params = Self::parse_args(items)?;
-        Ok(Operation::Read(ReadOperation::LRange(params)))
+impl ReadRaftCommand for LRangeCommand {
+    fn read_operation(&self, items: &[Value]) -> Result<ReadOperation, ProtocolError> {
+        Ok(ReadOperation::LRange(Self::parse_args(items)?))
     }
 }
-
 
 #[async_trait]
 impl Command for LRangeCommand {
@@ -80,22 +78,7 @@ impl Command for LRangeCommand {
             vec.push(self.raft_request(items)?);
             return Ok(Value::SimpleString(String::from("QUEUED")));
         }
-        let params = Self::parse_args(items)?;
-        let my_value = server.app.read(params.key, client.db_number).await?;
-        match my_value {
-            None => Ok(Value::BulkString(None)),
-            Some(v) => match v.data {
-                ValueObject::List(list) => {
-                    let vec = lrange(&list.lock(), params.start, params.stop);
-                    let mut array = Vec::new();
-                    for x in vec {
-                        let value = Value::BulkString(Some(x.as_ref().clone()));
-                        array.push(value);
-                    }
-                    Ok(Value::Array(Some(array)))
-                }
-                _ => Err(ProtocolError::WrongType.into()),
-            },
-        }
+        let params = self.read_operation(items)?;
+        server.app.read(params, client.db_number).await
     }
 }

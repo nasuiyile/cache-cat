@@ -5,12 +5,10 @@
 
 use crate::error::{CacheCatError, ProtocolError};
 use crate::protocol::command::{Client, Command};
-use crate::protocol::raft_command::RaftCommand;
+use crate::protocol::raft_command::{RaftCommand, ReadRaftCommand};
 use crate::raft::network::redis_server::RedisServer;
 use crate::raft::types::core::response_value::Value;
-use crate::raft::types::core::value_object::{HashValue, ValueObject};
 use crate::raft::types::entry::read_operation::ReadOperation;
-use crate::raft::types::entry::request::Operation;
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use std::fmt::{Display, Formatter};
@@ -61,13 +59,11 @@ impl HGetCommand {
 
         Ok(HGetParams { key, field })
     }
-
-
 }
-impl RaftCommand for HGetCommand {
-    fn raft_request(&self, items: &[Value]) -> Result<Operation, ProtocolError> {
-        let params = Self::parse_args(items)?;
-        Ok(Operation::Read(ReadOperation::HGet(params)))
+
+impl ReadRaftCommand for HGetCommand {
+    fn read_operation(&self, items: &[Value]) -> Result<ReadOperation, ProtocolError> {
+        Ok(ReadOperation::HGet(Self::parse_args(items)?))
     }
 }
 
@@ -84,28 +80,9 @@ impl Command for HGetCommand {
             return Ok(Value::SimpleString(String::from("QUEUED")));
         }
         // Parse arguments
-        let params = Self::parse_args(items)?;
-        let value = server.app.read(params.key, client.db_number).await?;
-        match value {
-            None => Ok(Value::BulkString(None)),
-            Some(v) => match v.data {
-                ValueObject::Hash(map) => {
-                    let guard = map.lock();
-                    let option = guard.get(&params.field);
-                    match option {
-                        None => Ok(Value::BulkString(None)),
-                        Some(value) => match value {
-                            HashValue::Str(str) => {
-                                Ok(Value::BulkString(Some(str.as_ref().clone())))
-                            }
-                            HashValue::Int(int) => {
-                                Ok(Value::BulkString(Some(int.to_string().as_bytes().to_vec())))
-                            }
-                        },
-                    }
-                }
-                _ => Err(CacheCatError::from(ProtocolError::WrongType)),
-            },
-        }
+        server
+            .app
+            .read(self.read_operation(items)?, client.db_number)
+            .await
     }
 }

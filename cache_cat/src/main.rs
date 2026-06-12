@@ -1,4 +1,5 @@
 use cache_cat::config::cli_arg::load_config_with_cli;
+use cache_cat::config::config::Config;
 use cache_cat::node::raft_builder::RaftNodeBuilder;
 use cache_cat::raft::types::entry::bae_operation::BaseOperation::Set;
 use cache_cat::raft::types::entry::bae_operation::SetReq;
@@ -23,6 +24,8 @@ async fn main() -> Result<(), Box<dyn Error>> {
         .init();
 
     let (_raft_node, mut shutdown_rx) = RaftNodeBuilder::build(&config).await?;
+    config.redis.redis_port;
+    print_msg(&config);
     // if config.node_id == 1 {
     //     let app_clone = raft_node.app.clone();
     //     tokio::spawn(async move {
@@ -98,4 +101,28 @@ async fn benchmark_requests(apps: Arc<CacheCatApp>) {
         elapsed.as_millis() as f64 / total_requests as f64
     );
     println!("=========================================");
+}
+
+fn print_msg(config: &Config) {
+    println!(
+        " ______     ______     ______     __  __     ______     ______     ______     ______  "
+    );
+    println!(
+        "/\\  ___\\   /\\  __ \\   /\\  ___\\   /\\ \\_\\ \\   /\\  ___\\   /\\  ___\\   /\\  __ \\   /\\__  _\\ "
+    );
+    println!(
+        "\\ \\ \\____  \\ \\  __ \\  \\ \\ \\____  \\ \\  __ \\  \\ \\  __\\   \\ \\ \\____  \\ \\  __ \\  \\/_/\\ \\/ "
+    );
+    println!(
+        " \\ \\_____\\  \\ \\_\\ \\_\\  \\ \\_____\\  \\ \\_\\ \\_\\  \\ \\_____\\  \\ \\_____\\  \\ \\_\\ \\_\\    \\ \\_\\ "
+    );
+    println!(
+        "  \\/_____/   \\/_/\\/_/   \\/_____/   \\/_/\\/_/   \\/_____/   \\/_____/   \\/_/\\/_/     \\/_/ "
+    );
+    println!(
+        "                                                                                      "
+    );
+    println!("Raft Address: {}", config.raft.address);
+    println!("Redis Port: {}", config.redis.redis_port);
+
 }

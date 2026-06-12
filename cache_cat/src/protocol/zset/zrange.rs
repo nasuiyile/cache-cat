@@ -14,12 +14,10 @@
 
 use crate::error::{CacheCatError, ProtocolError};
 use crate::protocol::command::{Client, Command};
-use crate::protocol::raft_command::RaftCommand;
+use crate::protocol::raft_command::ReadRaftCommand;
 use crate::raft::network::redis_server::RedisServer;
 use crate::raft::types::core::response_value::Value;
-use crate::raft::types::core::value_object::ValueObject;
 use crate::raft::types::entry::read_operation::ReadOperation;
-use crate::raft::types::entry::request::Operation;
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use std::fmt::Display;
@@ -106,10 +104,9 @@ impl ZRangeCommand {
         })
     }
 }
-impl RaftCommand for ZRangeCommand {
-    fn raft_request(&self, items: &[Value]) -> Result<Operation, ProtocolError> {
-        let params = Self::parse_args(items)?;
-        Ok(Operation::Read(ReadOperation::ZRange(params)))
+impl ReadRaftCommand for ZRangeCommand {
+    fn read_operation(&self, items: &[Value]) -> Result<ReadOperation, ProtocolError> {
+        Ok(ReadOperation::ZRange(Self::parse_args(items)?))
     }
 }
 
@@ -121,23 +118,7 @@ impl Command for ZRangeCommand {
         items: &[Value],
         server: &RedisServer,
     ) -> Result<Value, CacheCatError> {
-        let params = Self::parse_args(items)?;
-        let my_value = server.app.read(params.key, client.db_number).await?;
-        match my_value {
-            None => Ok(Value::BulkString(None)),
-            Some(v) => match v.data {
-                ValueObject::ZSet(list) => {
-                    let res = list
-                        .lock()
-                        .zrange(params.start, params.stop, params.with_scores);
-                    let mut vec = Vec::new();
-                    for v in res {
-                        vec.push(Value::BulkString(Some(v)))
-                    }
-                    Ok(Value::Array(Some(vec)))
-                }
-                _ => Err(CacheCatError::from(ProtocolError::WrongType)),
-            },
-        }
+        let params = self.read_operation(items)?;
+        server.app.read(params, client.db_number).await
     }
 }

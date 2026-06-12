@@ -1,39 +1,41 @@
-//! HGETALL command implementation
+//! HKEYS command implementation
 //!
-//! HGETALL key
-//! Returns all fields and values of the hash stored at key.
+//! HKEYS key
+//! Returns all field names in the hash stored at key.
 
 use crate::error::{CacheCatError, ProtocolError};
 use crate::protocol::command::{Client, Command};
-use crate::protocol::raft_command::{RaftCommand, ReadRaftCommand};
+use crate::protocol::raft_command::RaftCommand;
 use crate::raft::network::redis_server::RedisServer;
 use crate::raft::types::core::response_value::Value;
 use crate::raft::types::entry::read_operation::ReadOperation;
+use crate::raft::types::entry::request::Operation;
+
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use std::fmt::{Display, Formatter};
 
-/// Parsed HGETALL arguments
+/// Parsed HKEYS arguments
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct HGetAllParams {
+pub struct HKeysParams {
     pub key: Vec<u8>,
 }
 
-impl Display for HGetAllParams {
+impl Display for HKeysParams {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        write!(f, "HGETALL {}", String::from_utf8_lossy(&self.key))
+        write!(f, "HKEYS {}", String::from_utf8_lossy(&self.key))
     }
 }
 
-/// HGETALL command handler
-pub struct HGetAllCommand;
+/// HKEYS command handler
+pub struct HKeysCommand;
 
-impl HGetAllCommand {
+impl HKeysCommand {
     /// Parse arguments from RESP items
-    /// Format: HGETALL key
-    fn parse_args(items: &[Value]) -> Result<HGetAllParams, ProtocolError> {
+    /// Format: HKEYS key
+    fn parse_args(items: &[Value]) -> Result<HKeysParams, ProtocolError> {
         if items.len() < 2 {
-            return Err(ProtocolError::WrongArgCount("hgetall"));
+            return Err(ProtocolError::WrongArgCount("hkeys"));
         }
 
         let key = match &items[1] {
@@ -42,18 +44,19 @@ impl HGetAllCommand {
             _ => return Err(ProtocolError::InvalidArgument("key")),
         };
 
-        Ok(HGetAllParams { key })
+        Ok(HKeysParams { key })
     }
 }
 
-impl ReadRaftCommand for HGetAllCommand {
-    fn read_operation(&self, items: &[Value]) -> Result<ReadOperation, ProtocolError> {
-        Ok(ReadOperation::HGetAll(Self::parse_args(items)?))
+impl RaftCommand for HKeysCommand {
+    fn raft_request(&self, items: &[Value]) -> Result<Operation, ProtocolError> {
+        let params = Self::parse_args(items)?;
+        Ok(Operation::Read(ReadOperation::HKeys(params)))
     }
 }
 
 #[async_trait]
-impl Command for HGetAllCommand {
+impl Command for HKeysCommand {
     async fn execute(
         &self,
         client: &mut Client,
@@ -64,7 +67,7 @@ impl Command for HGetAllCommand {
             vec.push(self.raft_request(items)?);
             return Ok(Value::SimpleString(String::from("QUEUED")));
         }
-        let params = self.read_operation(items)?;
+        let params = ReadOperation::HKeys(Self::parse_args(items)?);
         server.app.read(params, client.db_number).await
     }
 }

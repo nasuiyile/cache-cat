@@ -1,54 +1,61 @@
+//! HVALS command implementation
+//!
+//! HVALS key
+//! Returns all values in the hash stored at key.
+
 use crate::error::{CacheCatError, ProtocolError};
 use crate::protocol::command::{Client, Command};
 use crate::protocol::raft_command::{RaftCommand, ReadRaftCommand};
 use crate::raft::network::redis_server::RedisServer;
 use crate::raft::types::core::response_value::Value;
-use crate::raft::types::core::value_object::ValueObject;
+use crate::raft::types::core::value_object::{HashValue, ValueObject};
 use crate::raft::types::entry::read_operation::ReadOperation;
 use crate::raft::types::entry::request::Operation;
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
-use std::fmt::Display;
+use std::fmt::{Display, Formatter};
 
-/// Parameters for GET command
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct GetParams {
+/// Parsed HVALS arguments
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct HValsParams {
     pub key: Vec<u8>,
 }
-impl Display for GetParams {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "GET {}", String::from_utf8_lossy(&self.key))
+
+impl Display for HValsParams {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(f, "HVALS {}", String::from_utf8_lossy(&self.key))
     }
 }
 
-impl GetParams {
-    /// Parse GET command parameters from RESP array items
-    fn parse(items: &[Value]) -> Result<Self, ProtocolError> {
-        if items.len() != 2 {
-            return Err(ProtocolError::WrongArgCount("GET"));
+/// HVALS command handler
+pub struct HValsCommand;
+
+impl HValsCommand {
+    /// Parse arguments from RESP items
+    /// Format: HVALS key
+    fn parse_args(items: &[Value]) -> Result<HValsParams, ProtocolError> {
+        if items.len() < 2 {
+            return Err(ProtocolError::WrongArgCount("hvals"));
         }
 
-        let key: Vec<u8> = match &items[1] {
+        let key = match &items[1] {
             Value::BulkString(Some(data)) => data.clone(),
             Value::SimpleString(s) => s.as_bytes().to_vec(),
             _ => return Err(ProtocolError::InvalidArgument("key")),
         };
 
-        Ok(GetParams { key })
+        Ok(HValsParams { key })
     }
 }
 
-/// GET command executor
-pub struct GetCommand;
-
-impl ReadRaftCommand for GetCommand {
+impl ReadRaftCommand for HValsCommand {
     fn read_operation(&self, items: &[Value]) -> Result<ReadOperation, ProtocolError> {
-        Ok((ReadOperation::Get(GetParams::parse(items)?)))
+        Ok(ReadOperation::HVals(Self::parse_args(items)?))
     }
 }
 
 #[async_trait]
-impl Command for GetCommand {
+impl Command for HValsCommand {
     async fn execute(
         &self,
         client: &mut Client,
@@ -59,7 +66,6 @@ impl Command for GetCommand {
             vec.push(self.raft_request(items)?);
             return Ok(Value::SimpleString(String::from("QUEUED")));
         }
-
         let params = self.read_operation(items)?;
         server.app.read(params, client.db_number).await
     }

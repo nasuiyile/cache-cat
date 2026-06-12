@@ -2,20 +2,23 @@ use crate::error::ProtocolError;
 use crate::protocol::bitmap::getbit::GetBitCommand;
 use crate::protocol::bitmap::setbit::SetBitCommand;
 use crate::protocol::hash::hget::HGetCommand;
+use crate::protocol::hash::hgetall::HGetAllCommand;
 use crate::protocol::hash::hincrby::HIncrByCommand;
+use crate::protocol::hash::hkeys::HKeysCommand;
 use crate::protocol::hash::hmget::HMGetCommand;
 use crate::protocol::hash::hset::HSetCommand;
+use crate::protocol::hash::hvals::HValsCommand;
 use crate::protocol::key::del::DelCommand;
 use crate::protocol::key::exists::ExistsCommand;
 use crate::protocol::key::expire::ExpireCommand;
 use crate::protocol::key::persist::PersistCommand;
 use crate::protocol::key::rename::RenameCommand;
 use crate::protocol::key::renamenx::RenameNxCommand;
+use crate::protocol::list::llen::LLenCommand;
 use crate::protocol::list::lpop::LPopCommand;
 use crate::protocol::list::lpush::LPushCommand;
 use crate::protocol::list::lrange::LRangeCommand;
 use crate::protocol::lua::eval::EvalCommand;
-use crate::protocol::server::time::TimeCommand;
 use crate::protocol::set::sadd::SAddCommand;
 use crate::protocol::set::smembers::SMembersCommand;
 use crate::protocol::set::srem::SRemCommand;
@@ -23,6 +26,7 @@ use crate::protocol::string::append::AppendCommand;
 use crate::protocol::string::get::GetCommand;
 use crate::protocol::string::incr::IncrCommand;
 use crate::protocol::string::incrby::IncrByCommand;
+use crate::protocol::string::len::StrLenCommand;
 use crate::protocol::string::mget::MgetCommand;
 use crate::protocol::string::mset::MsetCommand;
 use crate::protocol::string::psetex::PSetExCommand;
@@ -33,15 +37,25 @@ use crate::protocol::zset::zadd::ZAddCommand;
 use crate::protocol::zset::zrange::ZRangeCommand;
 use crate::protocol::zset::zrangegetscore::ZRangeByScoreCommand;
 use crate::raft::types::core::response_value::Value;
+use crate::raft::types::entry::read_operation::ReadOperation;
 use crate::raft::types::entry::request::Operation;
 use std::collections::HashMap;
 use std::fmt;
 use tracing::warn;
-use crate::protocol::hash::hgetall::HGetAllCommand;
-use crate::protocol::string::len::StrLenCommand;
 
 pub trait RaftCommand: Send + Sync {
     fn raft_request(&self, items: &[Value]) -> Result<Operation, ProtocolError>;
+}
+
+pub trait ReadRaftCommand: RaftCommand {
+    fn read_operation(&self, items: &[Value]) -> Result<ReadOperation, ProtocolError>;
+}
+
+impl<T: ReadRaftCommand> RaftCommand for T {
+    fn raft_request(&self, items: &[Value]) -> Result<Operation, ProtocolError> {
+        let operation = self.read_operation(items)?;
+        Ok(Operation::Read(operation))
+    }
 }
 
 /// Command factory for creating and executing commands
@@ -88,6 +102,7 @@ impl RaftCommandFactory {
         factory.register("HSET", HSetCommand);
         factory.register("HGET", HGetCommand);
         factory.register("HGETALL", HGetAllCommand);
+        factory.register("HKEYS", HKeysCommand);
         factory.register("ZADD", ZAddCommand);
         factory.register("ZRANGE", ZRangeCommand);
         factory.register("ZRANGEBYSCORE", ZRangeByScoreCommand);
@@ -108,6 +123,8 @@ impl RaftCommandFactory {
         factory.register("SETEX", SetExCommand);
         factory.register("SETNX", SetNxCommand);
         factory.register("STRLEN", StrLenCommand);
+        factory.register("HVALS", HValsCommand);
+        factory.register("LLEN", LLenCommand);
         factory
     }
 

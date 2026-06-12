@@ -10,6 +10,7 @@ use crate::raft::types::entry::bae_operation::{BaseOperation, LPopReq, LPushReq}
 use parking_lot::lock_api::Mutex;
 use std::collections::VecDeque;
 use std::sync::Arc;
+use crate::protocol::list::llen::LLenParams;
 
 impl ComputeCommand for LPushReq {
     fn key(&self) -> Arc<Vec<u8>> {
@@ -128,6 +129,22 @@ impl MyCache {
                         array.push(value);
                     }
                     Value::Array(Some(array))
+                }
+                _ => ProtocolError::WrongType.into(),
+            },
+        }
+    }
+    pub fn l_len(&self, params: LLenParams, db_number: u16) -> Value {
+        let cache = match self.get_cache(db_number) {
+            Err(err) => return err,
+            Ok(cache) => cache,
+        };
+
+        match cache.get(&params.key) {
+            None => Value::Integer(0),
+            Some(v) => match v.data {
+                ValueObject::List(list) => {
+                    Value::Integer(list.lock().len() as i64)
                 }
                 _ => ProtocolError::WrongType.into(),
             },

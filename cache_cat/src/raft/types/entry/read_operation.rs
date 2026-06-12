@@ -1,16 +1,19 @@
-use crate::protocol::key::exists::ExistsParams;
-use crate::protocol::list::lrange::LRangeParams;
-use crate::protocol::string::mget::MgetParams;
-use crate::protocol::zset::zrange::ZRangeParams;
 use crate::protocol::bitmap::getbit::GetBitParams;
 use crate::protocol::hash::hget::HGetParams;
+use crate::protocol::hash::hgetall::HGetAllParams;
+use crate::protocol::hash::hkeys::HKeysParams;
 use crate::protocol::hash::hmget::HMGetParams;
+use crate::protocol::hash::hvals::HValsParams;
+use crate::protocol::key::exists::ExistsParams;
+use crate::protocol::list::llen::LLenParams;
+use crate::protocol::list::lrange::LRangeParams;
 use crate::protocol::set::smembers::SMembersParams;
 use crate::protocol::string::get::GetParams;
-use serde::{Deserialize, Serialize};
-use crate::protocol::hash::hgetall::HGetAllParams;
 use crate::protocol::string::len::StrLenParams;
+use crate::protocol::string::mget::MgetParams;
+use crate::protocol::zset::zrange::ZRangeParams;
 use crate::protocol::zset::zrangegetscore::ZRangeByScoreParams;
+use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum ReadOperation {
@@ -25,5 +28,8 @@ pub enum ReadOperation {
     GetBit(GetBitParams),
     ZRangeByScore(ZRangeByScoreParams),
     StrLen(StrLenParams),
-    HGetAll(HGetAllParams)
+    HGetAll(HGetAllParams),
+    HKeys(HKeysParams),
+    HVals(HValsParams),
+    LLen(LLenParams),
 }

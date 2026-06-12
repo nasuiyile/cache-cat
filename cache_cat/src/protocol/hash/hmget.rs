@@ -8,7 +8,6 @@ use crate::protocol::command::{Client, Command};
 use crate::protocol::raft_command::RaftCommand;
 use crate::raft::network::redis_server::RedisServer;
 use crate::raft::types::core::response_value::Value;
-use crate::raft::types::core::value_object::{HashValue, ValueObject};
 use crate::raft::types::entry::read_operation::ReadOperation;
 use crate::raft::types::entry::request::Operation;
 use async_trait::async_trait;
@@ -94,40 +93,8 @@ impl Command for HMGetCommand {
 
         // Parse arguments
         let params = Self::parse_args(items)?;
-        let value = server.app.read(params.key, client.db_number).await?;
+        server.app.read(ReadOperation::HMGet(params), client.db_number).await
 
-        match value {
-            None => {
-                // Key doesn't exist, return array of null bulk strings
-                let nulls: Vec<Value> = params
-                    .fields
-                    .iter()
-                    .map(|_| Value::BulkString(None))
-                    .collect();
-                Ok(Value::Array(Some(nulls)))
-            }
-            Some(v) => match v.data {
-                ValueObject::Hash(map) => {
-                    let guard = map.lock();
-                    let results: Vec<Value> = params
-                        .fields
-                        .iter()
-                        .map(|field| match guard.get(field) {
-                            None => Value::BulkString(None),
-                            Some(value) => match value {
-                                HashValue::Str(str) => {
-                                    Value::BulkString(Some(str.as_ref().clone()))
-                                }
-                                HashValue::Int(int) => {
-                                    Value::BulkString(Some(int.to_string().as_bytes().to_vec()))
-                                }
-                            },
-                        })
-                        .collect();
-                    Ok(Value::Array(Some(results)))
-                }
-                _ => Err(CacheCatError::from(ProtocolError::WrongType)),
-            },
-        }
+
     }
 }

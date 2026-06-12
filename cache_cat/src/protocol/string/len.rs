@@ -1,6 +1,6 @@
 use crate::error::{CacheCatError, ProtocolError};
 use crate::protocol::command::{Client, Command};
-use crate::protocol::raft_command::RaftCommand;
+use crate::protocol::raft_command::{RaftCommand, ReadRaftCommand};
 use crate::raft::network::redis_server::RedisServer;
 use crate::raft::types::core::response_value::Value;
 use crate::raft::types::core::value_object::ValueObject;
@@ -41,10 +41,9 @@ impl StrLenParams {
 /// STRLEN command executor
 pub struct StrLenCommand;
 
-impl RaftCommand for StrLenCommand {
-    fn raft_request(&self, items: &[Value]) -> Result<Operation, ProtocolError> {
-        let params = StrLenParams::parse(items)?;
-        Ok(Operation::Read(ReadOperation::StrLen(params)))
+impl ReadRaftCommand for StrLenCommand {
+    fn read_operation(&self, items: &[Value]) -> Result<ReadOperation, ProtocolError> {
+        Ok(ReadOperation::StrLen(StrLenParams::parse(items)?))
     }
 }
 
@@ -60,24 +59,7 @@ impl Command for StrLenCommand {
             vec.push(self.raft_request(items)?);
             return Ok(Value::SimpleString("QUEUED".to_string()));
         }
-
-        let params = StrLenParams::parse(items)?;
-
-        let value = server
-            .app
-            .read(params.key, client.db_number)
-            .await?;
-
-        let len = match value {
-            None => 0,
-
-            Some(v) => match v.data {
-                ValueObject::String(ref bytes) => bytes.len(),
-                ValueObject::Int(ref i) => i.to_string().len(),
-                _ => return Err(ProtocolError::WrongType.into()),
-            },
-        };
-
-        Ok(Value::Integer(len as i64))
+        let params = self.read_operation(items)?;
+        server.app.read(params, client.db_number).await
     }
 }

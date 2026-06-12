@@ -1,5 +1,6 @@
 use crate::protocol::key::del::DelParams;
 use crate::protocol::key::rename::RenameParams;
+use crate::protocol::key::renamenx::RenameNxParams;
 use crate::protocol::list::blpop::BLPopParams;
 use crate::protocol::lua::eval::EvalParams;
 use crate::protocol::string::mset::MsetParams;
@@ -10,7 +11,6 @@ use crate::raft::types::entry::read_operation::ReadOperation;
 use crate::utils::merge_u64;
 use serde::{Deserialize, Serialize};
 use std::fmt;
-use crate::protocol::key::renamenx::RenameNxParams;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum Operation {
@@ -81,6 +81,9 @@ impl fmt::Display for Request {
                 ReadOperation::ZRangeByScore(req) => write!(f, "ZRangeByScore: {}", req),
                 ReadOperation::StrLen(req) => write!(f, "StrLen: {}", req),
                 ReadOperation::HGetAll(req) => write!(f, "HGetAll: {}", req),
+                ReadOperation::HKeys(req) => write!(f, "HKeys: {}", req),
+                ReadOperation::HVals(req) => write!(f, "HVals: {}", req),
+                ReadOperation::LLen(req) => write!(f, "HVals: {}", req),
             },
             Operation::Base(op) => match op {
                 BaseOperation::Empty => write!(f, "None"),

@@ -1,12 +1,9 @@
 use crate::error::{CacheCatError, ProtocolError};
 use crate::protocol::command::{Client, Command};
-use crate::protocol::raft_command::RaftCommand;
+use crate::protocol::raft_command::{RaftCommand, ReadRaftCommand};
 use crate::raft::network::redis_server::RedisServer;
 use crate::raft::types::core::response_value::Value;
-use crate::raft::types::core::response_value::Value::Integer;
-use crate::raft::types::core::value_object::ValueObject;
 use crate::raft::types::entry::read_operation::ReadOperation;
-use crate::raft::types::entry::request::Operation;
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use std::fmt::Display;
@@ -79,10 +76,9 @@ impl GetBitCommand {
     }
 }
 
-impl RaftCommand for GetBitCommand {
-    fn raft_request(&self, items: &[Value]) -> Result<Operation, ProtocolError> {
-        let params = GetBitCommand::parse_args(items)?;
-        Ok(Operation::Read(ReadOperation::GetBit(params)))
+impl ReadRaftCommand for GetBitCommand {
+    fn read_operation(&self, items: &[Value]) -> Result<ReadOperation, ProtocolError> {
+        Ok(ReadOperation::GetBit(GetBitCommand::parse_args(items)?))
     }
 }
 
@@ -98,25 +94,7 @@ impl Command for GetBitCommand {
             vec.push(self.raft_request(items)?);
             return Ok(Value::SimpleString(String::from("GETBIT")));
         }
-        let params = GetBitCommand::parse_args(items)?;
-        let my_value = server.app.read(params.key, client.db_number).await?;
-        let bytes: Vec<u8> = match my_value {
-            None => return Ok(Integer(0)),
-            Some(value) => match value.data {
-                ValueObject::String(s) => s.to_vec(),
-                ValueObject::Int(i) => i.to_string().into_bytes(),
-                _ => return Err(ProtocolError::WrongType.into()),
-            },
-        };
-        let offset = params.offset; // u64
-        let byte_index = (offset / 8) as usize;
-        let bit_offset = (offset % 8) as usize;
-        let bit = if byte_index >= bytes.len() {
-            0
-        } else {
-            let byte = bytes[byte_index];
-            ((byte >> (7 - bit_offset)) & 1) as i64
-        };
-        Ok(Integer(bit))
+        let params = self.read_operation(items)?;
+        server.app.read(params, client.db_number).await
     }
 }

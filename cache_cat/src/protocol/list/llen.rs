@@ -3,52 +3,52 @@ use crate::protocol::command::{Client, Command};
 use crate::protocol::raft_command::{RaftCommand, ReadRaftCommand};
 use crate::raft::network::redis_server::RedisServer;
 use crate::raft::types::core::response_value::Value;
-use crate::raft::types::core::value_object::ValueObject;
 use crate::raft::types::entry::read_operation::ReadOperation;
-use crate::raft::types::entry::request::Operation;
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use std::fmt::Display;
 
-/// Parameters for GET command
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct GetParams {
+pub struct LLenCommand;
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LLenParams {
     pub key: Vec<u8>,
 }
-impl Display for GetParams {
+
+impl Display for LLenParams {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "GET {}", String::from_utf8_lossy(&self.key))
+        write!(
+            f,
+            "LLenParams {{ key: {} }}",
+            String::from_utf8_lossy(&self.key)
+        )
     }
 }
 
-impl GetParams {
-    /// Parse GET command parameters from RESP array items
-    fn parse(items: &[Value]) -> Result<Self, ProtocolError> {
+impl LLenCommand {
+    fn parse_args(items: &[Value]) -> Result<LLenParams, ProtocolError> {
         if items.len() != 2 {
-            return Err(ProtocolError::WrongArgCount("GET"));
+            return Err(ProtocolError::WrongArgCount("llen"));
         }
 
-        let key: Vec<u8> = match &items[1] {
+        let key = match &items[1] {
             Value::BulkString(Some(data)) => data.clone(),
             Value::SimpleString(s) => s.as_bytes().to_vec(),
             _ => return Err(ProtocolError::InvalidArgument("key")),
         };
 
-        Ok(GetParams { key })
+        Ok(LLenParams { key })
     }
 }
 
-/// GET command executor
-pub struct GetCommand;
-
-impl ReadRaftCommand for GetCommand {
+impl ReadRaftCommand for LLenCommand {
     fn read_operation(&self, items: &[Value]) -> Result<ReadOperation, ProtocolError> {
-        Ok((ReadOperation::Get(GetParams::parse(items)?)))
+        Ok(ReadOperation::LLen(Self::parse_args(items)?))
     }
 }
 
 #[async_trait]
-impl Command for GetCommand {
+impl Command for LLenCommand {
     async fn execute(
         &self,
         client: &mut Client,
