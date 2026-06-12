@@ -41,9 +41,21 @@ use crate::raft::types::entry::request::Operation;
 use std::collections::HashMap;
 use std::fmt;
 use tracing::warn;
+use crate::raft::types::entry::read_operation::ReadOperation;
 
 pub trait RaftCommand: Send + Sync {
     fn raft_request(&self, items: &[Value]) -> Result<Operation, ProtocolError>;
+}
+
+pub trait ReadRaftCommand:RaftCommand{
+    fn read_operation(&self, items: &[Value]) -> Result<ReadOperation, ProtocolError>;
+}
+
+impl<T: ReadRaftCommand> RaftCommand for T {
+    fn raft_request(&self, items: &[Value]) -> Result<Operation, ProtocolError> {
+        let operation = self.read_operation(items)?;
+        Ok(Operation::Read(operation))
+    }
 }
 
 /// Command factory for creating and executing commands

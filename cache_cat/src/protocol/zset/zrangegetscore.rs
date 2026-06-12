@@ -1,6 +1,6 @@
 use crate::error::{CacheCatError, ProtocolError};
 use crate::protocol::command::{Client, Command};
-use crate::protocol::raft_command::RaftCommand;
+use crate::protocol::raft_command::{RaftCommand, ReadRaftCommand};
 use crate::raft::network::redis_server::RedisServer;
 use crate::raft::types::core::response_value::Value;
 use crate::raft::types::core::value_object::ValueObject;
@@ -163,10 +163,9 @@ impl ZRangeByScoreCommand {
     }
 }
 
-impl RaftCommand for ZRangeByScoreCommand {
-    fn raft_request(&self, items: &[Value]) -> Result<Operation, ProtocolError> {
-        let params = Self::parse_args(items)?;
-        Ok(Operation::Read(ReadOperation::ZRangeByScore(params)))
+impl ReadRaftCommand for ZRangeByScoreCommand {
+    fn read_operation(&self, items: &[Value]) -> Result<ReadOperation, ProtocolError> {
+        Ok(ReadOperation::ZRangeByScore(Self::parse_args(items)?))
     }
 }
 
@@ -178,29 +177,7 @@ impl Command for ZRangeByScoreCommand {
         items: &[Value],
         server: &RedisServer,
     ) -> Result<Value, CacheCatError> {
-        let params = Self::parse_args(items)?;
-        let my_value = server.app.read(params.key, client.db_number).await?;
-        match my_value {
-            None => Ok(Value::Array(Some(vec![]))),
-            Some(v) => match v.data {
-                ValueObject::ZSet(list) => {
-                    let zset = list.lock();
-
-                    let res = zset.zrangebyscore(
-                        params.min,
-                        params.max,
-                        params.with_scores,
-                        params.limit,
-                    );
-
-                    let mut vec = Vec::with_capacity(res.len());
-                    for v in res {
-                        vec.push(Value::BulkString(Some(v)));
-                    }
-                    Ok(Value::Array(Some(vec)))
-                }
-                _ => Err(CacheCatError::from(ProtocolError::WrongType)),
-            },
-        }
+        let params = self.read_operation(items)?;
+        server.app.read(params, client.db_number).await
     }
 }

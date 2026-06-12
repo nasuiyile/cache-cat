@@ -5,7 +5,7 @@
 
 use crate::error::{CacheCatError, ProtocolError};
 use crate::protocol::command::{Client, Command};
-use crate::protocol::raft_command::RaftCommand;
+use crate::protocol::raft_command::{RaftCommand, ReadRaftCommand};
 use crate::raft::network::redis_server::RedisServer;
 use crate::raft::types::core::response_value::Value;
 use crate::raft::types::entry::read_operation::ReadOperation;
@@ -47,10 +47,9 @@ impl ExistsParams {
     }
 }
 
-impl RaftCommand for ExistsCommand {
-    fn raft_request(&self, items: &[Value]) -> Result<Operation, ProtocolError> {
-        let params = ExistsParams::parse(items)?;
-        Ok(Operation::Read(ReadOperation::Exists(params)))
+impl ReadRaftCommand for ExistsCommand {
+    fn read_operation(&self, items: &[Value]) -> Result<ReadOperation, ProtocolError> {
+        Ok(ReadOperation::Exists(ExistsParams::parse(items)?))
     }
 }
 
@@ -69,14 +68,7 @@ impl Command for ExistsCommand {
             vec.push(self.raft_request(items)?);
             return Ok(Value::SimpleString(String::from("QUEUED")));
         }
-        let params = ExistsParams::parse(items)?;
-        let mut counter = 0;
-        let values = server.app.multi_read(params.keys, client.db_number).await?;
-        for my_value in values {
-            if my_value.is_some() {
-                counter += 1;
-            }
-        }
-        Ok(Value::Integer(counter))
+        let params = self.read_operation(items)?;
+        server.app.multi_read(params, client.db_number).await
     }
 }

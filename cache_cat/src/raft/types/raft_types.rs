@@ -5,10 +5,12 @@ use crate::raft::application::cluster::Cluster;
 use crate::raft::application::connector::Connector;
 use crate::raft::application::pub_sub::PubSub;
 use crate::raft::store::statemachine::StateMachineStore;
-use crate::raft::types::core::mocha::mocha::MyValue;
+use crate::raft::types::core::mocha::request_handler::read_request;
 use crate::raft::types::core::response_value::Value;
+use crate::raft::types::entry::read_operation::ReadOperation;
 use crate::raft::types::entry::request::{Operation, Request};
 use crate::raft::types::file_operator::FileOperator;
+use futures::future::join_all;
 use openraft::RPCTypes::Vote;
 use openraft::error::Timeout;
 use serde::Deserialize;
@@ -20,7 +22,6 @@ use std::fmt::Result as FmtResult;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
-use futures::future::join_all;
 use tokio::sync::broadcast;
 
 pub type SnapshotData = tokio::fs::File;
@@ -93,7 +94,7 @@ impl CacheCatApp {
             };
             // 构造一个 Future 但不立即 .await
             let fut = self.connector.send_msg::<Req, Res>(
-                addr,               // 现在可以安全 move 进入 Future
+                addr, // 现在可以安全 move 进入 Future
                 func_id,
                 req,
                 Duration::from_secs(2),
@@ -116,40 +117,21 @@ impl CacheCatApp {
             .map_err(|e| StorageError::WriteFailed(e.to_string()))?;
         Ok(res.data)
     }
-    pub async fn read(
-        &self,
-        key: Vec<u8>,
-        db_number: u16,
-    ) -> Result<Option<MyValue>, CacheCatError> {
+    pub async fn read(&self, param: ReadOperation, db_number: u16) -> Result<Value, CacheCatError> {
         self.cluster.lease_read().await?;
-        let read_lock = self.state_machine.data.kvs.read_lock.read();
-        let my_value = self
-            .state_machine
-            .data
-            .kvs
-            .get_value_with_read_clock(&key, db_number)?;
-        drop(read_lock);
-        Ok(my_value)
+        let _read_lock = self.state_machine.data.kvs.read_lock.read();
+        Ok(read_request(&self.state_machine.data.kvs, param, db_number))
     }
 
     pub async fn multi_read(
         &self,
-        keys: Vec<Vec<u8>>,
+        param: ReadOperation,
         db_number: u16,
-    ) -> Result<Vec<Option<MyValue>>, CacheCatError> {
+    ) -> Result<Value, CacheCatError> {
         self.cluster.lease_read().await?;
         let _write_lock = self.state_machine.data.kvs.write_lock.lock().await;
         let _read_lock = self.state_machine.data.kvs.read_lock.read();
-        let mut vec = Vec::new();
-        for key in keys {
-            let my_value = self
-                .state_machine
-                .data
-                .kvs
-                .get_value_with_read_clock(&key, db_number)?;
-            vec.push(my_value);
-        }
-        Ok(vec)
+        Ok(read_request(&self.state_machine.data.kvs, param, db_number))
     }
 }
 

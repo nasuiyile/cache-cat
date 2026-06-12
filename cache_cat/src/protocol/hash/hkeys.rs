@@ -8,7 +8,6 @@ use crate::protocol::command::{Client, Command};
 use crate::protocol::raft_command::RaftCommand;
 use crate::raft::network::redis_server::RedisServer;
 use crate::raft::types::core::response_value::Value;
-use crate::raft::types::core::value_object::ValueObject;
 use crate::raft::types::entry::read_operation::ReadOperation;
 use crate::raft::types::entry::request::Operation;
 
@@ -24,11 +23,7 @@ pub struct HKeysParams {
 
 impl Display for HKeysParams {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        write!(
-            f,
-            "HKEYS {}",
-            String::from_utf8_lossy(&self.key)
-        )
+        write!(f, "HKEYS {}", String::from_utf8_lossy(&self.key))
     }
 }
 
@@ -72,32 +67,7 @@ impl Command for HKeysCommand {
             vec.push(self.raft_request(items)?);
             return Ok(Value::SimpleString(String::from("QUEUED")));
         }
-
-        let params = Self::parse_args(items)?;
-
-        let value = server
-            .app
-            .read(params.key, client.db_number)
-            .await?;
-
-        match value {
-            None => Ok(Value::Array(Some(vec![]))),
-            Some(v) => match v.data {
-                ValueObject::Hash(map) => {
-                    let guard = map.lock();
-
-                    let mut result = Vec::with_capacity(guard.len());
-
-                    for (field, _) in guard.iter() {
-                        result.push(
-                            Value::BulkString(Some(field.as_ref().clone()))
-                        );
-                    }
-
-                    Ok(Value::Array(Some(result)))
-                }
-                _ => Err(CacheCatError::from(ProtocolError::WrongType)),
-            },
-        }
+        let params = ReadOperation::HKeys(Self::parse_args(items)?);
+        server.app.read(params, client.db_number).await
     }
 }

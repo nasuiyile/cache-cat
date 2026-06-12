@@ -33,7 +33,6 @@ impl MyValue {
 pub struct Database {
     // pub cache: Cache<Arc<Vec<u8>>, MyValue>,
     pub mocha: Mocha<Arc<Vec<u8>>, MyValue>,
-
 }
 impl Clone for Database {
     fn clone(&self) -> Self {
@@ -143,6 +142,43 @@ impl MyCache {
             }
         }
     }
+
+    #[inline]
+    pub fn get_values_with_read_clock(
+        &self,
+        keys: &[Vec<u8>],
+        db_number: u16,
+    ) -> Result<Vec<Option<MyValue>>, ProtocolError> {
+        let cache = self
+            .databases
+            .get(db_number as usize)
+            .ok_or(ProtocolError::DbNotExist)?;
+        let read_clock = self.get_and_update_read_clock();
+        keys.iter()
+            .map(|key| {
+                match cache.mocha.get_entry(key) {
+                    None => {
+                        // 用写逻辑时钟也获取不到，可能会产生写逻辑时钟在此刻推进了导致读不到数据。
+                        // 但这是符合预期的。
+                        Ok(None)
+                    }
+                    Some(my_value) => {
+                        match my_value.expire_at {
+                            Some(inner) => {
+                                if inner < read_clock {
+                                    // 写逻辑时钟获取到了但是读逻辑时钟没有获取到
+                                    return Ok(None);
+                                }
+                                Ok(Some(my_value.value))
+                            }
+                            None => Ok(Some(my_value.value)),
+                        }
+                    }
+                }
+            })
+            .collect()
+    }
+
 
     pub fn invalidate_all(&self) {
         for db in &self.databases {

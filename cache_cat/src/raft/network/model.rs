@@ -1,3 +1,4 @@
+use crate::raft::types::core::response_value::Value;
 use crate::raft::types::file_operator::FileOperator;
 use crate::raft::types::raft_types::{Node, TypeConfig};
 use openraft::SnapshotMeta;
@@ -29,10 +30,10 @@ pub struct GetReq {
     pub key: Vec<u8>,
 }
 
-#[derive(Serialize, Deserialize, Debug, PartialEq)]
+#[derive(Serialize, Deserialize, Debug)]
 pub struct GetRes {
     // Arc<Vec<u8>> 在 serde 中有实现（在 std/alloc 可用的情况下）
-    pub value: Option<Arc<Vec<u8>>>,
+    pub value: Value,
 }
 
 #[derive(Serialize, Deserialize, Debug, PartialEq)]

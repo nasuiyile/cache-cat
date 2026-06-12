@@ -1,6 +1,6 @@
 use crate::error::{CacheCatError, ProtocolError};
 use crate::protocol::command::{Client, Command};
-use crate::protocol::raft_command::RaftCommand;
+use crate::protocol::raft_command::{RaftCommand, ReadRaftCommand};
 use crate::raft::network::redis_server::RedisServer;
 use crate::raft::types::core::response_value::Value;
 use crate::raft::types::core::value_object::ValueObject;
@@ -41,10 +41,9 @@ impl GetParams {
 /// GET command executor
 pub struct GetCommand;
 
-impl RaftCommand for GetCommand {
-    fn raft_request(&self, items: &[Value]) -> Result<Operation, ProtocolError> {
-        let params = GetParams::parse(items)?;
-        Ok(Operation::Read(ReadOperation::Get(params)))
+impl ReadRaftCommand for GetCommand {
+    fn read_operation(&self, items: &[Value]) -> Result<ReadOperation, ProtocolError> {
+        Ok((ReadOperation::Get(GetParams::parse(items)?)))
     }
 }
 
@@ -61,19 +60,7 @@ impl Command for GetCommand {
             return Ok(Value::SimpleString(String::from("QUEUED")));
         }
 
-        let params = GetParams::parse(items)?;
-        let values = server.app.read(params.key, client.db_number).await?;
-        match values {
-            None => Ok(Value::BulkString(None)),
-            Some(v) => match v.data {
-                ValueObject::Int(int_value) => {
-                    Ok(Value::BulkString(Some(int_value.to_string().into_bytes())))
-                }
-                ValueObject::String(str_value) => {
-                    Ok(Value::BulkString(Some(str_value.as_ref().clone())))
-                }
-                _ => Err(ProtocolError::WrongType.into()),
-            },
-        }
+        let params = self.read_operation(items)?;
+        server.app.read(params, client.db_number).await
     }
 }

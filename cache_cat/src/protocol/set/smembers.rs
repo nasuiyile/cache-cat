@@ -1,6 +1,6 @@
 use crate::error::{CacheCatError, ProtocolError};
 use crate::protocol::command::{Client, Command};
-use crate::protocol::raft_command::RaftCommand;
+use crate::protocol::raft_command::{RaftCommand, ReadRaftCommand};
 use crate::raft::network::redis_server::RedisServer;
 use crate::raft::types::core::response_value::Value;
 use crate::raft::types::core::value_object::ValueObject;
@@ -43,10 +43,9 @@ impl SMembersCommand {
     }
 }
 
-impl RaftCommand for SMembersCommand {
-    fn raft_request(&self, items: &[Value]) -> Result<Operation, ProtocolError> {
-        let params = SMembersCommand::parse_args(items)?;
-        Ok(Operation::Read(ReadOperation::SMembers(params)))
+impl ReadRaftCommand for SMembersCommand {
+    fn read_operation(&self, items: &[Value]) -> Result<ReadOperation, ProtocolError> {
+        Ok(ReadOperation::SMembers(SMembersCommand::parse_args(items)?))
     }
 }
 
@@ -62,21 +61,7 @@ impl Command for SMembersCommand {
             vec.push(self.raft_request(items)?);
             return Ok(Value::SimpleString(String::from("QUEUED")));
         }
-        let params = SMembersCommand::parse_args(items)?;
-        let my_value = server.app.read(params.key, client.db_number).await?;
-        match my_value {
-            None => Ok(Value::Array(Some(vec![]))),
-            Some(v) => match v.data {
-                ValueObject::Set(set) => {
-                    let guard = set.lock();
-                    let mut array = Vec::new();
-                    for member in guard.iter() {
-                        array.push(Value::BulkString(Some(member.as_ref().clone())));
-                    }
-                    Ok(Value::Array(Some(array)))
-                }
-                _ => Err(ProtocolError::WrongType.into()),
-            },
-        }
+        let params = self.read_operation(items)?;
+        server.app.read(params, client.db_number).await
     }
 }

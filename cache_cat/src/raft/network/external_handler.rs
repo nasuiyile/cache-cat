@@ -1,4 +1,5 @@
 use crate::error::{CacheCatError, Error};
+use crate::protocol::string::get::GetParams;
 use crate::raft::application::cluster::NodeState;
 use crate::raft::network::model::{
     AppendEntriesReq, GetReq, GetRes, InstallFullSnapshotReq, PrintTestReq, PrintTestRes,
@@ -6,10 +7,12 @@ use crate::raft::network::model::{
 };
 use crate::raft::types::core::value_object::ValueObject;
 use crate::raft::types::entry::membership::JoinRequest;
+use crate::raft::types::entry::read_operation::ReadOperation::Get;
 use crate::raft::types::entry::request::Request;
 use crate::raft::types::raft_types::{CacheCatApp, Node, TypeConfig};
 use async_trait::async_trait;
 use bytes::Bytes;
+use clap::builder::Resettable::Value;
 use futures::StreamExt;
 use openraft::raft::{
     AppendEntriesResponse, ClientWriteResponse, SnapshotResponse, VoteResponse, WriteResult,
@@ -136,17 +139,10 @@ pub async fn batch_write(
 
 async fn read(app: Arc<CacheCatApp>, get_req: GetReq) -> Result<GetRes, String> {
     let value = app
-        .read(get_req.key, get_req.db_number)
+        .read(Get(GetParams { key: get_req.key }), get_req.db_number)
         .await
         .map_err(|e| e.to_string())?;
-
-    match value {
-        None => Ok(GetRes { value: None }),
-        Some(v) => match v.data {
-            ValueObject::String(value) => Ok(GetRes { value: Some(value) }),
-            _ => Err("value is not string".to_string()),
-        },
-    }
+    Ok(GetRes { value })
 }
 
 async fn vote(app: Arc<CacheCatApp>, req: VoteReq) -> Result<VoteResponse<TypeConfig>, String> {

@@ -1,6 +1,6 @@
 use crate::error::{CacheCatError, ProtocolError};
 use crate::protocol::command::{Client, Command};
-use crate::protocol::raft_command::RaftCommand;
+use crate::protocol::raft_command::{RaftCommand, ReadRaftCommand};
 use crate::raft::network::redis_server::RedisServer;
 use crate::raft::types::core::response_value::Value;
 use crate::raft::types::core::value_object::ValueObject;
@@ -47,10 +47,9 @@ impl MgetParams {
 /// MGET command executor
 pub struct MgetCommand;
 
-impl RaftCommand for MgetCommand {
-    fn raft_request(&self, items: &[Value]) -> Result<Operation, ProtocolError> {
-        let params = MgetParams::parse(items)?;
-        Ok(Operation::Read(ReadOperation::MGet(params)))
+impl ReadRaftCommand for MgetCommand {
+    fn read_operation(&self, items: &[Value]) -> Result<ReadOperation, ProtocolError> {
+        Ok(ReadOperation::MGet(MgetParams::parse(items)?))
     }
 }
 
@@ -66,25 +65,7 @@ impl Command for MgetCommand {
             vec.push(self.raft_request(items)?);
             return Ok(Value::SimpleString(String::from("QUEUED")));
         }
-        let params = MgetParams::parse(items)?;
-        let values = server.app.multi_read(params.keys, client.db_number).await?;
-        let mut results = Vec::with_capacity(values.len());
-        for my_value in values {
-            match my_value {
-                None => {
-                    results.push(Value::BulkString(None));
-                }
-                Some(v) => match v.data {
-                    ValueObject::Int(int_value) => {
-                        results.push(Value::BulkString(Some(int_value.to_string().into_bytes())));
-                    }
-                    ValueObject::String(str_value) => {
-                        results.push(Value::BulkString(Some(str_value.as_ref().clone())));
-                    }
-                    _ => return Err(CacheCatError::from(ProtocolError::WrongType)),
-                },
-            }
-        }
-        Ok(Value::Array(Some(results)))
+        let params = self.read_operation(items)?;
+        server.app.multi_read(params, client.db_number).await
     }
 }

@@ -4,6 +4,25 @@ use crate::raft::types::entry::bae_operation::BaseOperation;
 use crate::raft::types::entry::read_operation::ReadOperation;
 use crate::raft::types::entry::request::{Operation, RedisOperation};
 
+pub fn read_request(my_cache: &MyCache, read_operation: ReadOperation, db_number: u16) -> Value {
+    match read_operation {
+        ReadOperation::Exists(param) => my_cache.exists(param, db_number),
+        ReadOperation::Get(param) => my_cache.get(param, db_number),
+        ReadOperation::LRange(param) => my_cache.l_range(param, db_number),
+        ReadOperation::MGet(param) => my_cache.m_get(param, db_number),
+        ReadOperation::ZRange(param) => my_cache.z_range(param, db_number),
+        ReadOperation::HGet(param) => my_cache.h_get(param, db_number),
+        ReadOperation::SMembers(param) => my_cache.s_member(param, db_number),
+        ReadOperation::HMGet(param) => my_cache.h_m_get(param, db_number),
+        ReadOperation::GetBit(param) => my_cache.get_bit(param, db_number),
+        ReadOperation::ZRangeByScore(param) => my_cache.z_range_by_score(param, db_number),
+        ReadOperation::StrLen(param) => my_cache.str_len(param, db_number),
+        ReadOperation::HGetAll(param) => my_cache.h_get_all(param, db_number),
+        ReadOperation::HKeys(param) => my_cache.h_keys(param, db_number),
+        ReadOperation::HVals(param) => my_cache.h_vals(param, db_number),
+    }
+}
+
 #[inline]
 pub fn do_request(
     my_cache: &MyCache,
@@ -12,24 +31,7 @@ pub fn do_request(
     external: bool,
 ) -> Value {
     match operation {
-        Operation::Read(read) => match read {
-            ReadOperation::Exists(param) => my_cache.exists(param, update.db_number),
-            ReadOperation::Get(param) => my_cache.get(param, update.db_number),
-            ReadOperation::LRange(param) => my_cache.l_range(param, update.db_number),
-            ReadOperation::MGet(param) => my_cache.m_get(param, update.db_number),
-            ReadOperation::ZRange(param) => my_cache.z_range(param, update.db_number),
-            ReadOperation::HGet(param) => my_cache.h_get(param, update.db_number),
-            ReadOperation::SMembers(param) => my_cache.s_member(param, update.db_number),
-            ReadOperation::HMGet(param) => my_cache.h_m_get(param, update.db_number),
-            ReadOperation::GetBit(param) => my_cache.get_bit(param, update.db_number),
-            ReadOperation::ZRangeByScore(param) => {
-                my_cache.z_range_by_score(param, update.db_number)
-            }
-            ReadOperation::StrLen(param) => my_cache.str_len(param, update.db_number),
-            ReadOperation::HGetAll(param) => my_cache.h_get_all(param, update.db_number),
-            ReadOperation::HKeys(param) => my_cache.h_keys(param, update.db_number),
-            ReadOperation::HVals(param) => my_cache.h_vals(param, update.db_number),
-        },
+        Operation::Read(read) => read_request(my_cache, read, update.db_number),
         Operation::Base(base) => match base {
             BaseOperation::Empty => {
                 for db in &my_cache.databases {
