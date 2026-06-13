@@ -3,9 +3,7 @@ use crate::protocol::command::{Client, Command};
 use crate::protocol::raft_command::{RaftCommand, ReadRaftCommand};
 use crate::raft::network::redis_server::RedisServer;
 use crate::raft::types::core::response_value::Value;
-use crate::raft::types::core::value_object::ValueObject;
 use crate::raft::types::entry::read_operation::ReadOperation;
-use crate::raft::types::entry::request::Operation;
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use std::fmt::Display;
@@ -43,7 +41,7 @@ pub struct GetCommand;
 
 impl ReadRaftCommand for GetCommand {
     fn read_operation(&self, items: &[Value]) -> Result<ReadOperation, ProtocolError> {
-        Ok((ReadOperation::Get(GetParams::parse(items)?)))
+        Ok(ReadOperation::Get(GetParams::parse(items)?) )
     }
 }
 

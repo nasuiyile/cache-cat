@@ -75,7 +75,7 @@ impl ComputeCommand for PersistReq {
     fn mutate(
         self,
         entry: EntrySnapshot<MyValue>,
-        write_clock: u64,
+        _write_clock: u64,
     ) -> (MochaOperation<MyValue>, Value) {
         if entry.expire_at.is_none() {
             return (MochaOperation::Abort, Value::Integer(0));

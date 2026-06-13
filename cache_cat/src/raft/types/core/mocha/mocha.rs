@@ -10,8 +10,7 @@ use serde::{Deserialize, Serialize};
 use std::cmp::max;
 use std::option::Option;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::time::Duration;
+use std::sync::atomic::{AtomicU64, Ordering};
 use tokio::sync::Mutex;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]

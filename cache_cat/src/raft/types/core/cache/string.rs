@@ -6,11 +6,11 @@ use crate::protocol::string::mget::MgetParams;
 use crate::protocol::string::mset::MsetParams;
 use crate::protocol::string::set::{Expiration, SetMode, SetParams};
 use crate::raft::types::core::mocha::cas::ComputeCommand;
-use crate::raft::types::core::mocha::mocha::{MyCache, MyValue, Update, UpdateType};
+use crate::raft::types::core::mocha::mocha::{MyCache, MyValue, Update};
 use crate::raft::types::core::response_value::Value;
 use crate::raft::types::core::value_object::ValueObject;
 use crate::raft::types::entry::bae_operation::{
-    AppendReq, BaseOperation, IncrReq, SetBitReq, SetReq,
+    AppendReq, BaseOperation, IncrReq, SetReq,
 };
 use crate::utils::parse_i64;
 use std::sync::Arc;
@@ -80,7 +80,7 @@ impl ComputeCommand for IncrReq {
     fn mutate(
         self,
         entry: EntrySnapshot<MyValue>,
-        write_clock: u64,
+        _write_clock: u64,
     ) -> (MochaOperation<MyValue>, Value) {
         let (result, value) = match &entry.value.data {
             ValueObject::Int(n) => {
@@ -138,7 +138,7 @@ impl ComputeCommand for AppendReq {
     fn mutate(
         self,
         entry: EntrySnapshot<MyValue>,
-        write_clock: u64,
+        _write_clock: u64,
     ) -> (MochaOperation<MyValue>, Value) {
         match &entry.value.data {
             ValueObject::String(data_arc) => {
@@ -360,10 +360,10 @@ impl MyCache {
             Some(v) => match v.data {
                 ValueObject::String(ref bytes) => bytes.len(),
                 ValueObject::Int(ref i) => i.to_string().len(),
-                _ => return (ProtocolError::WrongType.into()),
+                _ => return ProtocolError::WrongType.into() ,
             },
         };
-        (Value::Integer(len as i64))
+        Value::Integer(len as i64) 
     }
 
 

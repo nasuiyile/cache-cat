@@ -1,7 +1,6 @@
 use mlua::{Lua, Value as LuaValue};
 use serde::{Deserialize, Serialize};
 use crate::error::ProtocolError;
-use crate::protocol::lua_env::LuaEnv;
 
 /// A response from the KV store.
 #[derive(Debug, Clone, Serialize, Deserialize)]

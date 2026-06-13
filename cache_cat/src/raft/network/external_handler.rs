@@ -5,14 +5,12 @@ use crate::raft::network::model::{
     AppendEntriesReq, GetReq, GetRes, InstallFullSnapshotReq, PrintTestReq, PrintTestRes,
     PublishReq, VoteReq,
 };
-use crate::raft::types::core::value_object::ValueObject;
 use crate::raft::types::entry::membership::JoinRequest;
 use crate::raft::types::entry::read_operation::ReadOperation::Get;
 use crate::raft::types::entry::request::Request;
 use crate::raft::types::raft_types::{CacheCatApp, Node, TypeConfig};
 use async_trait::async_trait;
 use bytes::Bytes;
-use clap::builder::Resettable::Value;
 use futures::StreamExt;
 use openraft::raft::{
     AppendEntriesResponse, ClientWriteResponse, SnapshotResponse, VoteResponse, WriteResult,

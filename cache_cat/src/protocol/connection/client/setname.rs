@@ -12,7 +12,7 @@ impl SubCommand for SetNameCommand {
         &self,
         client: &mut Client,
         items: &[Value],
-        server: &RedisServer,
+        _server: &RedisServer,
     ) -> Result<Value, CacheCatError> {
         if items.len() != 3 {
             return Err(ProtocolError::WrongArgCount("SENTINEL GET-MASTER-ADDR-BY-NAME").into());

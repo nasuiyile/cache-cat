@@ -27,7 +27,7 @@ impl ComputeCommand for HSetReq {
     fn mutate(
         self,
         entry: EntrySnapshot<MyValue>,
-        write_clock: u64,
+        _write_clock: u64,
     ) -> (MochaOperation<MyValue>, Value) {
         match &entry.value.data {
             ValueObject::Hash(hash) => {
@@ -90,7 +90,7 @@ impl ComputeCommand for HIncrReq {
     fn mutate(
         self,
         entry: EntrySnapshot<MyValue>,
-        write_clock: u64,
+        _write_clock: u64,
     ) -> (MochaOperation<MyValue>, Value) {
         match &entry.value.data {
             ValueObject::Hash(hash) => {
@@ -154,7 +154,7 @@ impl ComputeCommand for HDelReq {
     fn mutate(
         self,
         entry: EntrySnapshot<MyValue>,
-        write_clock: u64,
+        _write_clock: u64,
     ) -> (MochaOperation<MyValue>, Value) {
         match &entry.value.data {
             ValueObject::Hash(hash) => {
@@ -280,7 +280,7 @@ impl MyCache {
             Ok(cache) => cache,
         };
         match cache.get(&param.key) {
-            None => (Value::Array(Some(vec![]))),
+            None => Value::Array(Some(vec![])) ,
             Some(v) => match v.data {
                 ValueObject::Hash(map) => {
                     let guard = map.lock();

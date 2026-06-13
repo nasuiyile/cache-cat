@@ -1,14 +1,12 @@
 use crate::error::CacheCatError;
 use crate::node::parsed_config::ParsedConfig;
-use crate::protocol::string::set::SetParams;
 use crate::raft::store::snapshot::snapshot_handler::{
     dump_cache_to_path, get_snapshot_file_name, load_cache_from_path,
 };
 use crate::raft::types::core::mocha::mocha::{MyCache, Update, UpdateType};
-use crate::raft::types::core::mocha::request_handler::do_request;
+use crate::raft::types::core::mocha::request_handler::{base_request, do_request};
 use crate::raft::types::core::response_value::Value;
-use crate::raft::types::entry::bae_operation::{BaseOperation, InsertReq, SetReq};
-use crate::raft::types::entry::request::{AtomicRequest, Operation, RedisOperation};
+use crate::raft::types::entry::request::AtomicRequest;
 use crate::raft::types::file_operator::FileOperator;
 use crate::raft::types::raft_types::{NodeId, TypeConfig};
 use futures::Stream;
@@ -236,57 +234,7 @@ impl RaftStateMachine<TypeConfig> for StateMachineStore {
                 update_type,
                 write_clock: atomic_request.write_clock,
             };
-            match atomic_request.request {
-                BaseOperation::Empty => {}
-                BaseOperation::Set(param) => {
-                    self.data.kvs.set(param, &mut update);
-                }
-                BaseOperation::Expire(param) => {
-                    self.data.kvs.expire(param, &mut update);
-                }
-                BaseOperation::LPush(param) => {
-                    self.data.kvs.l_push(param, &mut update);
-                }
-                BaseOperation::Del(param) => {
-                    self.data.kvs.del(param, &mut update);
-                }
-                BaseOperation::Incr(param) => {
-                    self.data.kvs.incr(param, &mut update);
-                }
-                BaseOperation::Append(param) => {
-                    self.data.kvs.append(param, &mut update);
-                }
-                BaseOperation::HSet(param) => {
-                    self.data.kvs.h_set(param, &mut update);
-                }
-                BaseOperation::HIncr(param) => {
-                    self.data.kvs.h_incr(param, &mut update);
-                }
-                BaseOperation::ZAdd(param) => {
-                    self.data.kvs.z_add(param, &mut update);
-                }
-                BaseOperation::SAdd(param) => {
-                    self.data.kvs.s_add(param, &mut update);
-                }
-                BaseOperation::Persist(param) => {
-                    self.data.kvs.persist(param, &mut update);
-                }
-                BaseOperation::Insert(param) => {
-                    self.data.kvs.insert(param, &mut update);
-                }
-                BaseOperation::HDel(param) => {
-                    self.data.kvs.h_del(param, &mut update);
-                }
-                BaseOperation::SRem(param) => {
-                    self.data.kvs.s_rem(param, &mut update);
-                }
-                BaseOperation::SetBit(param) => {
-                    self.data.kvs.set_bit(param, &mut update);
-                }
-                BaseOperation::LPop(param) => {
-                    self.data.kvs.l_pop(param, &mut update);
-                }
-            }
+            base_request(&self.data.kvs, atomic_request.request, &mut update);
         }
         self.update_meta_data(res.0).await;
         Ok(())

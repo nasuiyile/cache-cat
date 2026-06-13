@@ -65,7 +65,7 @@ pub struct PublishCommand;
 impl Command for PublishCommand {
     async fn execute(
         &self,
-        client: &mut Client,
+        _client: &mut Client,
         items: &[Value],
         server: &RedisServer,
     ) -> Result<Value, CacheCatError> {

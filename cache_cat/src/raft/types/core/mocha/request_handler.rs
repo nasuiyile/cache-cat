@@ -24,6 +24,37 @@ pub fn read_request(my_cache: &MyCache, read_operation: ReadOperation, db_number
     }
 }
 
+pub fn base_request(
+    my_cache: &MyCache,
+    base_operation: BaseOperation,
+    update: &mut Update,
+) -> Value {
+    match base_operation {
+        BaseOperation::Empty => {
+            for db in &my_cache.databases {
+                db.mocha.active_expire_cycle_blocking();
+            }
+            Value::ok()
+        }
+        BaseOperation::Set(param) => my_cache.set(param, update),
+        BaseOperation::Expire(param) => my_cache.expire(param, update),
+        BaseOperation::LPush(param) => my_cache.l_push(param, update),
+        BaseOperation::Del(param) => my_cache.del(param, update),
+        BaseOperation::Incr(param) => my_cache.incr(param, update),
+        BaseOperation::Append(param) => my_cache.append(param, update),
+        BaseOperation::HSet(param) => my_cache.h_set(param, update),
+        BaseOperation::HIncr(param) => my_cache.h_incr(param, update),
+        BaseOperation::ZAdd(param) => my_cache.z_add(param, update),
+        BaseOperation::SAdd(param) => my_cache.s_add(param, update),
+        BaseOperation::Persist(param) => my_cache.persist(param, update),
+        BaseOperation::Insert(param) => my_cache.insert(param, update),
+        BaseOperation::HDel(param) => my_cache.h_del(param, update),
+        BaseOperation::SRem(param) => my_cache.s_rem(param, update),
+        BaseOperation::SetBit(param) => my_cache.set_bit(param, update),
+        BaseOperation::LPop(param) => my_cache.l_pop(param, update),
+    }
+}
+
 #[inline]
 pub fn do_request(
     my_cache: &MyCache,
@@ -33,30 +64,7 @@ pub fn do_request(
 ) -> Value {
     match operation {
         Operation::Read(read) => read_request(my_cache, read, update.db_number),
-        Operation::Base(base) => match base {
-            BaseOperation::Empty => {
-                for db in &my_cache.databases {
-                    db.mocha.active_expire_cycle_blocking();
-                }
-                Value::ok()
-            }
-            BaseOperation::Set(param) => my_cache.set(param, update),
-            BaseOperation::Expire(param) => my_cache.expire(param, update),
-            BaseOperation::LPush(param) => my_cache.l_push(param, update),
-            BaseOperation::Del(param) => my_cache.del(param, update),
-            BaseOperation::Incr(param) => my_cache.incr(param, update),
-            BaseOperation::Append(param) => my_cache.append(param, update),
-            BaseOperation::HSet(param) => my_cache.h_set(param, update),
-            BaseOperation::HIncr(param) => my_cache.h_incr(param, update),
-            BaseOperation::ZAdd(param) => my_cache.z_add(param, update),
-            BaseOperation::SAdd(param) => my_cache.s_add(param, update),
-            BaseOperation::Persist(param) => my_cache.persist(param, update),
-            BaseOperation::Insert(param) => my_cache.insert(param, update),
-            BaseOperation::HDel(param) => my_cache.h_del(param, update),
-            BaseOperation::SRem(param) => my_cache.s_rem(param, update),
-            BaseOperation::SetBit(param) => my_cache.set_bit(param, update),
-            BaseOperation::LPop(param) => my_cache.l_pop(param, update),
-        },
+        Operation::Base(base) => base_request(my_cache, base, update),
         Operation::Redis(redis) => match redis {
             RedisOperation::RedisDel(param) => my_cache.redis_del(param, update, external),
             RedisOperation::RedisSet(param) => my_cache.redis_set(param, update),

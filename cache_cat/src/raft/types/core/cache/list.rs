@@ -24,7 +24,7 @@ impl ComputeCommand for LPushReq {
     fn mutate(
         self,
         entry: EntrySnapshot<MyValue>,
-        write_clock: u64,
+        _write_clock: u64,
     ) -> (MochaOperation<MyValue>, Value) {
         match &entry.value.data {
             ValueObject::List(data_arc) => {

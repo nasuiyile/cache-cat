@@ -1,9 +1,7 @@
 use crate::error::{CacheCatError, ProtocolError};
 use crate::protocol::command::{Client, Command};
-use crate::protocol::raft_command::RaftCommand;
 use crate::raft::network::redis_server::RedisServer;
 use crate::raft::types::core::response_value::Value;
-use crate::raft::types::entry::request::{Operation, RedisOperation};
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use sha1::{Digest, Sha1};
@@ -150,7 +148,7 @@ impl ScriptParam {
 }
 
 /// 辅助函数：从 Value 提取字符串
-fn string_from_value(value: &Value, context: &str) -> Result<String, ProtocolError> {
+fn string_from_value(value: &Value, _context: &str) -> Result<String, ProtocolError> {
     match value {
         Value::BulkString(Some(data)) => {
             String::from_utf8(data.clone()).map_err(|_| ProtocolError::InvalidArgument("script"))
@@ -166,7 +164,7 @@ pub struct ScriptCommand;
 impl Command for ScriptCommand {
     async fn execute(
         &self,
-        client: &mut Client,
+        _client: &mut Client,
         items: &[Value],
         server: &RedisServer,
     ) -> Result<Value, CacheCatError> {

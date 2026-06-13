@@ -21,7 +21,6 @@ use crate::raft::types::core::response_value::Value;
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use std::fmt::{Display, Formatter};
-use tokio::sync::watch;
 
 /// UNSUBSCRIBE command parameters
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

@@ -71,12 +71,12 @@ pub struct ShutdownCommand;
 impl Command for ShutdownCommand {
     async fn execute(
         &self,
-        client: &mut Client,
+        _client: &mut Client,
         items: &[Value],
         server: &RedisServer,
     ) -> Result<Value, CacheCatError> {
         // Parse arguments first
-        let params = match ShutdownParam::parse(items) {
+        let _params = match ShutdownParam::parse(items) {
             Ok(p) => p,
             Err(e) => return Err(e.into()),
         };

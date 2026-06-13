@@ -1,12 +1,12 @@
 use crate::error::{CacheCatError, ProtocolError};
 use crate::mocha::{EntrySnapshot, ExpirePolicy, MochaOperation};
 use crate::protocol::zset::zrange::ZRangeParams;
-use crate::protocol::zset::zrangegetscore::{ZRangeByScoreCommand, ZRangeByScoreParams};
+use crate::protocol::zset::zrangegetscore::ZRangeByScoreParams;
 use crate::raft::types::core::mocha::cas::ComputeCommand;
 use crate::raft::types::core::mocha::mocha::{MyCache, MyValue, Update};
 use crate::raft::types::core::response_value::Value;
 use crate::raft::types::core::value_object::ValueObject::ZSet;
-use crate::raft::types::core::value_object::{SortedSet, ValueObject};
+use crate::raft::types::core::value_object::SortedSet;
 use crate::raft::types::entry::bae_operation::{BaseOperation, ZAddReq};
 use parking_lot::Mutex;
 use std::sync::Arc;
@@ -23,7 +23,7 @@ impl ComputeCommand for ZAddReq {
     fn mutate(
         self,
         entry: EntrySnapshot<MyValue>,
-        write_clock: u64,
+        _write_clock: u64,
     ) -> (MochaOperation<MyValue>, Value) {
         match &entry.value.data {
             ZSet(zset) => {

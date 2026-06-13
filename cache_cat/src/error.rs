@@ -7,7 +7,7 @@ use crate::error::ErrorKind::{Internal, InvalidConfig, Protocol, RPC, Retryable,
 use crate::raft::types::core::response_value::Value;
 use crate::raft::types::raft_types::TypeConfig;
 use mlua::prelude::LuaError;
-use openraft::error::{NetworkError, RPCError, RemoteError, Timeout, Unreachable};
+use openraft::error::RPCError;
 use std::error::Error as StdError;
 use std::fmt;
 use std::fmt::Display;

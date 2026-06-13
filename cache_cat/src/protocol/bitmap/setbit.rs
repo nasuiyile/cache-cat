@@ -4,7 +4,7 @@ use crate::protocol::raft_command::RaftCommand;
 use crate::raft::network::redis_server::RedisServer;
 use crate::raft::types::core::response_value::Value;
 use crate::raft::types::entry::bae_operation::BaseOperation::SetBit;
-use crate::raft::types::entry::bae_operation::{BaseOperation, SetBitReq};
+use crate::raft::types::entry::bae_operation::SetBitReq;
 use crate::raft::types::entry::request::Operation;
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};

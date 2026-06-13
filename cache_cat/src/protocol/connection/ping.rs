@@ -59,7 +59,7 @@ impl Command for PingCommand {
         &self,
         client: &mut Client,
         items: &[Value],
-        server: &RedisServer,
+        _server: &RedisServer,
     ) -> Result<Value, CacheCatError> {
         // Parse arguments first
         let params = match PingParam::parse(items) {
@@ -67,7 +67,7 @@ impl Command for PingCommand {
             Err(e) => return Err(e.into()),
         };
         // Check if we're in a transaction
-        if let Some(vec) = client.transaction_queue.as_mut() {}
+        if let Some(_vec) = client.transaction_queue.as_mut() {}
         // Execute the command
         match params.message {
             None => Ok(Value::SimpleString("PONG".to_string())),

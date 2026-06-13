@@ -4,7 +4,7 @@ use crate::protocol::set::smembers::SMembersParams;
 use crate::raft::types::core::mocha::cas::ComputeCommand;
 use crate::raft::types::core::mocha::mocha::{MyCache, MyValue, Update};
 use crate::raft::types::core::response_value::Value;
-use crate::raft::types::core::value_object::{HashValue, ValueObject};
+use crate::raft::types::core::value_object::ValueObject;
 use crate::raft::types::entry::bae_operation::{BaseOperation, SAddReq, SRemReq};
 use parking_lot::Mutex;
 use std::collections::HashSet;
@@ -76,7 +76,7 @@ impl ComputeCommand for SAddReq {
     fn mutate(
         self,
         entry: EntrySnapshot<MyValue>,
-        write_clock: u64,
+        _write_clock: u64,
     ) -> (MochaOperation<MyValue>, Value) {
         match &entry.value.data {
             ValueObject::Set(set) => {

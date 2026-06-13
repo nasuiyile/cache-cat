@@ -55,7 +55,6 @@ impl Server {
                 .expect("Redis : panic message");
         });
 
-        // 初始化配置（保留原有逻辑）
         let listener = match TcpListener::bind(self.addr.clone()).await {
             Ok(l) => l,
             Err(err) => {
@@ -122,9 +121,7 @@ async fn pipeline_mode(app: Arc<CacheCatApp>, socket: TcpStream, peer_addr: Sock
     let framed = Framed::new(socket, codec);
     let (mut writer, mut reader) = framed.split();
 
-    // 直接在这里维护队列，不再需要 mpsc
     let mut pending_futures = FuturesOrdered::new();
-
     loop {
         tokio::select! {
             // 1. 尝试从网络读取新的请求
@@ -279,9 +276,6 @@ async fn stream_mode(
     file.flush().await?;
     // 确保文件完全持久化,可能持续很长时间
     file.sync_all().await?;
-
-    // 关键：通过rename原子替换目标文件
-    // fs::rename(&temp_path, &final_path).await?;
     info!(
         "接收到来自{}的文件 文件接收完成: {}",
         peer_addr,

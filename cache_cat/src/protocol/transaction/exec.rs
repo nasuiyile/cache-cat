@@ -2,7 +2,7 @@ use crate::error::{CacheCatError, ProtocolError};
 use crate::protocol::command::{Client, Command};
 use crate::raft::network::redis_server::RedisServer;
 use crate::raft::types::core::response_value::Value;
-use crate::raft::types::entry::request::{Operation, RedisOperation, Request};
+use crate::raft::types::entry::request::{Operation, RedisOperation};
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use std::fmt::Display;
@@ -12,7 +12,7 @@ pub struct ExecParams {
     pub operations: Vec<Operation>,
 }
 impl Display for ExecParams {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    fn fmt(&self, _f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         Ok(())
     }
 }

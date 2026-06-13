@@ -5,7 +5,6 @@ use crate::protocol::command::{Client, Command};
 use crate::raft::network::redis_server::RedisServer;
 use crate::raft::types::core::response_value::Value;
 use async_trait::async_trait;
-use tracing::error;
 
 /// SAVE command handler
 pub struct SaveCommand;

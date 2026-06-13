@@ -1,4 +1,3 @@
-use crate::protocol::bitmap::setbit::SetBitParams;
 use crate::protocol::key::expire::ExpireCondition;
 use crate::raft::types::core::value_object::ValueObject;
 use serde::{Deserialize, Serialize};

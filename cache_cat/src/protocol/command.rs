@@ -65,7 +65,7 @@ use crate::raft::types::entry::request::Operation;
 use crate::utils::now_ms;
 use async_trait::async_trait;
 use futures::StreamExt;
-use futures::{SinkExt, Stream};
+use futures::SinkExt;
 use std::collections::HashMap;
 use std::fmt;
 use std::fmt::{Display, Formatter};
