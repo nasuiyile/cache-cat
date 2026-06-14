@@ -1,4 +1,4 @@
-name: Build and Artifacts
+name: Build and Upload Artifacts
 
 on:
   workflow_dispatch:
