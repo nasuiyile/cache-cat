@@ -5,13 +5,14 @@ use crate::raft::network::redis_server::RedisServer;
 use crate::raft::types::core::response_value::Value;
 use crate::raft::types::entry::read_operation::ReadOperation;
 use async_trait::async_trait;
+use bytes::Bytes;
 use serde::{Deserialize, Serialize};
 use std::fmt::Display;
 
 /// Parameters for STRLEN command
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct StrLenParams {
-    pub key: Vec<u8>,
+    pub key: Bytes,
 }
 
 impl Display for StrLenParams {
@@ -32,7 +33,7 @@ impl StrLenParams {
             _ => return Err(ProtocolError::InvalidArgument("key")),
         };
 
-        Ok(Self { key })
+        Ok(Self { key: key.into() })
     }
 }
 

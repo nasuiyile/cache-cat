@@ -9,12 +9,13 @@ use crate::raft::types::core::response_value::Value;
 use crate::raft::types::core::value_object::SortedSet;
 use crate::raft::types::core::value_object::ValueObject::ZSet;
 use crate::raft::types::entry::bae_operation::{BaseOperation, ZAddReq};
+use bytes::Bytes;
 use parking_lot::Mutex;
 use std::sync::Arc;
 
 impl ComputeCommand for ZAddReq {
-    fn key(&self) -> Arc<Vec<u8>> {
-        self.key.clone()
+    fn key(&self) -> &Bytes {
+        &self.key
     }
 
     fn into_base_op(self) -> BaseOperation {
@@ -58,7 +59,7 @@ impl ComputeCommand for ZAddReq {
 }
 
 impl ReadCommand for ZRangeByScoreParams {
-    fn key(&self) -> &Vec<u8> {
+    fn key(&self) -> &Bytes {
         &self.key
     }
 
@@ -81,7 +82,7 @@ impl ReadCommand for ZRangeByScoreParams {
     }
 }
 impl ReadCommand for ZRangeParams {
-    fn key(&self) -> &Vec<u8> {
+    fn key(&self) -> &Bytes {
         &self.key
     }
 

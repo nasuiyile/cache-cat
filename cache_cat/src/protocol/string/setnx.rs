@@ -34,7 +34,7 @@ impl SetNxCommand {
         };
 
         Ok(SetParams {
-            key,
+            key: key.into(),
             value,
             mode: Some(SetMode::Nx),
             get: false,

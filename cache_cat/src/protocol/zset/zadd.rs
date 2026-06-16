@@ -7,13 +7,14 @@ use crate::raft::types::entry::bae_operation::BaseOperation::ZAdd;
 use crate::raft::types::entry::bae_operation::ZAddReq;
 use crate::raft::types::entry::request::Operation;
 use async_trait::async_trait;
+use bytes::Bytes;
 use serde::{Deserialize, Serialize};
 use std::fmt::Display;
 use std::sync::Arc;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ZAddParam {
-    pub key: Vec<u8>,
+    pub key: Bytes,
     pub nx: bool,
     pub xx: bool,
     pub gt: bool,
@@ -21,6 +22,7 @@ pub struct ZAddParam {
     pub ch: bool,
     pub members: Vec<(Vec<u8>, f64)>,
 }
+
 impl Display for ZAddParam {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(
@@ -141,7 +143,7 @@ impl ZAddCommand {
         }
 
         Ok(ZAddParam {
-            key,
+            key: key.into(),
             nx,
             xx,
             gt,
@@ -165,7 +167,7 @@ impl RaftCommand for ZAddCommand {
             elements.push((Arc::new(v.0), v.1));
         }
         Ok(Operation::Base(ZAdd(ZAddReq {
-            key: Arc::from(params.key),
+            key: params.key,
             nx: params.nx,
             xx: params.xx,
             gt: params.gt,

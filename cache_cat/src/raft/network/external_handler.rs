@@ -137,7 +137,12 @@ pub async fn batch_write(
 
 async fn read(app: Arc<CacheCatApp>, get_req: GetReq) -> Result<GetRes, String> {
     let value = app
-        .read(Get(GetParams { key: get_req.key }), get_req.db_number)
+        .read(
+            Get(GetParams {
+                key: get_req.key.into(),
+            }),
+            get_req.db_number,
+        )
         .await
         .map_err(|e| e.to_string())?;
     Ok(GetRes { value })

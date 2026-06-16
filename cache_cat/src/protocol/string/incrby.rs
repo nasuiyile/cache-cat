@@ -1,19 +1,18 @@
 use crate::error::{CacheCatError, ProtocolError};
 use crate::protocol::command::{Client, Command};
+use crate::protocol::raft_command::RaftCommand;
 use crate::raft::network::redis_server::RedisServer;
-use std::sync::Arc;
-
 use crate::raft::types::core::response_value::Value;
 use crate::raft::types::entry::bae_operation::BaseOperation::Incr;
 use crate::raft::types::entry::bae_operation::IncrReq;
-use async_trait::async_trait;
-use crate::protocol::raft_command::RaftCommand;
 use crate::raft::types::entry::request::Operation;
+use async_trait::async_trait;
+use bytes::Bytes;
 
 /// Parameters for INCR command
 #[derive(Debug, Clone, PartialEq)]
 pub struct IncrByParams {
-    pub key: Vec<u8>,
+    pub key: Bytes,
     pub increment: i64,
 }
 
@@ -41,7 +40,10 @@ impl IncrByParams {
             _ => return Err(ProtocolError::InvalidArgument("increment")),
         };
 
-        Ok(IncrByParams { key, increment })
+        Ok(IncrByParams {
+            key: key.into(),
+            increment,
+        })
     }
 }
 
@@ -52,7 +54,7 @@ impl RaftCommand for IncrByCommand {
     fn raft_request(&self, items: &[Value]) -> Result<Operation, ProtocolError> {
         let params = IncrByParams::parse(items)?;
         Ok(Operation::Base(Incr(IncrReq {
-            key: Arc::from(params.key),
+            key: params.key,
             value: params.increment,
         })))
     }

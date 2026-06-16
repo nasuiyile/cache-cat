@@ -1,5 +1,6 @@
 use crate::protocol::key::expire::ExpireCondition;
 use crate::raft::types::core::value_object::ValueObject;
+use bytes::Bytes;
 use serde::{Deserialize, Serialize};
 use std::fmt;
 use std::fmt::Display;
@@ -35,9 +36,10 @@ pub enum BaseOperation {
 }
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct RPushReq {
-    pub key: Arc<Vec<u8>>,
+    pub key: Bytes,
     pub elements: Vec<Arc<Vec<u8>>>,
 }
+
 impl Display for RPushReq {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(
@@ -49,12 +51,12 @@ impl Display for RPushReq {
     }
 }
 
-
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct LPopReq {
-    pub key: Arc<Vec<u8>>,
+    pub key: Bytes,
     pub count: u64,
 }
+
 impl Display for LPopReq {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(
@@ -68,10 +70,11 @@ impl Display for LPopReq {
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct SetBitReq {
-    pub key: Arc<Vec<u8>>,
+    pub key: Bytes,
     pub offset: u64,
     pub value: u8,
 }
+
 impl Display for SetBitReq {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(
@@ -86,9 +89,10 @@ impl Display for SetBitReq {
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct SRemReq {
-    pub key: Arc<Vec<u8>>,
+    pub key: Bytes,
     pub members: Vec<Arc<Vec<u8>>>,
 }
+
 impl Display for SRemReq {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(
@@ -99,11 +103,13 @@ impl Display for SRemReq {
         )
     }
 }
+
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct HDelReq {
-    pub key: Arc<Vec<u8>>,
+    pub key: Bytes,
     pub fields: Vec<Arc<Vec<u8>>>,
 }
+
 impl Display for HDelReq {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(
@@ -114,12 +120,14 @@ impl Display for HDelReq {
         )
     }
 }
+
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct InsertReq {
-    pub key: Arc<Vec<u8>>,
+    pub key: Bytes,
     pub value: ValueObject,
     pub expires_at: u64,
 }
+
 impl Display for InsertReq {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(
@@ -134,8 +142,9 @@ impl Display for InsertReq {
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct PersistReq {
-    pub key: Arc<Vec<u8>>,
+    pub key: Bytes,
 }
+
 impl fmt::Display for PersistReq {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(
@@ -148,10 +157,11 @@ impl fmt::Display for PersistReq {
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct HIncrReq {
-    pub key: Arc<Vec<u8>>,
+    pub key: Bytes,
     pub field: Arc<Vec<u8>>,
     pub value: i64,
 }
+
 impl fmt::Display for HIncrReq {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(
@@ -166,9 +176,10 @@ impl fmt::Display for HIncrReq {
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct SAddReq {
-    pub key: Arc<Vec<u8>>,
+    pub key: Bytes,
     pub elements: Vec<Arc<Vec<u8>>>,
 }
+
 impl fmt::Display for SAddReq {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(
@@ -182,7 +193,7 @@ impl fmt::Display for SAddReq {
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct ZAddReq {
-    pub key: Arc<Vec<u8>>,
+    pub key: Bytes,
     pub nx: bool,
     pub xx: bool,
     pub gt: bool,
@@ -190,6 +201,7 @@ pub struct ZAddReq {
     pub ch: bool,
     pub members: Vec<(Arc<Vec<u8>>, f64)>,
 }
+
 impl fmt::Display for ZAddReq {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(
@@ -208,9 +220,10 @@ impl fmt::Display for ZAddReq {
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct HSetReq {
-    pub key: Arc<Vec<u8>>,
+    pub key: Bytes,
     pub elements: Vec<(Arc<Vec<u8>>, Arc<Vec<u8>>)>,
 }
+
 impl fmt::Display for HSetReq {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(
@@ -224,7 +237,7 @@ impl fmt::Display for HSetReq {
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct AppendReq {
-    pub key: Arc<Vec<u8>>,
+    pub key: Bytes,
     pub value: Arc<Vec<u8>>,
 }
 
@@ -238,12 +251,14 @@ impl Display for AppendReq {
         )
     }
 }
+
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct PExpireReq {
-    pub key: Arc<Vec<u8>>,
+    pub key: Bytes,
     pub expires_at: u64,
     pub condition: Option<ExpireCondition>,
 }
+
 impl Display for PExpireReq {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(
@@ -258,9 +273,10 @@ impl Display for PExpireReq {
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct IncrReq {
-    pub key: Arc<Vec<u8>>,
+    pub key: Bytes,
     pub value: i64,
 }
+
 impl fmt::Display for IncrReq {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(
@@ -270,12 +286,14 @@ impl fmt::Display for IncrReq {
         )
     }
 }
+
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct SetReq {
-    pub key: Arc<Vec<u8>>,
+    pub key: Bytes,
     pub value: Arc<Vec<u8>>,
     pub ex_time: u64,
 }
+
 impl Display for SetReq {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(
@@ -290,9 +308,10 @@ impl Display for SetReq {
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct LPushReq {
-    pub key: Arc<Vec<u8>>,
+    pub key: Bytes,
     pub elements: Vec<Arc<Vec<u8>>>,
 }
+
 impl Display for LPushReq {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(
@@ -306,8 +325,9 @@ impl Display for LPushReq {
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct DelReq {
-    pub key: Arc<Vec<u8>>,
+    pub key: Bytes,
 }
+
 impl Display for DelReq {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(

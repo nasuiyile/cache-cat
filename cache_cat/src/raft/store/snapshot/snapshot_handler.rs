@@ -3,6 +3,7 @@ use crate::raft::store::statemachine::SnapshotState::{End, Tail};
 use crate::raft::types::core::mocha::mocha::MyCache;
 use crate::raft::types::entry::request::AtomicRequest;
 use crate::raft::types::raft_types::TypeConfig;
+use bytes::Bytes;
 use openraft::SnapshotMeta;
 use serde::{Deserialize, Serialize};
 use std::io::SeekFrom;
@@ -202,13 +203,13 @@ async fn test_dump_and_load_with_data() {
     let cache = Arc::new(MyCache::new(1).unwrap());
 
     // 插入测试数据
-    let key1 = Arc::new(b"key1".to_vec());
+    let key1 = Bytes::from_static(b"key1");
     let value1 = MyValue {
         version: 1,
         data: ValueObject::String(Arc::new(b"value1".to_vec())),
     };
 
-    let key2 = Arc::new(b"key2".to_vec());
+    let key2 = Bytes::from_static(b"key2");
     let value2 = MyValue {
         version: 1,
         data: ValueObject::String(Arc::new(b"value1".to_vec())),
@@ -275,12 +276,10 @@ async fn test_dump_and_load_with_data() {
         _ => panic!("key1 type mismatch"),
     }
 
-
     match (&v2.data, &value2.data) {
         (ValueObject::String(a), ValueObject::String(b)) => {
             assert_eq!(a.as_slice(), b.as_slice(), "key2 value mismatch");
         }
         _ => panic!("key2 type mismatch"),
     }
-
 }

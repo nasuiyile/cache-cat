@@ -12,13 +12,14 @@ use crate::raft::types::core::response_value::Value;
 use crate::raft::types::core::value_object::{HashValue, ValueObject};
 use crate::raft::types::entry::bae_operation::{BaseOperation, HDelReq, HIncrReq, HSetReq};
 use crate::utils::parse_i64;
+use bytes::Bytes;
 use parking_lot::Mutex;
 use std::collections::HashMap;
 use std::sync::Arc;
 
 impl ComputeCommand for HSetReq {
-    fn key(&self) -> Arc<Vec<u8>> {
-        self.key.clone()
+    fn key(&self) -> &Bytes {
+        &self.key
     }
 
     fn into_base_op(self) -> BaseOperation {
@@ -79,9 +80,10 @@ impl ComputeCommand for HSetReq {
         )
     }
 }
+
 impl ComputeCommand for HIncrReq {
-    fn key(&self) -> Arc<Vec<u8>> {
-        self.key.clone()
+    fn key(&self) -> &Bytes {
+        &self.key
     }
 
     fn into_base_op(self) -> BaseOperation {
@@ -143,9 +145,10 @@ impl ComputeCommand for HIncrReq {
         )
     }
 }
+
 impl ComputeCommand for HDelReq {
-    fn key(&self) -> Arc<Vec<u8>> {
-        self.key.clone()
+    fn key(&self) -> &Bytes {
+        &self.key
     }
 
     fn into_base_op(self) -> BaseOperation {
@@ -193,7 +196,7 @@ impl ComputeCommand for HDelReq {
 }
 
 impl ReadCommand for HMGetParams {
-    fn key(&self) -> &Vec<u8> {
+    fn key(&self) -> &Bytes {
         &self.key
     }
 
@@ -227,7 +230,7 @@ impl ReadCommand for HMGetParams {
 }
 
 impl ReadCommand for HKeysParams {
-    fn key(&self) -> &Vec<u8> {
+    fn key(&self) -> &Bytes {
         &self.key
     }
 
@@ -249,7 +252,7 @@ impl ReadCommand for HKeysParams {
     }
 }
 impl ReadCommand for HValsParams {
-    fn key(&self) -> &Vec<u8> {
+    fn key(&self) -> &Bytes {
         &self.key
     }
 
@@ -280,7 +283,7 @@ impl ReadCommand for HValsParams {
 }
 
 impl ReadCommand for HGetAllParams {
-    fn key(&self) -> &Vec<u8> {
+    fn key(&self) -> &Bytes {
         &self.key
     }
 
@@ -310,7 +313,7 @@ impl ReadCommand for HGetAllParams {
 }
 
 impl ReadCommand for HGetParams {
-    fn key(&self) -> &Vec<u8> {
+    fn key(&self) -> &Bytes {
         &self.key
     }
 

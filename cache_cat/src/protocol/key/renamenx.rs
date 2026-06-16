@@ -13,14 +13,15 @@ use crate::raft::network::redis_server::RedisServer;
 use crate::raft::types::core::response_value::Value;
 use crate::raft::types::entry::request::{Operation, RedisOperation};
 use async_trait::async_trait;
+use bytes::Bytes;
 use serde::{Deserialize, Serialize};
 use std::fmt::{Display, Formatter};
 
 /// RENAMENX command parameters
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct RenameNxParams {
-    pub key: Vec<u8>,
-    pub new_key: Vec<u8>,
+    pub key: Bytes,
+    pub new_key: Bytes,
 }
 
 impl RenameNxParams {
@@ -43,7 +44,10 @@ impl RenameNxParams {
             _ => return Err(ProtocolError::InvalidArgument("renamenx")),
         };
 
-        Ok(RenameNxParams { key, new_key })
+        Ok(RenameNxParams {
+            key: key.into(),
+            new_key: new_key.into(),
+        })
     }
 }
 

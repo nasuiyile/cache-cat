@@ -5,6 +5,7 @@ use crate::raft::network::redis_server::RedisServer;
 use crate::raft::types::core::response_value::Value;
 use crate::raft::types::entry::read_operation::ReadOperation;
 use async_trait::async_trait;
+use bytes::Bytes;
 use serde::{Deserialize, Serialize};
 use std::fmt::Display;
 
@@ -12,7 +13,7 @@ pub struct SMembersCommand;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SMembersParams {
-    pub key: Vec<u8>,
+    pub key: Bytes,
 }
 
 impl Display for SMembersParams {
@@ -37,7 +38,7 @@ impl SMembersCommand {
             _ => return Err(ProtocolError::InvalidArgument("key")),
         };
 
-        Ok(SMembersParams { key })
+        Ok(SMembersParams { key: key.into() })
     }
 }
 

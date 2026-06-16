@@ -18,12 +18,13 @@ use crate::raft::types::entry::bae_operation::BaseOperation::HSet;
 use crate::raft::types::entry::bae_operation::HSetReq;
 use crate::raft::types::entry::request::Operation;
 use async_trait::async_trait;
+use bytes::Bytes;
 use std::sync::Arc;
 
 /// Parsed HSET arguments
 #[derive(Debug)]
 struct HSetParam {
-    key: Vec<u8>,
+    key: Bytes,
     fields: Vec<(Vec<u8>, Vec<u8>)>, // (field, value) pairs
 }
 
@@ -71,7 +72,10 @@ impl HSetCommand {
             i += 2;
         }
 
-        Ok(HSetParam { key, fields })
+        Ok(HSetParam {
+            key: key.into(),
+            fields,
+        })
     }
 }
 
@@ -83,12 +87,13 @@ impl RaftCommand for HSetCommand {
             vec.push((Arc::new(v.0), Arc::new(v.1)));
         }
         let operation = HSet(HSetReq {
-            key: Arc::from(params.key),
+            key: params.key,
             elements: vec,
         });
         Ok(Operation::Base(operation))
     }
 }
+
 #[async_trait]
 impl Command for HSetCommand {
     async fn execute(

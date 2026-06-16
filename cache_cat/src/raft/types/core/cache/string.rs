@@ -13,11 +13,12 @@ use crate::raft::types::core::response_value::Value;
 use crate::raft::types::core::value_object::ValueObject;
 use crate::raft::types::entry::bae_operation::{AppendReq, BaseOperation, IncrReq, SetReq};
 use crate::utils::parse_i64;
+use bytes::Bytes;
 use std::sync::Arc;
 
 impl ComputeCommand for SetReq {
-    fn key(&self) -> Arc<Vec<u8>> {
-        self.key.clone()
+    fn key(&self) -> &Bytes {
+        &self.key
     }
 
     fn into_base_op(self) -> BaseOperation {
@@ -68,8 +69,8 @@ impl ComputeCommand for SetReq {
 }
 
 impl ComputeCommand for IncrReq {
-    fn key(&self) -> Arc<Vec<u8>> {
-        self.key.clone()
+    fn key(&self) -> &Bytes {
+        &self.key
     }
 
     fn into_base_op(self) -> BaseOperation {
@@ -126,8 +127,8 @@ impl ComputeCommand for IncrReq {
 }
 
 impl ComputeCommand for AppendReq {
-    fn key(&self) -> Arc<Vec<u8>> {
-        self.key.clone()
+    fn key(&self) -> &Bytes {
+        &self.key
     }
 
     fn into_base_op(self) -> BaseOperation {
@@ -174,9 +175,10 @@ impl ComputeCommand for AppendReq {
 }
 
 impl ReadCommand for GetParams {
-    fn key(&self) -> &Vec<u8> {
+    fn key(&self) -> &Bytes {
         &self.key
     }
+
     fn execute(&self, value: Option<MyValue>) -> Value {
         match value {
             None => Value::BulkString(None),
@@ -193,9 +195,10 @@ impl ReadCommand for GetParams {
     }
 }
 impl ReadCommand for StrLenParams {
-    fn key(&self) -> &Vec<u8> {
+    fn key(&self) -> &Bytes {
         &self.key
     }
+
     fn execute(&self, value: Option<MyValue>) -> Value {
         let len = match value {
             None => 0,
@@ -216,8 +219,8 @@ impl MyCache {
         }
         for pair in params.pairs {
             let set = SetReq {
-                key: Arc::from(pair.0),
-                value: Arc::from(pair.1),
+                key: pair.0,
+                value: Arc::new(pair.1.to_vec()),
                 ex_time: 0,
             };
             self.set(set, update);
@@ -244,7 +247,7 @@ impl MyCache {
                     Ok(cache) => cache,
                 };
                 // Read existing value to get its expiration time
-                match cache.get_entry(&params.key) {
+                match cache.mocha.get_entry(&params.key) {
                     None => NO_EXPIRATION,
                     Some(value) => {
                         let ttl_ms = value.expire_at.unwrap_or(0);
@@ -274,7 +277,7 @@ impl MyCache {
                 Err(err) => return err,
                 Ok(cache) => cache,
             };
-            match cache.get_entry(&params.key) {
+            match cache.mocha.get_entry(&params.key) {
                 None => { /* remains None */ }
                 Some(value) => {
                     existing_key = match value.value.data {
@@ -325,7 +328,7 @@ impl MyCache {
             }
         }
         let set = SetReq {
-            key: Arc::from(params.key),
+            key: params.key,
             value: Arc::from(params.value),
             ex_time: expires_at,
         };
@@ -344,7 +347,7 @@ impl MyCache {
     pub fn m_get(&self, param: MgetParams, db_number: u16, read_clock: Option<u64>) -> Value {
         let cache = match self.get_cache(db_number) {
             Err(err) => return err,
-            Ok(cache) => cache,
+            Ok(cache) => &cache.mocha,
         };
         let mut results = Vec::with_capacity(param.keys.len());
         for key in param.keys {
@@ -379,6 +382,7 @@ impl MyCache {
     pub fn incr(&self, param: IncrReq, update: &mut Update) -> Value {
         self.execute_compute(param, update)
     }
+
     //如果不是string就报错，如果是string就append，如果没有值就创建一个
     pub fn append(&self, param: AppendReq, update: &mut Update) -> Value {
         self.execute_compute(param, update)
