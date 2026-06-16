@@ -7,13 +7,14 @@ use crate::raft::types::core::mocha::read_command::ReadCommand;
 use crate::raft::types::core::response_value::Value;
 use crate::raft::types::core::value_object::ValueObject;
 use crate::raft::types::entry::bae_operation::{BaseOperation, SAddReq, SRemReq};
+use bytes::Bytes;
 use parking_lot::Mutex;
 use std::collections::HashSet;
 use std::sync::Arc;
 
 impl ComputeCommand for SRemReq {
-    fn key(&self) -> Arc<Vec<u8>> {
-        self.key.clone()
+    fn key(&self) -> &Bytes {
+        &self.key
     }
 
     fn into_base_op(self) -> BaseOperation {
@@ -66,8 +67,8 @@ impl ComputeCommand for SRemReq {
 }
 
 impl ComputeCommand for SAddReq {
-    fn key(&self) -> Arc<Vec<u8>> {
-        self.key.clone()
+    fn key(&self) -> &Bytes {
+        &self.key
     }
 
     fn into_base_op(self) -> BaseOperation {
@@ -124,7 +125,7 @@ impl ComputeCommand for SAddReq {
 }
 
 impl ReadCommand for SMembersParams {
-    fn key(&self) -> &Vec<u8> {
+    fn key(&self) -> &Bytes {
         &self.key
     }
 

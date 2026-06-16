@@ -1,3 +1,6 @@
 [workspace]
 members = ["benchmark", "cache_cat"]
 resolver = "3"
+
+[workspace.lints.rust]
+unsafe_code = "deny"

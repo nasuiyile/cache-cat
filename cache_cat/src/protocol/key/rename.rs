@@ -12,14 +12,15 @@ use crate::raft::network::redis_server::RedisServer;
 use crate::raft::types::core::response_value::Value;
 use crate::raft::types::entry::request::{Operation, RedisOperation};
 use async_trait::async_trait;
+use bytes::Bytes;
 use serde::{Deserialize, Serialize};
 use std::fmt::{Display, Formatter};
 
 /// RENAME command parameters
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct RenameParams {
-    pub key: Vec<u8>,
-    pub new_key: Vec<u8>,
+    pub key: Bytes,
+    pub new_key: Bytes,
 }
 
 impl RenameParams {
@@ -42,7 +43,10 @@ impl RenameParams {
             _ => return Err(ProtocolError::InvalidArgument("rename")),
         };
 
-        Ok(RenameParams { key, new_key })
+        Ok(RenameParams {
+            key: key.into(),
+            new_key: new_key.into(),
+        })
     }
 }
 impl Display for RenameParams {
@@ -66,6 +70,7 @@ impl RaftCommand for RenameCommand {
         )))
     }
 }
+
 #[async_trait]
 impl Command for RenameCommand {
     async fn execute(

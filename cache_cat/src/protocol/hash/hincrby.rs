@@ -13,12 +13,13 @@ use crate::raft::types::entry::bae_operation::BaseOperation::HIncr;
 use crate::raft::types::entry::bae_operation::HIncrReq;
 use crate::raft::types::entry::request::Operation;
 use async_trait::async_trait;
+use bytes::Bytes;
 use std::sync::Arc;
 
 /// Parsed HINCRBY arguments
 #[derive(Debug)]
 struct HIncrByParams {
-    key: Vec<u8>,
+    key: Bytes,
     field: Vec<u8>,
     increment: i64,
 }
@@ -61,7 +62,7 @@ impl HIncrByCommand {
         };
 
         Ok(HIncrByParams {
-            key,
+            key: key.into(),
             field,
             increment,
         })
@@ -72,13 +73,14 @@ impl RaftCommand for HIncrByCommand {
     fn raft_request(&self, items: &[Value]) -> Result<Operation, ProtocolError> {
         let params = Self::parse_args(items)?;
         let operation = HIncr(HIncrReq {
-            key: Arc::from(params.key),
+            key: params.key,
             field: Arc::from(params.field),
             value: params.increment,
         });
         Ok(Operation::Base(operation))
     }
 }
+
 #[async_trait]
 impl Command for HIncrByCommand {
     async fn execute(

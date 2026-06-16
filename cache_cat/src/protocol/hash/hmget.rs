@@ -11,13 +11,14 @@ use crate::raft::types::core::response_value::Value;
 use crate::raft::types::entry::read_operation::ReadOperation;
 use crate::raft::types::entry::request::Operation;
 use async_trait::async_trait;
+use bytes::Bytes;
 use serde::{Deserialize, Serialize};
 use std::fmt::{Display, Formatter};
 
 /// Parsed HMGET arguments
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct HMGetParams {
-    pub key: Vec<u8>,
+    pub key: Bytes,
     pub fields: Vec<Vec<u8>>,
 }
 
@@ -67,7 +68,10 @@ impl HMGetCommand {
             fields.push(field);
         }
 
-        Ok(HMGetParams { key, fields })
+        Ok(HMGetParams {
+            key: key.into(),
+            fields,
+        })
     }
 }
 
@@ -93,8 +97,9 @@ impl Command for HMGetCommand {
 
         // Parse arguments
         let params = Self::parse_args(items)?;
-        server.app.read(ReadOperation::HMGet(params), client.db_number).await
-
-
+        server
+            .app
+            .read(ReadOperation::HMGet(params), client.db_number)
+            .await
     }
 }

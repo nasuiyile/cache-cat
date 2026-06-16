@@ -9,13 +9,14 @@ use crate::raft::types::core::mocha::read_command::ReadCommand;
 use crate::raft::types::core::response_value::Value;
 use crate::raft::types::core::value_object::ValueObject;
 use crate::raft::types::entry::bae_operation::{BaseOperation, LPopReq, LPushReq, RPushReq};
+use bytes::Bytes;
 use parking_lot::lock_api::Mutex;
 use std::collections::VecDeque;
 use std::sync::Arc;
 
 impl ComputeCommand for RPushReq {
-    fn key(&self) -> Arc<Vec<u8>> {
-        self.key.clone()
+    fn key(&self) -> &Bytes {
+        &self.key
     }
 
     fn into_base_op(self) -> BaseOperation {
@@ -65,8 +66,8 @@ impl ComputeCommand for RPushReq {
 }
 
 impl ComputeCommand for LPushReq {
-    fn key(&self) -> Arc<Vec<u8>> {
-        self.key.clone()
+    fn key(&self) -> &Bytes {
+        &self.key
     }
 
     fn into_base_op(self) -> BaseOperation {
@@ -116,8 +117,8 @@ impl ComputeCommand for LPushReq {
 }
 
 impl ComputeCommand for LPopReq {
-    fn key(&self) -> Arc<Vec<u8>> {
-        self.key.clone()
+    fn key(&self) -> &Bytes {
+        &self.key
     }
 
     fn into_base_op(self) -> BaseOperation {
@@ -165,7 +166,7 @@ impl ComputeCommand for LPopReq {
 }
 
 impl ReadCommand for LRangeParams {
-    fn key(&self) -> &Vec<u8> {
+    fn key(&self) -> &Bytes {
         &self.key
     }
 
@@ -189,7 +190,7 @@ impl ReadCommand for LRangeParams {
 }
 
 impl ReadCommand for LLenParams {
-    fn key(&self) -> &Vec<u8> {
+    fn key(&self) -> &Bytes {
         &self.key
     }
 

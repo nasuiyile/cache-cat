@@ -7,16 +7,17 @@ use crate::raft::types::entry::bae_operation::BaseOperation::SetBit;
 use crate::raft::types::entry::bae_operation::SetBitReq;
 use crate::raft::types::entry::request::Operation;
 use async_trait::async_trait;
+use bytes::Bytes;
 use serde::{Deserialize, Serialize};
 use std::fmt::Display;
-use std::sync::Arc;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SetBitParams {
-    pub key: Vec<u8>,
+    pub key: Bytes,
     pub offset: u64,
     pub value: u8, // 0 或 1
 }
+
 impl Display for SetBitParams {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(
@@ -111,7 +112,11 @@ impl SetBitCommand {
             }
         };
 
-        Ok(SetBitParams { key, offset, value })
+        Ok(SetBitParams {
+            key: key.into(),
+            offset,
+            value,
+        })
     }
 }
 
@@ -119,7 +124,7 @@ impl RaftCommand for SetBitCommand {
     fn raft_request(&self, items: &[Value]) -> Result<Operation, ProtocolError> {
         let params = SetBitCommand::parse_args(items)?;
         Ok(Operation::Base(SetBit(SetBitReq {
-            key: Arc::from(params.key),
+            key: params.key,
             offset: params.offset,
             value: params.value,
         })))

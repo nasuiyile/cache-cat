@@ -12,13 +12,14 @@ use crate::raft::types::entry::read_operation::ReadOperation;
 use crate::raft::types::entry::request::Operation;
 
 use async_trait::async_trait;
+use bytes::Bytes;
 use serde::{Deserialize, Serialize};
 use std::fmt::{Display, Formatter};
 
 /// Parsed HKEYS arguments
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct HKeysParams {
-    pub key: Vec<u8>,
+    pub key: Bytes,
 }
 
 impl Display for HKeysParams {
@@ -44,7 +45,7 @@ impl HKeysCommand {
             _ => return Err(ProtocolError::InvalidArgument("key")),
         };
 
-        Ok(HKeysParams { key })
+        Ok(HKeysParams { key: key.into() })
     }
 }
 

@@ -28,10 +28,7 @@ impl PSetExCommand {
             Value::BulkString(Some(data)) => String::from_utf8_lossy(data)
                 .parse::<u64>()
                 .map_err(|_| ProtocolError::NotAnInteger)?,
-            Value::SimpleString(s) => {
-                s.parse::<u64>()
-                    .map_err(|_| ProtocolError::NotAnInteger)?
-            }
+            Value::SimpleString(s) => s.parse::<u64>().map_err(|_| ProtocolError::NotAnInteger)?,
             Value::Integer(i) if *i >= 0 => *i as u64,
             _ => return Err(ProtocolError::NotAnInteger),
         };
@@ -43,7 +40,7 @@ impl PSetExCommand {
         };
 
         Ok(SetParams {
-            key,
+            key: key.into(),
             value,
             mode: None,
             get: false,

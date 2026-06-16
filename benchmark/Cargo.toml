@@ -6,7 +6,10 @@ edition = "2024"
 [dependencies]
 #core_raft = { path = "../core_raft" }
 cache_cat = { path = "../cache_cat" }
-openraft = { git = "https://github.com/databendlabs/openraft", tag = "v0.10.0-alpha.13", features = ["type-alias", "serde"] }
+openraft = { git = "https://github.com/databendlabs/openraft", tag = "v0.10.0-alpha.13", features = [
+    "type-alias",
+    "serde",
+] }
 futures = "0.3.31"
 tracing = "0.1.44"
 serde = "1.0.228"
@@ -15,4 +18,11 @@ tokio = { version = "1.49.0", features = ["rt", "rt-multi-thread", "macros"] }
 
 clap = { version = "4.5.54", features = ["derive"] }
 console-subscriber = "0.5.0"
-redis = { version = "1.2.1", default-features = false, features = ["tokio-comp"] }
+redis = { version = "1.2.1", default-features = false, features = [
+    "tokio-comp",
+] }
+
+bytes = "1.11.1"
+
+[lints]
+workspace = true

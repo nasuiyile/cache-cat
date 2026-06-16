@@ -3,6 +3,7 @@ use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
 
+use bytes::Bytes;
 use cache_cat::raft::network::client::RpcMultiClient;
 use cache_cat::raft::network::model::{GetReq, GetRes};
 use cache_cat::raft::network::pipeline_client::PipelineMultiClient;
@@ -72,7 +73,7 @@ impl BenchmarkWorker for CacheCatWorker {
                         0,
                         Operation::Base(
                             (BaseOperation::Set(SetReq {
-                                key: Arc::from(format!("test{}", request_id).into_bytes()),
+                                key: Bytes::from_owner(format!("test{}", request_id)),
                                 value: Arc::from(format!("test_value_{}", request_id).into_bytes()),
                                 ex_time: 0,
                             })),

@@ -3,9 +3,10 @@ use crate::protocol::command::{Client, Command};
 use crate::protocol::raft_command::RaftCommand;
 use crate::raft::network::redis_server::RedisServer;
 use crate::raft::types::core::response_value::Value;
-use crate::raft::types::entry::request::RedisOperation::RedisSet;
 use crate::raft::types::entry::request::Operation;
+use crate::raft::types::entry::request::RedisOperation::RedisSet;
 use async_trait::async_trait;
+use bytes::Bytes;
 use serde::{Deserialize, Serialize};
 use std::fmt::Display;
 
@@ -40,7 +41,7 @@ pub enum SetMode {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct SetParams {
     /// The key to set
-    pub key: Vec<u8>,
+    pub key: Bytes,
     /// The value to set
     pub value: Vec<u8>,
     /// NX or XX mode (optional)
@@ -64,7 +65,7 @@ impl Display for SetParams {
 
 impl SetParams {
     /// Create a new SetParams with minimal required fields
-    pub fn new(key: impl Into<Vec<u8>>, value: impl Into<Vec<u8>>) -> Self {
+    pub fn new(key: impl Into<Bytes>, value: impl Into<Vec<u8>>) -> Self {
         Self {
             key: key.into(),
             value: value.into(),

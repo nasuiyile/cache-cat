@@ -12,11 +12,11 @@ use crate::raft::types::entry::bae_operation::{
     BaseOperation, DelReq, InsertReq, PExpireReq, PersistReq,
 };
 use crate::raft::types::entry::request::AtomicRequest;
-use std::sync::Arc;
+use bytes::Bytes;
 
 impl ComputeCommand for PExpireReq {
-    fn key(&self) -> Arc<Vec<u8>> {
-        Arc::from(self.key.clone())
+    fn key(&self) -> &Bytes {
+        &self.key
     }
 
     fn into_base_op(self) -> BaseOperation {
@@ -65,8 +65,8 @@ impl ComputeCommand for PExpireReq {
     }
 }
 impl ComputeCommand for PersistReq {
-    fn key(&self) -> Arc<Vec<u8>> {
-        Arc::from(self.key.clone())
+    fn key(&self) -> &Bytes {
+        &self.key
     }
 
     fn into_base_op(self) -> BaseOperation {
@@ -96,8 +96,8 @@ impl ComputeCommand for PersistReq {
 }
 
 impl ComputeCommand for InsertReq {
-    fn key(&self) -> Arc<Vec<u8>> {
-        self.key.clone()
+    fn key(&self) -> &Bytes {
+        &self.key
     }
 
     fn into_base_op(self) -> BaseOperation {
@@ -144,7 +144,7 @@ impl ComputeCommand for InsertReq {
 }
 
 impl MultiReadCommand for ExistsParams {
-    fn keys(&self) -> &Vec<Vec<u8>> {
+    fn keys(&self) -> &Vec<Bytes> {
         &self.keys
     }
 
@@ -169,17 +169,14 @@ impl MyCache {
             Err(err) => return err,
             Ok(cache) => cache,
         };
-        let my_value = match cached.get_entry(&params.key) {
+        let my_value = match cached.mocha.get_entry(&params.key) {
             None => return Value::Error("no such key".to_string()),
             Some(value) => value,
         };
-        let del = DelReq {
-            key: Arc::from(params.key),
-        };
+        let del = DelReq { key: params.key };
         self.del(del, update);
-        let new_key: Arc<Vec<u8>> = Arc::from(params.new_key);
         let insert = InsertReq {
-            key: new_key.clone(),
+            key: params.new_key,
             value: my_value.value.data,
             expires_at: my_value.expire_at.unwrap_or(0),
         };
@@ -198,7 +195,7 @@ impl MyCache {
         }
         let cached = match self.get_cache(update.db_number) {
             Err(err) => return err,
-            Ok(cache) => cache,
+            Ok(cache) => &cache.mocha,
         };
         // Check if new_key already exists - if so, return 0 without renaming
         if cached.get_entry(&params.new_key).is_some() {
@@ -210,15 +207,12 @@ impl MyCache {
             Some(value) => value,
         };
         // Delete the old key
-        let del = DelReq {
-            key: Arc::from(params.key),
-        };
+        let del = DelReq { key: params.key };
         self.del(del, update);
 
         // Insert with the new key
-        let new_key: Arc<Vec<u8>> = Arc::from(params.new_key);
         let insert = InsertReq {
-            key: new_key.clone(),
+            key: params.new_key,
             value: my_value.value.data,
             expires_at: my_value.expire_at.unwrap_or(0),
         };
@@ -234,9 +228,7 @@ impl MyCache {
             let _exclusive_lock = self.read_lock.write();
         }
         for key in params.keys {
-            let del = DelReq {
-                key: Arc::from(key),
-            };
+            let del = DelReq { key };
             match self.del(del, update) {
                 Value::Error(err) => return Value::Error(err),
                 Value::Integer(num) => count = count + num,
@@ -266,7 +258,7 @@ impl MyCache {
     pub fn del(&self, del_req: DelReq, update: &mut Update) -> Value {
         let cache = match self.get_cache(update.db_number) {
             Err(err) => return err,
-            Ok(cache) => cache,
+            Ok(cache) => &cache.mocha,
         };
         //是否删除了元素
         match update.update_type {
@@ -310,6 +302,7 @@ impl MyCache {
             }
         }
     }
+
     pub fn insert(&self, insert_req: InsertReq, update: &mut Update) -> Value {
         self.execute_compute(insert_req, update)
     }

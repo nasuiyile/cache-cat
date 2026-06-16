@@ -19,6 +19,7 @@ use crate::raft::network::redis_server::RedisServer;
 use crate::raft::types::core::response_value::Value;
 use crate::raft::types::entry::read_operation::ReadOperation;
 use async_trait::async_trait;
+use bytes::Bytes;
 use serde::{Deserialize, Serialize};
 use std::fmt::Display;
 
@@ -29,7 +30,7 @@ pub struct ZRangeCommand;
 /// Parsed arguments for ZRANGE
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ZRangeParams {
-    pub key: Vec<u8>,
+    pub key: Bytes,
     pub start: i64,
     pub stop: i64,
     pub with_scores: bool,
@@ -97,13 +98,14 @@ impl ZRangeCommand {
         }
 
         Ok(ZRangeParams {
-            key,
+            key: key.into(),
             start,
             stop,
             with_scores,
         })
     }
 }
+
 impl ReadRaftCommand for ZRangeCommand {
     fn read_operation(&self, items: &[Value]) -> Result<ReadOperation, ProtocolError> {
         Ok(ReadOperation::ZRange(Self::parse_args(items)?))

@@ -5,14 +5,16 @@ use crate::raft::network::redis_server::RedisServer;
 use crate::raft::types::core::response_value::Value;
 use crate::raft::types::entry::read_operation::ReadOperation;
 use async_trait::async_trait;
+use bytes::Bytes;
 use serde::{Deserialize, Serialize};
 use std::fmt::Display;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GetBitParams {
-    pub key: Vec<u8>,
+    pub key: Bytes,
     pub offset: u64,
 }
+
 impl Display for GetBitParams {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(
@@ -72,7 +74,10 @@ impl GetBitCommand {
             }
         };
 
-        Ok(GetBitParams { key, offset })
+        Ok(GetBitParams {
+            key: key.into(),
+            offset,
+        })
     }
 }
 

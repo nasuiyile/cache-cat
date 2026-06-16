@@ -1,9 +1,9 @@
 use crate::raft::types::core::mocha::mocha::{MyCache, MyValue};
 use crate::raft::types::core::response_value::Value;
-use std::sync::Arc;
+use bytes::Bytes;
 
 pub trait ReadCommand: Send + 'static {
-    fn key(&self) -> &Vec<u8>;
+    fn key(&self) -> &Bytes;
 
     fn execute(&self, value: Option<MyValue>) -> Value;
 }
@@ -26,7 +26,7 @@ impl MyCache {
 }
 
 pub trait MultiReadCommand: Send + 'static {
-    fn keys(&self) -> &Vec<Vec<u8>>;
+    fn keys(&self) -> &Vec<Bytes>;
 
     fn execute(&self, values: Vec<Option<MyValue>>) -> Value;
 }
