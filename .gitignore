@@ -40,6 +40,7 @@ Thumbs.db
 *.swp
 *.swo
 *~
+.zed/
 
 # 环境文件
 .env
