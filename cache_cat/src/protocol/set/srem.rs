@@ -7,10 +7,11 @@ use crate::raft::types::entry::bae_operation::BaseOperation::SRem;
 use crate::raft::types::entry::bae_operation::SRemReq;
 use crate::raft::types::entry::request::Operation;
 use async_trait::async_trait;
+use bytes::Bytes;
 use std::sync::Arc;
 
 struct SRemArgs {
-    key: Vec<u8>,
+    key: Bytes,
     members: Vec<Vec<u8>>,
 }
 
@@ -42,7 +43,10 @@ impl SRemCommand {
             members.push(member);
         }
 
-        Ok(SRemArgs { key, members })
+        Ok(SRemArgs {
+            key: key.into(),
+            members,
+        })
     }
 }
 
@@ -57,7 +61,7 @@ impl RaftCommand for SRemCommand {
         }
 
         Ok(Operation::Base(SRem(SRemReq {
-            key: Arc::from(params.key),
+            key: params.key,
             members: elements,
         })))
     }

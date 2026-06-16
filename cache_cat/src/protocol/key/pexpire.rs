@@ -8,12 +8,12 @@ use crate::raft::types::entry::bae_operation::BaseOperation::PExpire;
 use crate::raft::types::entry::bae_operation::PExpireReq;
 use crate::raft::types::entry::request::Operation;
 use async_trait::async_trait;
-use std::sync::Arc;
+use bytes::Bytes;
 
 /// PEXPIRE command parameters
 #[derive(Debug, Clone, PartialEq)]
 pub struct PExpireParams {
-    pub key: Vec<u8>,
+    pub key: Bytes,
     pub milliseconds: u64,
     pub condition: Option<ExpireCondition>,
 }
@@ -56,7 +56,7 @@ impl PExpireParams {
         };
 
         Ok(PExpireParams {
-            key,
+            key: key.into(),
             milliseconds,
             condition,
         })
@@ -80,7 +80,7 @@ impl RaftCommand for PExpireCommand {
     fn raft_request(&self, items: &[Value]) -> Result<Operation, ProtocolError> {
         let params = PExpireParams::parse(items)?;
         let req = PExpireReq {
-            key: Arc::from(params.key),
+            key: params.key,
             expires_at: params.milliseconds,
             condition: params.condition,
         };

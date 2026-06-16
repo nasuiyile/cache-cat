@@ -5,16 +5,19 @@ use crate::raft::network::redis_server::RedisServer;
 use crate::raft::types::core::response_value::Value;
 use crate::raft::types::entry::read_operation::ReadOperation;
 use async_trait::async_trait;
+use bytes::Bytes;
 use serde::{Deserialize, Serialize};
 use std::fmt::Display;
 
 pub struct LRangeCommand;
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LRangeParams {
-    pub key: Vec<u8>,
+    pub key: Bytes,
     pub start: i64,
     pub stop: i64,
 }
+
 impl Display for LRangeParams {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(
@@ -26,6 +29,7 @@ impl Display for LRangeParams {
         )
     }
 }
+
 impl LRangeCommand {
     fn parse_args(items: &[Value]) -> Result<LRangeParams, ProtocolError> {
         if items.len() != 4 {
@@ -41,7 +45,11 @@ impl LRangeCommand {
         let start = parse_i64(&items[2])?;
         let stop = parse_i64(&items[3])?;
 
-        Ok(LRangeParams { key, start, stop })
+        Ok(LRangeParams {
+            key: key.into(),
+            start,
+            stop,
+        })
     }
 }
 

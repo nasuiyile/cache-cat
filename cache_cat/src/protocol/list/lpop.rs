@@ -17,7 +17,7 @@ use crate::raft::types::entry::bae_operation::BaseOperation::LPop;
 use crate::raft::types::entry::bae_operation::LPopReq;
 use crate::raft::types::entry::request::Operation;
 use async_trait::async_trait;
-use std::sync::Arc;
+use bytes::Bytes;
 
 /// LPOP command handler
 pub struct LPopCommand;
@@ -61,13 +61,16 @@ impl LPopCommand {
             None
         };
 
-        Ok(LPopArgs { key, count })
+        Ok(LPopArgs {
+            key: key.into(),
+            count,
+        })
     }
 }
 
 /// Parsed LPOP arguments
 struct LPopArgs {
-    key: Vec<u8>,
+    key: Bytes,
     count: Option<u64>,
 }
 
@@ -76,7 +79,7 @@ impl RaftCommand for LPopCommand {
         let params = Self::parse_args(items)?;
 
         Ok(Operation::Base(LPop(LPopReq {
-            key: Arc::from(params.key),
+            key: params.key,
             count: params.count.unwrap_or(1),
         })))
     }

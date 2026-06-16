@@ -5,14 +5,16 @@ use crate::raft::network::redis_server::RedisServer;
 use crate::raft::types::core::response_value::Value;
 use crate::raft::types::entry::read_operation::ReadOperation;
 use async_trait::async_trait;
+use bytes::Bytes;
 use serde::{Deserialize, Serialize};
 use std::fmt::Display;
 
 /// Parameters for GET command
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct GetParams {
-    pub key: Vec<u8>,
+    pub key: Bytes,
 }
+
 impl Display for GetParams {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "GET {}", String::from_utf8_lossy(&self.key))
@@ -32,7 +34,7 @@ impl GetParams {
             _ => return Err(ProtocolError::InvalidArgument("key")),
         };
 
-        Ok(GetParams { key })
+        Ok(GetParams { key: key.into() })
     }
 }
 
@@ -41,7 +43,7 @@ pub struct GetCommand;
 
 impl ReadRaftCommand for GetCommand {
     fn read_operation(&self, items: &[Value]) -> Result<ReadOperation, ProtocolError> {
-        Ok(ReadOperation::Get(GetParams::parse(items)?) )
+        Ok(ReadOperation::Get(GetParams::parse(items)?))
     }
 }
 

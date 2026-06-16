@@ -1,4 +1,3 @@
-
 #[cfg(test)]
 mod tests {
     use crate::error::Error;
@@ -9,6 +8,7 @@ mod tests {
     use crate::raft::types::entry::request::{Operation, Request};
     use crate::raft::types::raft_types::TypeConfig;
     use crate::utils::now_ms;
+    use bytes::Bytes;
     use openraft::RPCTypes::Vote;
     use openraft::error::Timeout;
     use openraft::raft::{ClientWriteResponse, WriteResult};
@@ -39,7 +39,7 @@ mod tests {
                         0,
                         0,
                         Operation::Base(BaseOperation::Set(SetReq {
-                            key: Arc::from(format!("test_{}", i).into_bytes()),
+                            key: Bytes::from_owner(format!("test_{}", i)),
                             value: Arc::from(format!("test_value_{}", i).into_bytes()),
                             ex_time: 0,
                         })),
@@ -114,7 +114,7 @@ mod tests {
             0,
             0,
             Operation::Base(BaseOperation::Set(SetReq {
-                key: Arc::from(format!("test{}", 1).into_bytes()),
+                key: Bytes::from_owner(format!("test{}", 1)),
                 value: Arc::from(format!("test_value_{}", 1).into_bytes()),
                 ex_time: 0,
             })),

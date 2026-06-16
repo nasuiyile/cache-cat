@@ -1,8 +1,7 @@
 use crate::mocha::EntrySnapshot;
 use crate::raft::types::core::mocha::mocha::{MyCache, MyValue};
-use std::sync::Arc;
-use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use tokio::io;
+use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 
 impl MyCache {
     // 流式序列化：遍历所有分片
@@ -65,7 +64,7 @@ impl MyCache {
                 // 注意：这里需要根据 key 决定插入到哪个分片
                 self.databases[shard_idx]
                     .mocha
-                    .insert_snapshot(Arc::new(key_vec), value);
+                    .insert_snapshot(key_vec.into(), value);
             }
         }
 

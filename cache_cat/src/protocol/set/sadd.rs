@@ -7,10 +7,11 @@ use crate::raft::types::entry::bae_operation::BaseOperation::SAdd;
 use crate::raft::types::entry::bae_operation::SAddReq;
 use crate::raft::types::entry::request::Operation;
 use async_trait::async_trait;
+use bytes::Bytes;
 use std::sync::Arc;
 
 struct SAddArgs {
-    key: Vec<u8>,
+    key: Bytes,
     members: Vec<Vec<u8>>,
 }
 
@@ -39,9 +40,13 @@ impl SAddCommand {
             members.push(member);
         }
 
-        Ok(SAddArgs { key, members })
+        Ok(SAddArgs {
+            key: key.into(),
+            members,
+        })
     }
 }
+
 impl RaftCommand for SAddCommand {
     fn raft_request(&self, items: &[Value]) -> Result<Operation, ProtocolError> {
         let params = Self::parse_args(items)?;
@@ -50,7 +55,7 @@ impl RaftCommand for SAddCommand {
             elements.push(Arc::new(v));
         }
         Ok(Operation::Base(SAdd(SAddReq {
-            key: Arc::from(params.key),
+            key: params.key,
             elements,
         })))
     }
