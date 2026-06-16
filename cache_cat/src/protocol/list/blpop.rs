@@ -16,6 +16,7 @@ use crate::raft::types::core::response_value::Value;
 use crate::raft::types::entry::request::Operation;
 use crate::raft::types::entry::request::RedisOperation::RedisBLPop;
 use async_trait::async_trait;
+use bytes::Bytes;
 use serde::{Deserialize, Serialize};
 use std::fmt::{Display, Formatter};
 use tokio::sync::watch;
@@ -40,7 +41,7 @@ impl BLPopCommand {
                 Value::SimpleString(s) => s.as_bytes().to_vec(),
                 _ => return Err(ProtocolError::InvalidArgument("key")),
             };
-            keys.push(key);
+            keys.push(key.into());
         }
 
         // Parse timeout (last argument)
@@ -71,7 +72,7 @@ impl BLPopCommand {
 /// Parsed BLPOP arguments
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BLPopParams {
-    pub keys: Vec<Vec<u8>>,
+    pub keys: Vec<Bytes>,
     pub timeout: f64,
 }
 

@@ -7,8 +7,8 @@ use crate::raft::types::entry::bae_operation::BaseOperation::PExpire;
 use crate::raft::types::entry::bae_operation::PExpireReq;
 use crate::raft::types::entry::request::Operation;
 use async_trait::async_trait;
+use bytes::Bytes;
 use serde::{Deserialize, Serialize};
-use std::sync::Arc;
 
 /// Expire condition flags (NX, XX, GT, LT)
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -26,7 +26,7 @@ pub enum ExpireCondition {
 /// EXPIRE command parameters
 #[derive(Debug, Clone, PartialEq)]
 pub struct ExpireParams {
-    pub key: Vec<u8>,
+    pub key: Bytes,
     pub seconds: u64,
     pub condition: Option<ExpireCondition>,
 }
@@ -68,7 +68,7 @@ impl ExpireParams {
         };
 
         Ok(ExpireParams {
-            key,
+            key: key.into(),
             seconds,
             condition,
         })
@@ -92,7 +92,7 @@ impl RaftCommand for ExpireCommand {
     fn raft_request(&self, items: &[Value]) -> Result<Operation, ProtocolError> {
         let params = ExpireParams::parse(items)?;
         let req = PExpireReq {
-            key: Arc::from(params.key),
+            key: params.key,
             expires_at: params.seconds * 1000,
             condition: params.condition,
         };

@@ -19,12 +19,12 @@ use crate::raft::types::entry::bae_operation::BaseOperation::Persist;
 use crate::raft::types::entry::bae_operation::PersistReq;
 use crate::raft::types::entry::request::Operation;
 use async_trait::async_trait;
-use std::sync::Arc;
+use bytes::Bytes;
 
 /// PERSIST command parameters
 #[derive(Debug, Clone, PartialEq)]
 pub struct PersistParams {
-    pub key: Vec<u8>,
+    pub key: Bytes,
 }
 
 impl PersistParams {
@@ -41,7 +41,7 @@ impl PersistParams {
             _ => return Err(ProtocolError::InvalidArgument("key")),
         };
 
-        Ok(PersistParams { key })
+        Ok(PersistParams { key: key.into() })
     }
 }
 
@@ -51,9 +51,7 @@ pub struct PersistCommand;
 impl RaftCommand for PersistCommand {
     fn raft_request(&self, items: &[Value]) -> Result<Operation, ProtocolError> {
         let params = PersistParams::parse(items)?;
-        Ok(Operation::Base(Persist(PersistReq {
-            key: Arc::from(params.key),
-        })))
+        Ok(Operation::Base(Persist(PersistReq { key: params.key })))
     }
 }
 

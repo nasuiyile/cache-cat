@@ -14,13 +14,14 @@
 use crate::error::{CacheCatError, ProtocolError};
 use crate::protocol::command::{Client, Command};
 use crate::protocol::raft_command::RaftCommand;
+use crate::raft::network::redis_server::RedisServer;
 use crate::raft::types::core::response_value::Value;
 use crate::raft::types::entry::bae_operation::BaseOperation::RPush;
 use crate::raft::types::entry::bae_operation::RPushReq;
 use crate::raft::types::entry::request::Operation;
 use async_trait::async_trait;
+use bytes::Bytes;
 use std::sync::Arc;
-use crate::raft::network::redis_server::RedisServer;
 
 /// RPUSH command handler
 pub struct RPushCommand;
@@ -54,13 +55,16 @@ impl RPushCommand {
             elements.push(elem);
         }
 
-        Ok(RPushArgs { key, elements })
+        Ok(RPushArgs {
+            key: key.into(),
+            elements,
+        })
     }
 }
 
 /// Parsed RPUSH arguments
 struct RPushArgs {
-    key: Vec<u8>,
+    key: Bytes,
     elements: Vec<Vec<u8>>,
 }
 
@@ -74,7 +78,7 @@ impl RaftCommand for RPushCommand {
         }
 
         Ok(Operation::Base(RPush(RPushReq {
-            key: Arc::from(params.key),
+            key: params.key,
             elements,
         })))
     }
@@ -96,10 +100,7 @@ impl Command for RPushCommand {
 
         // Execute through Raft
         let operation = self.raft_request(items)?;
-        let value = server
-            .app
-            .write(operation, client.db_number)
-            .await?;
+        let value = server.app.write(operation, client.db_number).await?;
 
         Ok(value)
     }

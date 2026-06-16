@@ -20,6 +20,7 @@ use crate::raft::types::entry::bae_operation::BaseOperation::LPush;
 use crate::raft::types::entry::bae_operation::LPushReq;
 use crate::raft::types::entry::request::Operation;
 use async_trait::async_trait;
+use bytes::Bytes;
 use std::sync::Arc;
 
 /// LPUSH command handler
@@ -52,13 +53,16 @@ impl LPushCommand {
             elements.push(elem);
         }
 
-        Ok(LPushArgs { key, elements })
+        Ok(LPushArgs {
+            key: key.into(),
+            elements,
+        })
     }
 }
 
 /// Parsed LPUSH arguments
 struct LPushArgs {
-    key: Vec<u8>,
+    key: Bytes,
     elements: Vec<Vec<u8>>,
 }
 
@@ -70,7 +74,7 @@ impl RaftCommand for LPushCommand {
             elements.push(Arc::new(v));
         }
         Ok(Operation::Base(LPush(LPushReq {
-            key: Arc::from(params.key),
+            key: params.key,
             elements,
         })))
     }

@@ -29,7 +29,7 @@ serde = { version = "1.0.228", features = ["derive"] }
 tokio = { version = "1.50.0", features = ["net", "io-util", "fs", "rt", "rt-multi-thread", "macros", "signal"] }
 tokio-util = { version = "0.7.18", features = ["codec"] }
 bincode2 = "2.0.1"
-bytes = "1.11.1"
+bytes = { version = "1.11.1", features = ["serde"] }
 async-trait = "0.1.89"
 mimalloc = "0.1.50"
 crossbeam-utils = "0.8.21"

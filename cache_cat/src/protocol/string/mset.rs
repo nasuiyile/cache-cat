@@ -5,13 +5,14 @@ use crate::raft::network::redis_server::RedisServer;
 use crate::raft::types::core::response_value::Value;
 use crate::raft::types::entry::request::{Operation, RedisOperation};
 use async_trait::async_trait;
+use bytes::Bytes;
 use serde::{Deserialize, Serialize};
 use std::fmt::{Display, Formatter};
 
 /// Parameters for MSET command
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct MsetParams {
-    pub pairs: Vec<(Vec<u8>, Vec<u8>)>,
+    pub pairs: Vec<(Bytes, Bytes)>,
 }
 
 impl MsetParams {
@@ -40,7 +41,7 @@ impl MsetParams {
                 _ => return Err(ProtocolError::InvalidArgument("value")),
             };
 
-            pairs.push((key, value));
+            pairs.push((key.into(), value.into()));
             i += 2;
         }
 

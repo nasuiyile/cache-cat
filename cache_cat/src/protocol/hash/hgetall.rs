@@ -10,13 +10,14 @@ use crate::raft::network::redis_server::RedisServer;
 use crate::raft::types::core::response_value::Value;
 use crate::raft::types::entry::read_operation::ReadOperation;
 use async_trait::async_trait;
+use bytes::Bytes;
 use serde::{Deserialize, Serialize};
 use std::fmt::{Display, Formatter};
 
 /// Parsed HGETALL arguments
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct HGetAllParams {
-    pub key: Vec<u8>,
+    pub key: Bytes,
 }
 
 impl Display for HGetAllParams {
@@ -42,7 +43,7 @@ impl HGetAllCommand {
             _ => return Err(ProtocolError::InvalidArgument("key")),
         };
 
-        Ok(HGetAllParams { key })
+        Ok(HGetAllParams { key: key.into() })
     }
 }
 

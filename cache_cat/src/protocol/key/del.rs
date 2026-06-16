@@ -17,14 +17,14 @@ use crate::raft::types::entry::bae_operation::DelReq;
 use crate::raft::types::entry::request::Operation;
 use crate::raft::types::entry::request::RedisOperation::RedisDel;
 use async_trait::async_trait;
+use bytes::Bytes;
 use serde::{Deserialize, Serialize};
 use std::fmt::{Display, Formatter};
-use std::sync::Arc;
 
 /// DEL command parameters
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct DelParams {
-    pub keys: Vec<Vec<u8>>,
+    pub keys: Vec<Bytes>,
 }
 
 impl DelParams {
@@ -36,14 +36,14 @@ impl DelParams {
             return Err(ProtocolError::WrongArgCount("del"));
         }
 
-        let mut keys: Vec<Vec<u8>> = Vec::with_capacity(items.len() - 1);
+        let mut keys: Vec<Bytes> = Vec::with_capacity(items.len() - 1);
         for item in items.iter().skip(1) {
             let key = match item {
                 Value::BulkString(Some(data)) => data.clone(),
                 Value::SimpleString(s) => s.as_bytes().to_vec(),
                 _ => return Err(ProtocolError::WrongArgCount("del")),
             };
-            keys.push(key);
+            keys.push(key.into());
         }
 
         Ok(DelParams { keys })
@@ -63,7 +63,7 @@ impl RaftCommand for DelCommand {
         let params = DelParams::parse(items)?;
         let operation = if params.keys.len() == 1 {
             Operation::Base(Del(DelReq {
-                key: Arc::new(params.keys[0].clone()),
+                key: params.keys[0].clone(),
             }))
         } else {
             Operation::Redis(RedisDel(params))

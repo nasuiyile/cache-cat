@@ -7,12 +7,12 @@ use crate::raft::types::entry::bae_operation::BaseOperation::Incr;
 use crate::raft::types::entry::bae_operation::IncrReq;
 use crate::raft::types::entry::request::Operation;
 use async_trait::async_trait;
-use std::sync::Arc;
+use bytes::Bytes;
 
 /// Parameters for INCR command
 #[derive(Debug, Clone, PartialEq)]
 pub struct IncrParams {
-    pub key: Vec<u8>,
+    pub key: Bytes,
 }
 
 impl IncrParams {
@@ -27,7 +27,7 @@ impl IncrParams {
             _ => return Err(ProtocolError::InvalidArgument("key")),
         };
 
-        Ok(IncrParams { key })
+        Ok(IncrParams { key: key.into() })
     }
 }
 
@@ -37,7 +37,7 @@ pub struct IncrCommand;
 impl RaftCommand for IncrCommand {
     fn raft_request(&self, items: &[Value]) -> Result<Operation, ProtocolError> {
         Ok(Operation::Base(Incr(IncrReq {
-            key: Arc::from(IncrParams::parse(items)?.key),
+            key: IncrParams::parse(items)?.key,
             value: 1,
         })))
     }

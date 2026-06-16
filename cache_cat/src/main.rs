@@ -1,3 +1,4 @@
+use bytes::Bytes;
 use cache_cat::config::cli_arg::load_config_with_cli;
 use cache_cat::config::config::Config;
 use cache_cat::node::raft_builder::RaftNodeBuilder;
@@ -14,6 +15,7 @@ use tracing::{error, info};
 
 #[global_allocator]
 static GLOBAL: MiMalloc = MiMalloc;
+
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn Error>> {
     let config = load_config_with_cli()?;
@@ -24,7 +26,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
         .init();
 
     let (_raft_node, mut shutdown_rx) = RaftNodeBuilder::build(&config).await?;
-    config.redis.redis_port;
+    // config.redis.redis_port;
     print_msg(&config);
     // if config.node_id == 1 {
     //     let app_clone = raft_node.app.clone();
@@ -52,6 +54,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
     info!("Server shutdown complete");
     Ok(())
 }
+
 async fn benchmark_requests(apps: Arc<CacheCatApp>) {
     sleep(std::time::Duration::from_secs(3)).await;
     info!("Starting benchmark...");
@@ -69,7 +72,7 @@ async fn benchmark_requests(apps: Arc<CacheCatApp>) {
                     apps_clone.state_machine.data.kvs.get_write_clock(),
                     0,
                     Operation::Base(Set(SetReq {
-                        key: Arc::from((num).to_be_bytes().to_vec()),
+                        key: Bytes::from_owner((num).to_be_bytes().to_vec()),
                         value: Arc::from(Vec::from(format!("value_{}", i))),
                         ex_time: 0,
                     })),
@@ -124,5 +127,4 @@ fn print_msg(config: &Config) {
     );
     println!("Raft Address: {}", config.raft.address);
     println!("Redis Port: {}", config.redis.redis_port);
-
 }

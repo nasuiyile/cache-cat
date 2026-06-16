@@ -20,12 +20,13 @@ use crate::raft::types::entry::bae_operation::BaseOperation::HDel;
 use crate::raft::types::entry::bae_operation::HDelReq;
 use crate::raft::types::entry::request::Operation;
 use async_trait::async_trait;
+use bytes::Bytes;
 use std::sync::Arc;
 
 /// Parsed HDEL arguments
 #[derive(Debug)]
 struct HDelParam {
-    key: Vec<u8>,
+    key: Bytes,
     fields: Vec<Vec<u8>>, // fields to delete
 }
 
@@ -59,7 +60,10 @@ impl HDelCommand {
             fields.push(field);
         }
 
-        Ok(HDelParam { key, fields })
+        Ok(HDelParam {
+            key: key.into(),
+            fields,
+        })
     }
 }
 
@@ -68,7 +72,7 @@ impl RaftCommand for HDelCommand {
         let params = Self::parse_args(items)?;
         let fields: Vec<Arc<Vec<u8>>> = params.fields.into_iter().map(Arc::from).collect();
         let operation = HDel(HDelReq {
-            key: Arc::from(params.key),
+            key: params.key,
             fields,
         });
         Ok(Operation::Base(operation))

@@ -4,10 +4,10 @@ use crate::raft::types::core::response_value::Value;
 use crate::raft::types::core::response_value::Value::Integer;
 use crate::raft::types::entry::bae_operation::BaseOperation;
 use crate::raft::types::entry::request::AtomicRequest;
-use std::sync::Arc;
+use bytes::Bytes;
 
 pub trait ComputeCommand: Send + 'static {
-    fn key(&self) -> Arc<Vec<u8>>;
+    fn key(&self) -> &Bytes;
 
     fn into_base_op(self) -> BaseOperation;
 
@@ -32,14 +32,14 @@ impl MyCache {
             Some(v) => &v.mocha,
         };
 
-        let key = cmd.key();
+        let key = cmd.key().clone();
         let option = cache.get_entry(&key);
         let entry = match option {
             None => {
                 let (new_obj, res) = cmd.init();
                 match new_obj {
                     MochaOperation::Insert { value, expire } => {
-                        cache.insert_entry(key, value, expire);
+                        cache.insert_entry(key.clone(), value, expire);
                     }
                     MochaOperation::Remove => {
                         cache.remove(&key);
@@ -61,7 +61,7 @@ impl MyCache {
                 return_value = res;
                 match changed {
                     MochaOperation::Insert { value, expire } => {
-                        cache.insert_entry(key, value, expire);
+                        cache.insert_entry(key.clone(), value, expire);
                     }
                     MochaOperation::Remove => {
                         cache.remove(&key);
@@ -77,7 +77,7 @@ impl MyCache {
                 match changed {
                     MochaOperation::Insert { value, expire } => {
                         next_version = value.version + 1;
-                        cache.insert_entry(key, value, expire);
+                        cache.insert_entry(key.clone(), value, expire);
                     }
                     MochaOperation::Remove => {
                         cache.remove(&key);
@@ -101,7 +101,7 @@ impl MyCache {
                 match changed {
                     MochaOperation::Insert { mut value, expire } => {
                         value.version += 1;
-                        cache.insert_entry(key, value, expire);
+                        cache.insert_entry(key.clone(), value, expire);
                     }
                     MochaOperation::Remove => {
                         cache.remove(&key);
