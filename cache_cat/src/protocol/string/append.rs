@@ -44,7 +44,9 @@ impl AppendParams {
 
     #[inline]
     pub fn as_str(&self) -> &str {
-        unsafe { str::from_utf8_unchecked(&self.value) }
+        // TODO: unsafe unwrap
+
+        str::from_utf8(&self.value).unwrap()
     }
 }
 

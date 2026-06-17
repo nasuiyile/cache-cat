@@ -85,11 +85,12 @@ pub fn do_request(
                 if external {
                     let _exclusive_lock = my_cache.read_lock.write();
                 }
+                // TODO: unsafe unwrap
                 my_cache
                     .lua_env
                     .exec_lua(
                         my_cache,
-                        unsafe { str::from_utf8_unchecked(&param.script) },
+                        str::from_utf8(&param.script).unwrap(),
                         &param.keys,
                         &param.args,
                         update,

@@ -17,7 +17,8 @@ pub struct ScriptLoadParams {
 impl ScriptLoadParams {
     #[inline]
     pub fn script(&self) -> &str {
-        unsafe { str::from_utf8_unchecked(&self.script) }
+        // TODO: unsafe unwrap
+        str::from_utf8(&self.script).unwrap()
     }
 }
 
@@ -64,10 +65,12 @@ impl fmt::Display for ScriptParam {
                 write!(f, "LOAD {}", params.script())
             }
             ScriptParam::Exists(params) => {
+                // TODO: unsafe unwrap
+
                 let sha1s = params
                     .sha1s
                     .iter()
-                    .map(|bytes| unsafe { str::from_utf8_unchecked(bytes) })
+                    .map(|bytes| str::from_utf8(bytes).unwrap())
                     .collect::<Vec<_>>();
 
                 write!(f, "EXISTS {}", sha1s.join(" "))

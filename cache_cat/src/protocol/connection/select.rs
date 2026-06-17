@@ -22,9 +22,10 @@ impl Command for SelectCommand {
             match &items[1] {
                 Value::Integer(s) => num = *s as u16,
                 Value::SimpleString(s) => {
-                    num = unsafe { str::from_utf8_unchecked(s) }
-                        .parse::<u16>()
-                        .map_err(|_| ProtocolError::SyntaxError)?;
+                    num = str::from_utf8(s)
+                        .ok()
+                        .and_then(|v| v.parse::<u16>().ok())
+                        .ok_or(ProtocolError::SyntaxError)?;
                 }
                 Value::BulkString(Some(bytes)) => {
                     num = std::str::from_utf8(bytes)

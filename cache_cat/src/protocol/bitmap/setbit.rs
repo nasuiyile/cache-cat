@@ -54,10 +54,12 @@ impl SetBitCommand {
                 }
             }
 
-            Value::SimpleString(s) => match unsafe { str::from_utf8_unchecked(s) }.parse::<u8>() {
-                Ok(v) if v <= 1 => Some(v),
-                _ => None,
-            },
+            Value::SimpleString(s) => {
+                match str::from_utf8(s).ok().and_then(|v| v.parse::<u8>().ok()) {
+                    Some(v) if v <= 1 => Some(v),
+                    _ => None,
+                }
+            }
 
             Value::Integer(i) if !(*i < 0 || *i > 1) => Some(*i as u8),
 

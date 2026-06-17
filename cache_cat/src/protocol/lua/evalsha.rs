@@ -110,7 +110,8 @@ impl EvalShaParams {
 
     #[inline]
     pub fn sha1(&self) -> &str {
-        unsafe { str::from_utf8_unchecked(&self.sha1) }
+        // TODO: unsafe unwrap
+        str::from_utf8(&self.sha1).unwrap()
     }
 }
 

@@ -109,7 +109,8 @@ impl EvalParams {
 
     #[inline]
     pub fn script(&self) -> &str {
-        unsafe { str::from_utf8_unchecked(&self.script) }
+        // TODO: unsafe unwrap
+        str::from_utf8(&self.script).unwrap()
     }
 }
 

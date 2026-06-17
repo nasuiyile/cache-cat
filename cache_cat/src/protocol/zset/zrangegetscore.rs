@@ -122,7 +122,11 @@ impl ZRangeByScoreCommand {
                 Self::parse_score_string(&s)
             }
             Value::SimpleString(s) => {
-                Self::parse_score_string(unsafe { str::from_utf8_unchecked(s) })
+                if let Ok(str) = str::from_utf8(s) {
+                    Self::parse_score_string(str)
+                } else {
+                    Err(ProtocolError::InvalidArgument("utf-8"))
+                }
             }
             Value::Integer(n) => Ok(*n as f64),
             _ => Err(ProtocolError::InvalidArgument("score")),
@@ -147,9 +151,11 @@ impl ZRangeByScoreCommand {
                 let s = String::from_utf8_lossy(data);
                 s.parse::<usize>().map_err(|_| ProtocolError::NotAnInteger)
             }
-            Value::SimpleString(s) => unsafe { str::from_utf8_unchecked(s) }
-                .parse::<usize>()
-                .map_err(|_| ProtocolError::NotAnInteger),
+            Value::SimpleString(s) => str::from_utf8(s)
+                .ok()
+                .and_then(|v| v.parse::<usize>().ok())
+                .ok_or(ProtocolError::NotAnInteger),
+
             Value::Integer(n) => {
                 if *n < 0 {
                     return Err(ProtocolError::InvalidArgument("limit"));

@@ -152,7 +152,8 @@ impl Value {
             }
             Value::Error(e) => {
                 let table = lua.create_table()?;
-                table.set("err", unsafe { str::from_utf8_unchecked(&e) })?;
+                // TODO: unsafe unwrap
+                table.set("err", str::from_utf8(&e).unwrap())?;
                 Ok(mlua::Value::Table(table))
             }
             Value::Integer(i) => Ok(mlua::Value::Integer(i)),
@@ -304,16 +305,16 @@ impl Value {
     }
 
     #[inline]
-    pub unsafe fn as_str_unchecked(&self) -> Option<&str> {
+    pub fn as_str_checked(&self) -> Option<&str> {
         self.string_bytes_unchecked()
-            .map(|bytes| unsafe { str::from_utf8_unchecked(bytes) })
+            .and_then(|bytes| str::from_utf8(bytes).ok())
     }
 
     #[inline]
     pub fn as_str_lossy(&self) -> Option<Cow<'_, str>> {
         match self {
             Value::BulkString(Some(data)) => Some(String::from_utf8_lossy(data)),
-            Value::SimpleString(s) => Some(Cow::Borrowed(unsafe { str::from_utf8_unchecked(s) })),
+            Value::SimpleString(s) => Some(Cow::Borrowed(str::from_utf8(s).ok()?)),
             _ => None,
         }
     }
@@ -323,9 +324,7 @@ impl Value {
         match self {
             Value::BulkString(Some(data)) => Some(Some(String::from_utf8_lossy(data))),
             Value::BulkString(None) => Some(None),
-            Value::SimpleString(s) => {
-                Some(Some(Cow::Borrowed(unsafe { str::from_utf8_unchecked(s) })))
-            }
+            Value::SimpleString(s) => Some(Some(Cow::Borrowed(str::from_utf8(s).ok()?))),
 
             _ => None,
         }
@@ -335,7 +334,7 @@ impl Value {
     pub fn as_str(&self) -> Option<&str> {
         match self {
             Value::BulkString(Some(data)) => str::from_utf8(data).ok(),
-            Value::SimpleString(s) => Some(unsafe { str::from_utf8_unchecked(s) }),
+            Value::SimpleString(s) => Some(str::from_utf8(s).ok()?),
             _ => None,
         }
     }
@@ -345,7 +344,7 @@ impl Value {
         match self {
             Value::BulkString(Some(data)) => String::from_utf8_lossy(data).parse::<u64>().ok(),
 
-            Value::SimpleString(s) => unsafe { str::from_utf8_unchecked(s) }.parse::<u64>().ok(),
+            Value::SimpleString(s) => str::from_utf8(s).ok()?.parse::<u64>().ok(),
 
             Value::Integer(i) if *i >= 0 => Some(*i as u64),
 
@@ -363,7 +362,7 @@ impl Value {
         match self {
             Value::BulkString(Some(data)) => String::from_utf8_lossy(data).parse::<usize>().ok(),
 
-            Value::SimpleString(s) => unsafe { str::from_utf8_unchecked(s) }.parse::<usize>().ok(),
+            Value::SimpleString(s) => str::from_utf8(s).ok()?.parse::<usize>().ok(),
 
             Value::Integer(i) if *i >= 0 => Some(*i as usize),
 
@@ -376,7 +375,7 @@ impl Value {
         match self {
             Value::BulkString(Some(data)) => String::from_utf8_lossy(data).parse::<i64>().ok(),
 
-            Value::SimpleString(s) => unsafe { str::from_utf8_unchecked(s) }.parse::<i64>().ok(),
+            Value::SimpleString(s) => str::from_utf8(s).ok()?.parse::<i64>().ok(),
 
             Value::Integer(i) => Some(*i),
 

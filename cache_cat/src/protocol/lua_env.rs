@@ -125,7 +125,8 @@ impl LuaEnv {
                         .map_err(|e| LuaError::external(e))?;
                     let value = do_request(cache, operation, update, false);
                     if let Value::Error(e) = value {
-                        return Err(LuaError::external(unsafe { str::from_utf8_unchecked(&e) }));
+                        // TODO: unsafe unwrap
+                        return Err(LuaError::external(str::from_utf8(&e).unwrap()));
                     }
                     value.into_lua_value(&self.lua)
                 })?;
