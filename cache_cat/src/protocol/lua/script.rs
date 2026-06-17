@@ -16,9 +16,8 @@ pub struct ScriptLoadParams {
 
 impl ScriptLoadParams {
     #[inline]
-    pub fn script(&self) -> &str {
-        // TODO: unsafe unwrap
-        str::from_utf8(&self.script).unwrap()
+    pub fn script(&self) -> Option<&str> {
+        str::from_utf8(&self.script).ok()
     }
 }
 
@@ -62,16 +61,18 @@ impl fmt::Display for ScriptParam {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             ScriptParam::Load(params) => {
-                write!(f, "LOAD {}", params.script())
+                write!(f, "LOAD {}", params.script().ok_or(fmt::Error)?)
             }
             ScriptParam::Exists(params) => {
-                // TODO: unsafe unwrap
-
                 let sha1s = params
                     .sha1s
                     .iter()
-                    .map(|bytes| str::from_utf8(bytes).unwrap())
+                    .map_while(|bytes| str::from_utf8(bytes).ok())
                     .collect::<Vec<_>>();
+
+                if sha1s.len() < params.sha1s.len() {
+                    return Err(fmt::Error);
+                }
 
                 write!(f, "EXISTS {}", sha1s.join(" "))
             }

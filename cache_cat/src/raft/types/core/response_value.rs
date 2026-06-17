@@ -152,8 +152,9 @@ impl Value {
             }
             Value::Error(e) => {
                 let table = lua.create_table()?;
-                // TODO: unsafe unwrap
-                table.set("err", str::from_utf8(&e).unwrap())?;
+
+                let err = str::from_utf8(&e)?;
+                table.set("err", err)?;
                 Ok(mlua::Value::Table(table))
             }
             Value::Integer(i) => Ok(mlua::Value::Integer(i)),

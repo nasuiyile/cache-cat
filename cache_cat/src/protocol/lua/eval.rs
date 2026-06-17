@@ -28,7 +28,7 @@ pub struct EvalParams {
 
 impl Display for EvalParams {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let script = self.script();
+        let script = self.script().ok_or(std::fmt::Error)?;
         let script = if self.script.len() > 20 {
             format_args!("{}...", &script[..20])
         } else {
@@ -108,9 +108,8 @@ impl EvalParams {
     }
 
     #[inline]
-    pub fn script(&self) -> &str {
-        // TODO: unsafe unwrap
-        str::from_utf8(&self.script).unwrap()
+    pub fn script(&self) -> Option<&str> {
+        str::from_utf8(&self.script).ok()
     }
 }
 

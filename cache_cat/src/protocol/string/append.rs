@@ -43,10 +43,8 @@ impl AppendParams {
     }
 
     #[inline]
-    pub fn as_str(&self) -> &str {
-        // TODO: unsafe unwrap
-
-        str::from_utf8(&self.value).unwrap()
+    pub fn as_str(&self) -> Option<&str> {
+        str::from_utf8(&self.value).ok()
     }
 }
 

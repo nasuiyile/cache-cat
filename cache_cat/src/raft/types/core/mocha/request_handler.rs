@@ -1,3 +1,5 @@
+use bytes::Bytes;
+
 use crate::raft::types::core::mocha::mocha::{MyCache, Update};
 use crate::raft::types::core::response_value::Value;
 use crate::raft::types::entry::bae_operation::BaseOperation;
@@ -85,16 +87,16 @@ pub fn do_request(
                 if external {
                     let _exclusive_lock = my_cache.read_lock.write();
                 }
-                // TODO: unsafe unwrap
+
+                let script = match str::from_utf8(&param.script) {
+                    Ok(script) => script,
+
+                    Err(_) => return Value::Error(Bytes::from_static(b"script is not UTF-8")),
+                };
+
                 my_cache
                     .lua_env
-                    .exec_lua(
-                        my_cache,
-                        str::from_utf8(&param.script).unwrap(),
-                        &param.keys,
-                        &param.args,
-                        update,
-                    )
+                    .exec_lua(my_cache, script, &param.keys, &param.args, update)
                     .unwrap_or_else(|err| err.into())
             }
             RedisOperation::RedisExec(param) => {

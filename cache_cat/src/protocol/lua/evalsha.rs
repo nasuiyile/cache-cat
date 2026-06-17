@@ -28,7 +28,7 @@ pub struct EvalShaParams {
 
 impl Display for EvalShaParams {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let sha1 = self.sha1();
+        let sha1 = self.sha1().ok_or(std::fmt::Error)?;
         let sha1 = if self.sha1.len() > 20 {
             format_args!("{}...", &sha1[..20])
         } else {
@@ -109,9 +109,8 @@ impl EvalShaParams {
     }
 
     #[inline]
-    pub fn sha1(&self) -> &str {
-        // TODO: unsafe unwrap
-        str::from_utf8(&self.sha1).unwrap()
+    pub fn sha1(&self) -> Option<&str> {
+        str::from_utf8(&self.sha1).ok()
     }
 }
 
