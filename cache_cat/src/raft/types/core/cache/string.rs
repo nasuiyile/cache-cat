@@ -13,8 +13,7 @@ use crate::raft::types::core::response_value::Value;
 use crate::raft::types::core::value_object::ValueObject;
 use crate::raft::types::entry::bae_operation::{AppendReq, BaseOperation, IncrReq, SetReq};
 use crate::utils::parse_i64;
-use bytes::Bytes;
-use std::sync::Arc;
+use bytes::{Bytes, BytesMut};
 
 impl ComputeCommand for SetReq {
     fn key(&self) -> &Bytes {
@@ -94,14 +93,14 @@ impl ComputeCommand for IncrReq {
                 } else {
                     return (
                         MochaOperation::Abort,
-                        Value::Error("Value is not an integer".to_string()),
+                        Value::Error(Bytes::from_static(b"Value is not an integer")),
                     );
                 }
             }
             _ => {
                 return (
                     MochaOperation::Abort,
-                    Value::Error("Key exists but is not an Integer".to_string()),
+                    Value::Error(Bytes::from_static(b"Key exists but is not an Integer")),
                 );
             }
         };
@@ -143,10 +142,10 @@ impl ComputeCommand for AppendReq {
         match &entry.value.data {
             ValueObject::String(data_arc) => {
                 // 构造新的字符串：原内容 + 追加内容
-                let mut new_buf = (**data_arc).clone();
+                let mut new_buf: BytesMut = data_arc.clone().into();
                 new_buf.extend_from_slice(&self.value);
                 let len = new_buf.len() as i64;
-                let new_value = MyValue::new(ValueObject::String(Arc::new(new_buf)));
+                let new_value = MyValue::new(ValueObject::String(new_buf.freeze()));
                 (
                     MochaOperation::Insert {
                         value: new_value,
@@ -157,7 +156,7 @@ impl ComputeCommand for AppendReq {
             }
             _ => (
                 MochaOperation::Abort,
-                Value::Error("Key exists but is not a String".to_string()),
+                Value::Error(Bytes::from_static(b"Key exists but is not a String")),
             ),
         }
     }
@@ -184,11 +183,9 @@ impl ReadCommand for GetParams {
             None => Value::BulkString(None),
             Some(v) => match v.data {
                 ValueObject::Int(int_value) => {
-                    Value::BulkString(Some(int_value.to_string().into_bytes()))
+                    Value::BulkString(Some(int_value.to_string().into()))
                 }
-                ValueObject::String(str_value) => {
-                    Value::BulkString(Some(str_value.as_ref().clone()))
-                }
+                ValueObject::String(str_value) => Value::BulkString(Some(str_value)),
                 _ => ProtocolError::WrongType.into(),
             },
         }
@@ -213,9 +210,10 @@ impl ReadCommand for StrLenParams {
 }
 
 impl MultiReadCommand for MgetParams {
-    fn keys(&self) -> &Vec<Vec<u8>> {
+    fn keys(&self) -> &Vec<Bytes> {
         &self.keys
     }
+
     fn execute(&self, values: Vec<Option<MyValue>>) -> Value {
         let mut results = Vec::with_capacity(values.len());
 
@@ -225,12 +223,10 @@ impl MultiReadCommand for MgetParams {
 
                 Some(v) => match v.data {
                     ValueObject::Int(int_value) => {
-                        Value::BulkString(Some(int_value.to_string().into_bytes()))
+                        Value::BulkString(Some(int_value.to_string().into()))
                     }
 
-                    ValueObject::String(str_value) => {
-                        Value::BulkString(Some(str_value.as_ref().clone()))
-                    }
+                    ValueObject::String(str_value) => Value::BulkString(Some(str_value)),
 
                     _ => ProtocolError::WrongType.into(),
                 },
@@ -248,7 +244,7 @@ impl MyCache {
         for pair in params.pairs {
             let set = SetReq {
                 key: pair.0,
-                value: Arc::new(pair.1.to_vec()),
+                value: pair.1,
                 ex_time: 0,
             };
             self.set(set, update);
@@ -261,9 +257,9 @@ impl MyCache {
         let now = update.write_clock;
 
         enum ExistingKey {
-            None,               // Key doesn't exist
-            Data(Arc<Vec<u8>>), // Key exists and is a valid string
-            OtherType,          // Key exists but is not a string (Hash, etc.)
+            None,        // Key doesn't exist
+            Data(Bytes), // Key exists and is a valid string
+            OtherType,   // Key exists but is not a string (Hash, etc.)
         }
         let mut existing_key = ExistingKey::None;
 
@@ -280,9 +276,7 @@ impl MyCache {
                     Some(value) => {
                         let ttl_ms = value.expire_at.unwrap_or(0);
                         existing_key = match value.value.data {
-                            ValueObject::Int(v) => {
-                                ExistingKey::Data(Arc::from(v.to_string().into_bytes()))
-                            }
+                            ValueObject::Int(v) => ExistingKey::Data(v.to_string().into()),
                             ValueObject::String(v) => ExistingKey::Data(v),
                             _ => ExistingKey::OtherType,
                         };
@@ -309,9 +303,7 @@ impl MyCache {
                 None => { /* remains None */ }
                 Some(value) => {
                     existing_key = match value.value.data {
-                        ValueObject::Int(v) => {
-                            ExistingKey::Data(Arc::from(v.to_string().into_bytes()))
-                        }
+                        ValueObject::Int(v) => ExistingKey::Data(v.to_string().into()),
                         ValueObject::String(v) => ExistingKey::Data(v),
                         _ => ExistingKey::OtherType,
                     };
@@ -330,7 +322,7 @@ impl MyCache {
                     return if params.get {
                         // GET with NX: return current value if it's a string, otherwise nil
                         match existing_key {
-                            ExistingKey::Data(v) => Value::BulkString(Some(v.as_ref().clone())),
+                            ExistingKey::Data(v) => Value::BulkString(Some(v)),
                             _ => Value::BulkString(None), // Other type, return nil
                         }
                     } else {
@@ -357,14 +349,14 @@ impl MyCache {
         }
         let set = SetReq {
             key: params.key,
-            value: Arc::from(params.value),
+            value: params.value,
             ex_time: expires_at,
         };
         self.set(set, update);
         if params.get {
             // Store the old value for GET option before we overwrite
             match existing_key {
-                ExistingKey::Data(v) => Value::BulkString(Some(v.as_ref().clone())),
+                ExistingKey::Data(v) => Value::BulkString(Some(v)),
                 _ => Value::BulkString(None), // Other type, return nil
             }
         } else {

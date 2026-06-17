@@ -18,7 +18,7 @@ use std::fmt::{Display, Formatter};
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct HGetParams {
     pub key: Bytes,
-    pub field: Vec<u8>,
+    pub field: Bytes,
 }
 
 impl Display for HGetParams {
@@ -45,23 +45,18 @@ impl HGetCommand {
         }
 
         // Parse key
-        let key: Vec<u8> = match &items[1] {
-            Value::BulkString(Some(data)) => data.clone(),
-            Value::SimpleString(s) => s.as_bytes().to_vec(),
-            _ => return Err(ProtocolError::InvalidArgument("key")),
-        };
+        let key = items[1]
+            .string_bytes_unchecked()
+            .ok_or(ProtocolError::InvalidArgument("key"))?
+            .clone();
 
         // Parse field
-        let field = match &items[2] {
-            Value::BulkString(Some(data)) => data.clone(),
-            Value::SimpleString(s) => s.as_bytes().to_vec(),
-            _ => return Err(ProtocolError::InvalidArgument("field")),
-        };
+        let field = items[2]
+            .string_bytes_unchecked()
+            .ok_or(ProtocolError::InvalidArgument("field"))?
+            .clone();
 
-        Ok(HGetParams {
-            key: key.into(),
-            field,
-        })
+        Ok(HGetParams { key, field })
     }
 }
 
@@ -81,7 +76,7 @@ impl Command for HGetCommand {
     ) -> Result<Value, CacheCatError> {
         if let Some(vec) = client.transaction_queue.as_mut() {
             vec.push(self.raft_request(items)?);
-            return Ok(Value::SimpleString(String::from("QUEUED")));
+            return Ok(Value::from_static_string("QUEUED"));
         }
         // Parse arguments
         server

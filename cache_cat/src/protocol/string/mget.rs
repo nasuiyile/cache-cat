@@ -30,14 +30,15 @@ impl MgetParams {
             return Err(ProtocolError::WrongArgCount("MGET"));
         }
 
-        let mut keys = Vec::with_capacity(items.len() - 1);
-        for item in &items[1..] {
-            let key = match item {
-                Value::BulkString(Some(data)) => data.clone(),
-                Value::SimpleString(s) => s.as_bytes().to_vec(),
-                _ => return Err(ProtocolError::InvalidArgument("key")),
-            };
-            keys.push(key.into());
+        let keys = items
+            .iter()
+            .skip(1)
+            .map_while(Value::string_bytes_unchecked)
+            .cloned()
+            .collect::<Vec<_>>();
+
+        if keys.len() < items.len() - 1 {
+            return Err(ProtocolError::InvalidArgument("key"));
         }
 
         Ok(MgetParams { keys })
@@ -63,7 +64,7 @@ impl Command for MgetCommand {
     ) -> Result<Value, CacheCatError> {
         if let Some(vec) = client.transaction_queue.as_mut() {
             vec.push(self.raft_request(items)?);
-            return Ok(Value::SimpleString(String::from("QUEUED")));
+            return Ok(Value::from_static_string("QUEUED"));
         }
         let params = self.read_operation(items)?;
         server.app.multi_read(params, client.db_number).await

@@ -101,9 +101,9 @@ impl ComputeCommand for SAddReq {
             }
             _ => (
                 MochaOperation::Abort,
-                Value::Error(
-                    "WRONGTYPE Operation against a key holding the wrong kind of value".into(),
-                ),
+                Value::Error(Bytes::from_static(
+                    b"WRONGTYPE Operation against a key holding the wrong kind of value",
+                )),
             ),
         }
     }
@@ -137,7 +137,7 @@ impl ReadCommand for SMembersParams {
                     let guard = set.lock();
                     let mut array = Vec::new();
                     for member in guard.iter() {
-                        array.push(Value::BulkString(Some(member.as_ref().clone())));
+                        array.push(Value::BulkString(Some(member.clone())));
                     }
                     Value::Array(Some(array))
                 }

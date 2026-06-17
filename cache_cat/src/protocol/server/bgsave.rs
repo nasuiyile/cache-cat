@@ -23,11 +23,7 @@ impl Command for BgsaveCommand {
         }
         let mut schedule = false;
         if items.len() == 2 {
-            let arg = match &items[1] {
-                Value::BulkString(Some(data)) => String::from_utf8_lossy(data).to_uppercase(),
-                Value::SimpleString(s) => s.to_uppercase(),
-                _ => return Err(CacheCatError::from(ProtocolError::SyntaxError)),
-            };
+            let arg = items[1].as_str_lossy().ok_or(ProtocolError::SyntaxError)?;
             if arg == "SCHEDULE" {
                 schedule = true;
             }

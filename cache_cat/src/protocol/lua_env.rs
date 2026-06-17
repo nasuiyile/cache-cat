@@ -3,6 +3,7 @@ use crate::protocol::raft_command::RaftCommandFactory;
 use crate::raft::types::core::mocha::mocha::{MyCache, Update};
 use crate::raft::types::core::mocha::request_handler::do_request;
 use crate::raft::types::core::response_value::Value;
+use bytes::Bytes;
 use lru::LruCache;
 use mlua::prelude::LuaError;
 use mlua::{HookTriggers, Lua, Value as LuaValue, Variadic, VmState};
@@ -22,7 +23,7 @@ pub struct LuaEnv {
     raft_command: RaftCommandFactory,
     // 脚本内容 → 已编译函数的缓存
     script_cache: Mutex<LruCache<String, mlua::Function>>,
-    pub script_map: Mutex<HashMap<String, String>>,
+    pub script_map: Mutex<HashMap<Bytes, Bytes>>,
     // 运行时设置为false，结束了设置为true
     interrupt_flag: Arc<AtomicBool>,
 }
@@ -75,8 +76,8 @@ impl LuaEnv {
         &self,
         cache: &MyCache,
         script: &str,
-        keys: &[Vec<u8>],
-        args: &[Vec<u8>],
+        keys: &[Bytes],
+        args: &[Bytes],
         update: &mut Update,
     ) -> Result<Value, ProtocolError> {
         self.interrupt_flag.store(false, Ordering::SeqCst);
@@ -110,7 +111,7 @@ impl LuaEnv {
                     }
                     let mut vec = Vec::new();
                     for param in args {
-                        vec.push(Value::SimpleString(param));
+                        vec.push(Value::SimpleString(param.into()));
                     }
 
                     // SAFETY:
@@ -124,7 +125,7 @@ impl LuaEnv {
                         .map_err(|e| LuaError::external(e))?;
                     let value = do_request(cache, operation, update, false);
                     if let Value::Error(e) = value {
-                        return Err(LuaError::external(e));
+                        return Err(LuaError::external(unsafe { str::from_utf8_unchecked(&e) }));
                     }
                     value.into_lua_value(&self.lua)
                 })?;
@@ -140,7 +141,7 @@ impl LuaEnv {
                     }
                     let mut vec = Vec::new();
                     for param in args {
-                        vec.push(Value::SimpleString(param));
+                        vec.push(Value::SimpleString(param.into()));
                     }
                     let update = unsafe { &mut *update_ptr };
                     let result = match self.raft_command.parse_request(&vec) {
@@ -165,7 +166,7 @@ impl LuaEnv {
             // ---- KEYS ----
             let keys_table = self.lua.create_table()?;
             for (i, key) in keys.iter().enumerate() {
-                let lua_key = self.lua.create_string(key.as_slice())?;
+                let lua_key = self.lua.create_string(key)?;
                 keys_table.set(i + 1, lua_key)?;
             }
             self.lua.globals().set("KEYS", keys_table)?;
@@ -173,7 +174,7 @@ impl LuaEnv {
             // ---- ARGV ----
             let argv_table = self.lua.create_table()?;
             for (i, arg) in args.iter().enumerate() {
-                let lua_arg = self.lua.create_string(arg.as_slice())?;
+                let lua_arg = self.lua.create_string(arg)?;
                 argv_table.set(i + 1, lua_arg)?;
             }
             self.lua.globals().set("ARGV", argv_table)?;

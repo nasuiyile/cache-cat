@@ -3,6 +3,7 @@ use crate::protocol::command::{Client, SubCommand};
 use crate::raft::network::redis_server::RedisServer;
 use crate::raft::types::core::response_value::Value;
 use async_trait::async_trait;
+use bytes::Bytes;
 
 // SENTINEL MASTERS
 pub struct SentinelMastersCommand;
@@ -28,26 +29,21 @@ impl SubCommand for SentinelMastersCommand {
         let nodes_num = server.app.cluster.nodes().len();
 
         let mut result = Vec::new();
-        let mut master_info = Vec::new();
-        master_info.push(Value::BulkString(Some(b"name".to_vec())));
-        master_info.push(Value::BulkString(Some(master_name.into_bytes())));
-        master_info.push(Value::BulkString(Some(b"ip".to_vec())));
-        master_info.push(Value::BulkString(Some(endpoint.addr().as_bytes().to_vec())));
-        master_info.push(Value::BulkString(Some(b"port".to_vec())));
-        master_info.push(Value::BulkString(Some(
-            endpoint.redis_port().to_string().into_bytes(),
-        )));
-        master_info.push(Value::BulkString(Some(b"flags".to_vec())));
-        master_info.push(Value::BulkString(Some(flags.to_string().as_bytes().to_vec())));
 
-        master_info.push(Value::BulkString(Some(b"num-other-sentinels".to_vec())));
-        master_info.push(Value::BulkString(Some(
-            nodes_num.to_string().as_bytes().to_vec(),
-        )));
+        let master_info = vec![
+            Value::from_bluk_static_string("name"),
+            Value::BulkString(Some(master_name.into())),
+            Value::from_bluk_static_string("ip"),
+            Value::BulkString(Some(Bytes::copy_from_slice(endpoint.addr().as_bytes()))),
+            Value::from_bluk_static_string("port"),
+            Value::BulkString(Some(endpoint.redis_port().to_string().into())),
+            Value::from_bluk_static_string("flags"),
+            Value::BulkString(Some(flags.to_string().into())),
+            Value::from_bluk_static_string("num-other-sentinels"),
+            Value::BulkString(Some(nodes_num.to_string().into())),
+        ];
 
         result.push(Value::Array(Some(master_info)));
-
-
 
         Ok(Value::Array(Some(result)))
     }

@@ -14,13 +14,12 @@ use crate::raft::types::entry::bae_operation::HIncrReq;
 use crate::raft::types::entry::request::Operation;
 use async_trait::async_trait;
 use bytes::Bytes;
-use std::sync::Arc;
 
 /// Parsed HINCRBY arguments
 #[derive(Debug)]
 struct HIncrByParams {
     key: Bytes,
-    field: Vec<u8>,
+    field: Bytes,
     increment: i64,
 }
 
@@ -37,32 +36,22 @@ impl HIncrByCommand {
         }
 
         // Parse key
-        let key: Vec<u8> = match &items[1] {
-            Value::BulkString(Some(data)) => data.clone(),
-            Value::SimpleString(s) => s.as_bytes().to_vec(),
-            _ => return Err(ProtocolError::InvalidArgument("key")),
-        };
+        let key = items[1]
+            .string_bytes_unchecked()
+            .ok_or(ProtocolError::InvalidArgument("key"))?
+            .clone();
 
         // Parse field
-        let field = match &items[2] {
-            Value::BulkString(Some(data)) => data.clone(),
-            Value::SimpleString(s) => s.as_bytes().to_vec(),
-            _ => return Err(ProtocolError::InvalidArgument("field")),
-        };
+        let field = items[2]
+            .string_bytes_unchecked()
+            .ok_or(ProtocolError::InvalidArgument("field"))?
+            .clone();
 
         // Parse increment
-        let increment = match &items[3] {
-            Value::BulkString(Some(data)) => {
-                let s = String::from_utf8_lossy(data);
-                s.parse::<i64>().map_err(|_| ProtocolError::NotAnInteger)?
-            }
-            Value::SimpleString(s) => s.parse::<i64>().map_err(|_| ProtocolError::NotAnInteger)?,
-            Value::Integer(i) => *i,
-            _ => return Err(ProtocolError::NotAnInteger),
-        };
+        let increment = items[3].try_parse_i64()?;
 
         Ok(HIncrByParams {
-            key: key.into(),
+            key,
             field,
             increment,
         })
@@ -74,7 +63,7 @@ impl RaftCommand for HIncrByCommand {
         let params = Self::parse_args(items)?;
         let operation = HIncr(HIncrReq {
             key: params.key,
-            field: Arc::from(params.field),
+            field: params.field,
             value: params.increment,
         });
         Ok(Operation::Base(operation))
@@ -91,7 +80,7 @@ impl Command for HIncrByCommand {
     ) -> Result<Value, CacheCatError> {
         if let Some(vec) = client.transaction_queue.as_mut() {
             vec.push(self.raft_request(items)?);
-            return Ok(Value::SimpleString(String::from("QUEUED")));
+            return Ok(Value::from_static_string("QUEUED"));
         }
         // Parse arguments
         let operation = self.raft_request(items)?;

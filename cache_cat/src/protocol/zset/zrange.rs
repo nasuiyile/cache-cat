@@ -56,40 +56,20 @@ impl ZRangeCommand {
             return Err(ProtocolError::WrongArgCount("zrange"));
         }
 
-        let key: Vec<u8> = match &items[1] {
-            Value::BulkString(Some(data)) => data.clone(),
-            Value::SimpleString(s) => s.as_bytes().to_vec(),
-            _ => return Err(ProtocolError::InvalidArgument("key")),
-        };
+        let key = items[1]
+            .string_bytes_unchecked()
+            .ok_or(ProtocolError::InvalidArgument("key"))?
+            .clone();
 
-        let start = match &items[2] {
-            Value::BulkString(Some(data)) => {
-                let s = String::from_utf8_lossy(data);
-                s.parse::<i64>().map_err(|_| ProtocolError::NotAnInteger)?
-            }
-            Value::SimpleString(s) => s.parse::<i64>().map_err(|_| ProtocolError::NotAnInteger)?,
-            Value::Integer(n) => *n,
-            _ => return Err(ProtocolError::NotAnInteger),
-        };
-
-        let stop = match &items[3] {
-            Value::BulkString(Some(data)) => {
-                let s = String::from_utf8_lossy(data);
-                s.parse::<i64>().map_err(|_| ProtocolError::NotAnInteger)?
-            }
-            Value::SimpleString(s) => s.parse::<i64>().map_err(|_| ProtocolError::NotAnInteger)?,
-            Value::Integer(n) => *n,
-            _ => return Err(ProtocolError::NotAnInteger),
-        };
+        let start = items[2].try_parse_i64()?;
+        let stop = items[3].try_parse_i64()?;
 
         // Check for WITHSCORES flag
         let mut with_scores = false;
         if items.len() > 4 {
             for item in &items[4..] {
-                let flag = match item {
-                    Value::BulkString(Some(data)) => String::from_utf8_lossy(data).to_string(),
-                    Value::SimpleString(s) => s.clone(),
-                    _ => continue,
+                let Some(flag) = item.as_str_lossy() else {
+                    continue;
                 };
                 if flag.to_uppercase() == "WITHSCORES" {
                     with_scores = true;
@@ -98,7 +78,7 @@ impl ZRangeCommand {
         }
 
         Ok(ZRangeParams {
-            key: key.into(),
+            key,
             start,
             stop,
             with_scores,

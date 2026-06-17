@@ -134,11 +134,11 @@ impl RaftCommandFactory {
     }
 
     pub fn parse_request(&self, items: &[Value]) -> Result<Operation, ProtocolError> {
-        let cmd_name = match &items[0] {
-            Value::BulkString(Some(data)) => String::from_utf8_lossy(data).to_uppercase(),
-            Value::SimpleString(s) => s.to_uppercase(),
-            _ => return Err(ProtocolError::InvalidArgument("command")),
-        };
+        let cmd_name = items[0]
+            .as_str_lossy()
+            .ok_or(ProtocolError::InvalidArgument("command"))?
+            .to_uppercase();
+
         match self.commands.get(&cmd_name) {
             Some(cmd) => match cmd.raft_request(&items) {
                 Ok(v) => Ok(v),

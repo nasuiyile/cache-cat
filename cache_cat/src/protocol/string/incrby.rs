@@ -22,28 +22,16 @@ impl IncrByParams {
             return Err(ProtocolError::WrongArgCount("INCR"));
         }
 
-        let key: Vec<u8> = match &items[1] {
-            Value::BulkString(Some(data)) => data.clone(),
-            Value::SimpleString(s) => s.as_bytes().to_vec(),
-            _ => return Err(ProtocolError::InvalidArgument("key")),
-        };
-        let increment = match &items[2] {
-            Value::BulkString(Some(data)) => {
-                let s = String::from_utf8_lossy(data);
-                s.parse::<i64>()
-                    .map_err(|_| ProtocolError::InvalidArgument("increment"))?
-            }
-            Value::SimpleString(s) => s
-                .parse::<i64>()
-                .map_err(|_| ProtocolError::InvalidArgument("increment"))?,
-            Value::Integer(i) => *i,
-            _ => return Err(ProtocolError::InvalidArgument("increment")),
-        };
+        let key = items[1]
+            .string_bytes_unchecked()
+            .ok_or(ProtocolError::InvalidArgument("key"))?
+            .clone();
 
-        Ok(IncrByParams {
-            key: key.into(),
-            increment,
-        })
+        let increment = items[2]
+            .parse_i64()
+            .ok_or(ProtocolError::InvalidArgument("increment"))?;
+
+        Ok(IncrByParams { key, increment })
     }
 }
 
@@ -70,7 +58,7 @@ impl Command for IncrByCommand {
     ) -> Result<Value, CacheCatError> {
         if let Some(vec) = client.transaction_queue.as_mut() {
             vec.push(self.raft_request(items)?);
-            return Ok(Value::SimpleString(String::from("QUEUED")));
+            return Ok(Value::from_static_string("QUEUED"));
         }
         // Parse arguments
         let operation = self.raft_request(items)?;

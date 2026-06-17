@@ -21,22 +21,19 @@ impl Command for AuthCommand {
             return Err(ProtocolError::WrongArgCount("AUTH").into());
         }
 
-        let password = match &items[1] {
-            Value::BulkString(Some(data)) => String::from_utf8_lossy(data).to_string(),
-            Value::SimpleString(s) => s.clone(),
-            _ => return Err(CacheCatError::from(ProtocolError::SyntaxError)),
-        };
+        let password = items[1].as_str_lossy().ok_or(ProtocolError::SyntaxError)?;
 
-        let configured_password = match &server.app.config.password {
-            Some(p) => p,
-            None => {
-                return Err(
-                    ProtocolError::Custom("AUTH called without any password configured").into(),
-                );
-            }
-        };
+        let configured_password =
+            server
+                .app
+                .config
+                .password
+                .as_ref()
+                .ok_or(ProtocolError::Custom(
+                    "AUTH called without any password configured",
+                ))?;
 
-        if password == *configured_password {
+        if password.as_ref() == configured_password {
             client.authenticated = true;
             Ok(Value::ok())
         } else {

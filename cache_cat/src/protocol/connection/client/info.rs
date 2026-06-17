@@ -79,9 +79,8 @@ impl SubCommand for ClientInfoCommand {
         let psub = server.broadcast.client_pattern_count(client.id).await;
         map.insert("psub".to_string(), psub.to_string());
 
-
         let res = map_to_string(&map);
 
-        Ok(Value::BulkString(Some(res.into_bytes().to_vec())))
+        Ok(Value::BulkString(Some(res.into())))
     }
 }

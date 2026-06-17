@@ -37,13 +37,12 @@ impl HValsCommand {
             return Err(ProtocolError::WrongArgCount("hvals"));
         }
 
-        let key = match &items[1] {
-            Value::BulkString(Some(data)) => data.clone(),
-            Value::SimpleString(s) => s.as_bytes().to_vec(),
-            _ => return Err(ProtocolError::InvalidArgument("key")),
-        };
+        let key = items[1]
+            .string_bytes_unchecked()
+            .ok_or(ProtocolError::InvalidArgument("key"))?
+            .clone();
 
-        Ok(HValsParams { key: key.into() })
+        Ok(HValsParams { key })
     }
 }
 
@@ -63,7 +62,7 @@ impl Command for HValsCommand {
     ) -> Result<Value, CacheCatError> {
         if let Some(vec) = client.transaction_queue.as_mut() {
             vec.push(self.raft_request(items)?);
-            return Ok(Value::SimpleString(String::from("QUEUED")));
+            return Ok(Value::from_static_string("QUEUED"));
         }
         let params = self.read_operation(items)?;
         server.app.read(params, client.db_number).await

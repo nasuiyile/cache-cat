@@ -34,17 +34,13 @@ impl ShutdownParam {
             }
             2 => {
                 // SHUTDOWN with option
-                let arg = match &items[1] {
-                    Value::BulkString(Some(data)) => String::from_utf8_lossy(data).to_uppercase(),
-                    Value::SimpleString(s) => s.to_uppercase(),
-                    _ => {
-                        return Err(ProtocolError::InvalidArgument(
-                            "shutdown expects SAVE or NOSAVE argument",
-                        ));
-                    }
-                };
+                let arg = items[1]
+                    .as_str_lossy()
+                    .ok_or(ProtocolError::InvalidArgument(
+                        "shutdown expects SAVE or NOSAVE argument",
+                    ))?;
 
-                match arg.as_str() {
+                match arg.as_ref() {
                     "SAVE" => Ok(ShutdownParam {
                         option: ShutdownOption::Save,
                     }),
@@ -82,6 +78,6 @@ impl Command for ShutdownCommand {
         };
         server.app.shutdown().await;
         // Return OK response
-        Ok(Value::SimpleString("OK".to_string()))
+        Ok(Value::from_static_string("OK"))
     }
 }

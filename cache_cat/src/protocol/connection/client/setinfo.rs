@@ -15,26 +15,18 @@ impl SubCommand for SetInfoCommand {
         _server: &RedisServer,
     ) -> Result<Value, CacheCatError> {
         if items.len() != 4 {
-            return Err(
-                ProtocolError::WrongArgCount("CLIENT SETINFO").into()
-            );
+            return Err(ProtocolError::WrongArgCount("CLIENT SETINFO").into());
         }
 
-        let field = match &items[2] {
-            Value::BulkString(Some(data)) => {
-                String::from_utf8_lossy(data).to_uppercase()
-            }
-            Value::SimpleString(s) => s.to_uppercase(),
-            _ => return Err(ProtocolError::InvalidArgument("field").into()),
-        };
+        let field = items[2]
+            .as_str_lossy()
+            .ok_or(ProtocolError::InvalidArgument("field"))?
+            .to_uppercase();
 
-        let value = match &items[3] {
-            Value::BulkString(Some(data)) => {
-                String::from_utf8_lossy(data).to_string()
-            }
-            Value::SimpleString(s) => s.clone(),
-            _ => return Err(ProtocolError::InvalidArgument("value").into()),
-        };
+        let value = items[3]
+            .as_str_lossy()
+            .ok_or(ProtocolError::InvalidArgument("value"))?
+            .to_uppercase();
 
         match field.as_str() {
             "LIB-NAME" => {
@@ -44,9 +36,7 @@ impl SubCommand for SetInfoCommand {
                 client.lib_ver = value;
             }
             _ => {
-                return Err(
-                    ProtocolError::InvalidArgument("SETINFO sub-option").into()
-                );
+                return Err(ProtocolError::InvalidArgument("SETINFO sub-option").into());
             }
         }
 

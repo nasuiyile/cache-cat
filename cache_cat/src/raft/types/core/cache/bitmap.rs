@@ -8,7 +8,6 @@ use crate::raft::types::core::response_value::Value;
 use crate::raft::types::core::value_object::ValueObject;
 use crate::raft::types::entry::bae_operation::{BaseOperation, SetBitReq};
 use bytes::Bytes;
-use std::sync::Arc;
 
 impl ComputeCommand for SetBitReq {
     fn key(&self) -> &Bytes {
@@ -26,23 +25,26 @@ impl ComputeCommand for SetBitReq {
     ) -> (MochaOperation<MyValue>, Value) {
         // 获取字符串表示的字节数组
         let bytes = match &entry.value.data {
-            ValueObject::String(data_arc) => (**data_arc).clone(),
+            ValueObject::String(data_arc) => data_arc.clone(),
             ValueObject::Int(int_value) => {
                 // 整数转换为字符串表示
-                int_value.to_string().into_bytes()
+                int_value.to_string().into()
             }
             _ => {
                 return (
                     MochaOperation::Abort,
-                    Value::Error(
-                        "WRONGTYPE Operation against a key holding the wrong kind of value"
-                            .to_string(),
-                    ),
+                    Value::Error(Bytes::from_static(
+                        b"WRONGTYPE Operation against a key holding the wrong kind of value",
+                    )),
                 );
             }
         };
 
-        let mut bytes = bytes;
+        let mut bytes = match bytes.try_into_mut() {
+            Ok(bytes) => bytes,
+            Err(bytes) => bytes.into(),
+        };
+
         let offset = self.offset;
         let bit_value = self.value & 1; // Ensure only 0 or 1
 
@@ -66,7 +68,7 @@ impl ComputeCommand for SetBitReq {
             bytes[byte_index] = old_byte & !(1 << bit_position);
         }
 
-        let new_value = MyValue::new(ValueObject::String(Arc::new(bytes)));
+        let new_value = MyValue::new(ValueObject::String(bytes.freeze()));
         (
             MochaOperation::Insert {
                 value: new_value,
@@ -96,7 +98,7 @@ impl ComputeCommand for SetBitReq {
 
         (
             MochaOperation::Insert {
-                value: MyValue::new(ValueObject::String(Arc::new(bytes))),
+                value: MyValue::new(ValueObject::String(bytes.into())),
                 expire: ExpirePolicy::Persistent,
             },
             Value::Integer(0), // Original bit value is 0 for new key

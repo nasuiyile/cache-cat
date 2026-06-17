@@ -36,32 +36,15 @@ impl LRangeCommand {
             return Err(ProtocolError::WrongArgCount("lrange"));
         }
 
-        let key: Vec<u8> = match &items[1] {
-            Value::BulkString(Some(data)) => data.clone(),
-            Value::SimpleString(s) => s.as_bytes().to_vec(),
-            _ => return Err(ProtocolError::InvalidArgument("key")),
-        };
+        let key = items[1]
+            .string_bytes_unchecked()
+            .ok_or(ProtocolError::InvalidArgument("key"))?
+            .clone();
 
-        let start = parse_i64(&items[2])?;
-        let stop = parse_i64(&items[3])?;
+        let start = items[2].try_parse_i64()?;
+        let stop = items[3].try_parse_i64()?;
 
-        Ok(LRangeParams {
-            key: key.into(),
-            start,
-            stop,
-        })
-    }
-}
-
-fn parse_i64(value: &Value) -> Result<i64, ProtocolError> {
-    match value {
-        Value::BulkString(Some(data)) => {
-            let s = String::from_utf8_lossy(data);
-            s.parse::<i64>().map_err(|_| ProtocolError::NotAnInteger)
-        }
-        Value::SimpleString(s) => s.parse::<i64>().map_err(|_| ProtocolError::NotAnInteger),
-        Value::Integer(n) => Ok(*n),
-        _ => Err(ProtocolError::NotAnInteger),
+        Ok(LRangeParams { key, start, stop })
     }
 }
 
@@ -81,7 +64,7 @@ impl Command for LRangeCommand {
     ) -> Result<Value, CacheCatError> {
         if let Some(vec) = client.transaction_queue.as_mut() {
             vec.push(self.raft_request(items)?);
-            return Ok(Value::SimpleString(String::from("QUEUED")));
+            return Ok(Value::from_static_string("QUEUED"));
         }
         let params = self.read_operation(items)?;
         server.app.read(params, client.db_number).await

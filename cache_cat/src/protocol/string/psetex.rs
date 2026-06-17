@@ -18,29 +18,20 @@ impl PSetExCommand {
             return Err(ProtocolError::WrongArgCount("psetex"));
         }
 
-        let key = match &items[1] {
-            Value::BulkString(Some(data)) => data.clone(),
-            Value::SimpleString(s) => s.as_bytes().to_vec(),
-            _ => return Err(ProtocolError::InvalidArgument("key")),
-        };
+        let key = items[1]
+            .string_bytes_unchecked()
+            .ok_or(ProtocolError::InvalidArgument("key"))?
+            .clone();
 
-        let milliseconds = match &items[2] {
-            Value::BulkString(Some(data)) => String::from_utf8_lossy(data)
-                .parse::<u64>()
-                .map_err(|_| ProtocolError::NotAnInteger)?,
-            Value::SimpleString(s) => s.parse::<u64>().map_err(|_| ProtocolError::NotAnInteger)?,
-            Value::Integer(i) if *i >= 0 => *i as u64,
-            _ => return Err(ProtocolError::NotAnInteger),
-        };
+        let milliseconds = items[2].try_parse_u64()?;
 
-        let value = match &items[3] {
-            Value::BulkString(Some(data)) => data.clone(),
-            Value::SimpleString(s) => s.as_bytes().to_vec(),
-            _ => return Err(ProtocolError::InvalidArgument("value")),
-        };
+        let value = items[3]
+            .string_bytes_unchecked()
+            .ok_or(ProtocolError::InvalidArgument("value"))?
+            .clone();
 
         Ok(SetParams {
-            key: key.into(),
+            key,
             value,
             mode: None,
             get: false,
@@ -66,7 +57,7 @@ impl Command for PSetExCommand {
     ) -> Result<Value, CacheCatError> {
         if let Some(vec) = client.transaction_queue.as_mut() {
             vec.push(self.raft_request(items)?);
-            return Ok(Value::SimpleString("QUEUED".to_string()));
+            return Ok(Value::from_static_string("QUEUED"));
         }
         let params = Self::parse(items)?;
         server

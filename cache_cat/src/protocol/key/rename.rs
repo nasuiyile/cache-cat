@@ -31,24 +31,20 @@ impl RenameParams {
             return Err(ProtocolError::WrongArgCount("rename"));
         }
 
-        let key: Vec<u8> = match &items[1] {
-            Value::BulkString(Some(data)) => data.clone(),
-            Value::SimpleString(s) => s.as_bytes().to_vec(),
-            _ => return Err(ProtocolError::InvalidArgument("rename")),
-        };
+        let key = items[1]
+            .string_bytes_unchecked()
+            .ok_or(ProtocolError::InvalidArgument("rename"))?
+            .clone();
 
-        let new_key = match &items[2] {
-            Value::BulkString(Some(data)) => data.clone(),
-            Value::SimpleString(s) => s.as_bytes().to_vec(),
-            _ => return Err(ProtocolError::InvalidArgument("rename")),
-        };
+        let new_key = items[2]
+            .string_bytes_unchecked()
+            .ok_or(ProtocolError::InvalidArgument("rename"))?
+            .clone();
 
-        Ok(RenameParams {
-            key: key.into(),
-            new_key: new_key.into(),
-        })
+        Ok(RenameParams { key, new_key })
     }
 }
+
 impl Display for RenameParams {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         write!(
@@ -81,7 +77,7 @@ impl Command for RenameCommand {
     ) -> Result<Value, CacheCatError> {
         if let Some(vec) = client.transaction_queue.as_mut() {
             vec.push(self.raft_request(items)?);
-            return Ok(Value::SimpleString(String::from("QUEUED")));
+            return Ok(Value::from_static_string("QUEUED"));
         }
         let operation = self.raft_request(items)?;
         let value = server.app.write(operation, client.db_number).await?;

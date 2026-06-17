@@ -21,13 +21,12 @@ use crate::raft::types::entry::bae_operation::HDelReq;
 use crate::raft::types::entry::request::Operation;
 use async_trait::async_trait;
 use bytes::Bytes;
-use std::sync::Arc;
 
 /// Parsed HDEL arguments
 #[derive(Debug)]
 struct HDelParam {
     key: Bytes,
-    fields: Vec<Vec<u8>>, // fields to delete
+    fields: Vec<Bytes>, // fields to delete
 }
 
 /// HDEL command handler
@@ -38,42 +37,39 @@ impl HDelCommand {
     /// Format: HDEL key field [field ...]
     fn parse_args(items: &[Value]) -> Result<HDelParam, ProtocolError> {
         // Minimum: HDEL key field (3 items)
-        if items.len() < 3 {
+        let len = items.len();
+        if len < 3 {
             return Err(ProtocolError::WrongArgCount("hdel"));
         }
 
         // Parse key
-        let key: Vec<u8> = match &items[1] {
-            Value::BulkString(Some(data)) => data.clone(),
-            Value::SimpleString(s) => s.as_bytes().to_vec(),
-            _ => return Err(ProtocolError::InvalidArgument("key")),
-        };
+        let key = items[1]
+            .string_bytes_unchecked()
+            .ok_or(ProtocolError::InvalidArgument("key"))?
+            .clone();
 
         // Parse fields from items[2..]
-        let mut fields = Vec::with_capacity(items.len() - 2);
-        for i in 2..items.len() {
-            let field = match &items[i] {
-                Value::BulkString(Some(data)) => data.clone(),
-                Value::SimpleString(s) => s.as_bytes().to_vec(),
-                _ => return Err(ProtocolError::InvalidArgument("field")),
-            };
-            fields.push(field);
+        let fields = items
+            .iter()
+            .skip(2)
+            .map_while(Value::string_bytes_unchecked)
+            .cloned()
+            .collect::<Vec<_>>();
+
+        if fields.len() < len - 2 {
+            return Err(ProtocolError::InvalidArgument("field"));
         }
 
-        Ok(HDelParam {
-            key: key.into(),
-            fields,
-        })
+        Ok(HDelParam { key, fields })
     }
 }
 
 impl RaftCommand for HDelCommand {
     fn raft_request(&self, items: &[Value]) -> Result<Operation, ProtocolError> {
         let params = Self::parse_args(items)?;
-        let fields: Vec<Arc<Vec<u8>>> = params.fields.into_iter().map(Arc::from).collect();
         let operation = HDel(HDelReq {
             key: params.key,
-            fields,
+            fields: params.fields,
         });
         Ok(Operation::Base(operation))
     }
@@ -89,7 +85,7 @@ impl Command for HDelCommand {
     ) -> Result<Value, CacheCatError> {
         if let Some(vec) = client.transaction_queue.as_mut() {
             vec.push(self.raft_request(items)?);
-            return Ok(Value::SimpleString(String::from("QUEUED")));
+            return Ok(Value::from_static_string("QUEUED"));
         }
         let operation = self.raft_request(items)?;
         let value = server.app.write(operation, client.db_number).await?;

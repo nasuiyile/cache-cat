@@ -3,6 +3,8 @@ use crate::protocol::command::{Client, Command};
 use crate::raft::network::redis_server::RedisServer;
 use crate::raft::types::core::response_value::Value;
 use async_trait::async_trait;
+use bytes::Bytes;
+use std::borrow::Cow;
 
 /// Parsed HELLO arguments
 #[derive(Debug)]
@@ -72,15 +74,12 @@ impl HelloParam {
 
         // Parse optional AUTH and/or SETNAME
         while idx < items.len() {
-            let option = match &items[idx] {
-                Value::BulkString(Some(data)) => String::from_utf8_lossy(data).to_uppercase(),
-                Value::SimpleString(s) => s.to_uppercase(),
-                _ => {
-                    return Err(ProtocolError::InvalidArgument(
-                        "HELLO option must be AUTH or SETNAME",
-                    ));
-                }
-            };
+            let option = items[idx]
+                .as_str_lossy()
+                .ok_or(ProtocolError::InvalidArgument(
+                    "HELLO option must be AUTH or SETNAME",
+                ))?
+                .to_uppercase();
 
             match option.as_str() {
                 "AUTH" => {
@@ -92,18 +91,12 @@ impl HelloParam {
                     }
 
                     // Parse username (Redis 6+ style) or password (Redis 5 style)
-                    let auth_username = match &items[idx] {
-                        Value::BulkString(Some(data)) => {
-                            Some(String::from_utf8_lossy(data).to_string())
-                        }
-                        Value::BulkString(None) => None,
-                        Value::SimpleString(s) => Some(s.clone()),
-                        _ => {
-                            return Err(ProtocolError::InvalidArgument(
+                    let auth_username =
+                        items[idx]
+                            .try_as_str_lossy()
+                            .ok_or(ProtocolError::InvalidArgument(
                                 "AUTH username must be string",
-                            ));
-                        }
-                    };
+                            ))?;
 
                     idx += 1;
 
@@ -112,20 +105,12 @@ impl HelloParam {
                         return Err(ProtocolError::WrongArgCount("HELLO AUTH missing password"));
                     }
 
-                    let auth_password = match &items[idx] {
-                        Value::BulkString(Some(data)) => String::from_utf8_lossy(data).to_string(),
-                        Value::BulkString(None) => {
-                            return Err(ProtocolError::InvalidArgument(
+                    let auth_password =
+                        items[idx]
+                            .as_str_lossy()
+                            .ok_or(ProtocolError::InvalidArgument(
                                 "AUTH password cannot be null",
-                            ));
-                        }
-                        Value::SimpleString(s) => s.clone(),
-                        _ => {
-                            return Err(ProtocolError::InvalidArgument(
-                                "AUTH password must be string",
-                            ));
-                        }
-                    };
+                            ))?;
 
                     // Redis 6 format with username, or Redis 5 format (username is "default")
                     if auth_username.is_some() {
@@ -142,18 +127,9 @@ impl HelloParam {
                         return Err(ProtocolError::WrongArgCount("HELLO SETNAME"));
                     }
 
-                    let name = match &items[idx] {
-                        Value::BulkString(Some(data)) => {
-                            Some(String::from_utf8_lossy(data).to_string())
-                        }
-                        Value::BulkString(None) => None,
-                        Value::SimpleString(s) => Some(s.clone()),
-                        _ => {
-                            return Err(ProtocolError::InvalidArgument(
-                                "client name must be string",
-                            ));
-                        }
-                    };
+                    let name = items[idx]
+                        .try_as_str_lossy()
+                        .ok_or(ProtocolError::InvalidArgument("client name must be string"))?;
 
                     client_name = name;
                     idx += 1;
@@ -166,9 +142,9 @@ impl HelloParam {
 
         Ok(HelloParam {
             proto_version,
-            username,
-            password,
-            client_name,
+            username: username.map(Cow::into_owned),
+            password: password.map(Cow::into_owned),
+            client_name: client_name.map(Cow::into_owned),
         })
     }
 }
@@ -225,33 +201,33 @@ impl Command for HelloCommand {
 
         // Server info
         response_data.push((
-            "server".to_string(),
-            Value::BulkString(Some(b"redis".to_vec())),
+            Bytes::from_static(b"server"),
+            Value::from_bluk_static_string("redis"),
         ));
         response_data.push((
-            "version".to_string(),
-            Value::BulkString(Some(env!("CARGO_PKG_VERSION").as_bytes().to_vec())),
+            Bytes::from_static(b"version"),
+            Value::from_bluk_static_string(env!("CARGO_PKG_VERSION")),
         ));
 
         // Protocol version
         response_data.push((
-            "proto".to_string(),
+            Bytes::from_static(b"proto"),
             Value::Integer(params.proto_version as i64),
         ));
 
         // Connection ID
-        response_data.push(("id".to_string(), Value::Integer(client.id as i64)));
+        response_data.push((Bytes::from_static(b"id"), Value::Integer(client.id as i64)));
 
         // Mode
         response_data.push((
-            "mode".to_string(),
-            Value::BulkString(Some(b"standalone".to_vec())),
+            Bytes::from_static(b"mode"),
+            Value::from_bluk_static_string("standalone"),
         ));
 
         // Role
         response_data.push((
-            "role".to_string(),
-            Value::BulkString(Some(b"master".to_vec())),
+            Bytes::from_static(b"role"),
+            Value::from_bluk_static_string("master"),
         ));
 
         // Build the response in appropriate format
@@ -259,14 +235,14 @@ impl Command for HelloCommand {
             // RESP3 map format
             let mut map_pairs = Vec::new();
             for (key, value) in response_data {
-                map_pairs.push((Value::BulkString(Some(key.into_bytes())), value));
+                map_pairs.push((Value::BulkString(Some(key)), value));
             }
             Ok(Value::Map(map_pairs))
         } else {
             // RESP2 format - flatten to array of key-value pairs
             let mut arr = Vec::new();
             for (key, value) in response_data {
-                arr.push(Value::BulkString(Some(key.into_bytes())));
+                arr.push(Value::BulkString(Some(key)));
                 arr.push(value);
             }
             Ok(Value::Array(Some(arr)))

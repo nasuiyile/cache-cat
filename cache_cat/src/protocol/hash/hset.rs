@@ -19,13 +19,12 @@ use crate::raft::types::entry::bae_operation::HSetReq;
 use crate::raft::types::entry::request::Operation;
 use async_trait::async_trait;
 use bytes::Bytes;
-use std::sync::Arc;
 
 /// Parsed HSET arguments
 #[derive(Debug)]
 struct HSetParam {
     key: Bytes,
-    fields: Vec<(Vec<u8>, Vec<u8>)>, // (field, value) pairs
+    fields: Vec<(Bytes, Bytes)>, // (field, value) pairs
 }
 
 /// HSET command handler
@@ -41,11 +40,10 @@ impl HSetCommand {
         }
 
         // Parse key
-        let key: Vec<u8> = match &items[1] {
-            Value::BulkString(Some(data)) => data.clone(),
-            Value::SimpleString(s) => s.as_bytes().to_vec(),
-            _ => return Err(ProtocolError::InvalidArgument("key")),
-        };
+        let key = items[1]
+            .string_bytes_unchecked()
+            .ok_or(ProtocolError::InvalidArgument("key"))?
+            .clone();
 
         // Parse field-value pairs from items[2..]
         let field_count = items.len() - 2; // items[2] onwards
@@ -56,39 +54,30 @@ impl HSetCommand {
         let mut fields = Vec::with_capacity(field_count / 2);
         let mut i = 2;
         while i < items.len() {
-            let field = match &items[i] {
-                Value::BulkString(Some(data)) => data.clone(),
-                Value::SimpleString(s) => s.as_bytes().to_vec(),
-                _ => return Err(ProtocolError::InvalidArgument("field")),
-            };
+            let field = items[i]
+                .string_bytes_unchecked()
+                .ok_or(ProtocolError::InvalidArgument("field"))?
+                .clone();
 
-            let value = match &items[i + 1] {
-                Value::BulkString(Some(data)) => data.clone(),
-                Value::SimpleString(s) => s.as_bytes().to_vec(),
-                _ => return Err(ProtocolError::InvalidArgument("value")),
-            };
+            let value = items[i + 1]
+                .string_bytes_unchecked()
+                .ok_or(ProtocolError::InvalidArgument("value"))?
+                .clone();
 
             fields.push((field, value));
             i += 2;
         }
 
-        Ok(HSetParam {
-            key: key.into(),
-            fields,
-        })
+        Ok(HSetParam { key, fields })
     }
 }
 
 impl RaftCommand for HSetCommand {
     fn raft_request(&self, items: &[Value]) -> Result<Operation, ProtocolError> {
         let params = Self::parse_args(items)?;
-        let mut vec = Vec::new();
-        for v in params.fields {
-            vec.push((Arc::new(v.0), Arc::new(v.1)));
-        }
         let operation = HSet(HSetReq {
             key: params.key,
-            elements: vec,
+            elements: params.fields,
         });
         Ok(Operation::Base(operation))
     }
@@ -104,7 +93,7 @@ impl Command for HSetCommand {
     ) -> Result<Value, CacheCatError> {
         if let Some(vec) = client.transaction_queue.as_mut() {
             vec.push(self.raft_request(items)?);
-            return Ok(Value::SimpleString(String::from("QUEUED")));
+            return Ok(Value::from_static_string("QUEUED"));
         }
         let operation = self.raft_request(items)?;
         let value = server.app.write(operation, client.db_number).await?;

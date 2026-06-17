@@ -40,7 +40,7 @@ impl ComputeCommand for ZAddReq {
             }
             _ => (
                 MochaOperation::Abort,
-                Value::Error("zadd: key is not a zset".to_string()),
+                Value::Error(Bytes::from_static(b"zadd: key is not a zset")),
             ),
         }
     }

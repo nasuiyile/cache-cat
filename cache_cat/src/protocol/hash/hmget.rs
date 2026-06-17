@@ -19,7 +19,7 @@ use std::fmt::{Display, Formatter};
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct HMGetParams {
     pub key: Bytes,
-    pub fields: Vec<Vec<u8>>,
+    pub fields: Vec<Bytes>,
 }
 
 impl Display for HMGetParams {
@@ -46,32 +46,32 @@ impl HMGetCommand {
     /// Format: HMGET key field [field ...]
     fn parse_args(items: &[Value]) -> Result<HMGetParams, ProtocolError> {
         // HMGET requires at least key and one field (3 items total)
-        if items.len() < 3 {
+        let len = items.len();
+        if len < 3 {
             return Err(ProtocolError::WrongArgCount("hmget"));
         }
 
-        // Parse key
-        let key: Vec<u8> = match &items[1] {
-            Value::BulkString(Some(data)) => data.clone(),
-            Value::SimpleString(s) => s.as_bytes().to_vec(),
-            _ => return Err(ProtocolError::InvalidArgument("key")),
-        };
+        let mut iter = items.iter().skip(1);
+
+        // Parse key from items[1]
+        let key = iter
+            .next()
+            .expect("there will not be none")
+            .string_bytes_unchecked()
+            .ok_or(ProtocolError::InvalidArgument("key"))?
+            .clone();
 
         // Parse all fields (starting from index 2)
-        let mut fields = Vec::with_capacity(items.len() - 2);
-        for item in &items[2..] {
-            let field = match item {
-                Value::BulkString(Some(data)) => data.clone(),
-                Value::SimpleString(s) => s.as_bytes().to_vec(),
-                _ => return Err(ProtocolError::InvalidArgument("field")),
-            };
-            fields.push(field);
+        let fields = iter
+            .map_while(Value::string_bytes_unchecked)
+            .cloned()
+            .collect::<Vec<_>>();
+
+        if fields.len() < len - 2 {
+            return Err(ProtocolError::InvalidArgument("field"));
         }
 
-        Ok(HMGetParams {
-            key: key.into(),
-            fields,
-        })
+        Ok(HMGetParams { key, fields })
     }
 }
 
@@ -92,7 +92,7 @@ impl Command for HMGetCommand {
     ) -> Result<Value, CacheCatError> {
         if let Some(vec) = client.transaction_queue.as_mut() {
             vec.push(self.raft_request(items)?);
-            return Ok(Value::SimpleString(String::from("QUEUED")));
+            return Ok(Value::from_static_string("QUEUED"));
         }
 
         // Parse arguments

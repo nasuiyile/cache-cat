@@ -144,7 +144,7 @@ impl ComputeCommand for InsertReq {
 }
 
 impl MultiReadCommand for ExistsParams {
-    fn keys(&self) -> &Vec<Vec<u8>> {
+    fn keys(&self) -> &Vec<Bytes> {
         &self.keys
     }
 
@@ -170,7 +170,7 @@ impl MyCache {
             Ok(cache) => cache,
         };
         let my_value = match cached.mocha.get_entry(&params.key) {
-            None => return Value::Error("no such key".to_string()),
+            None => return Value::Error(Bytes::from_static(b"no such key")),
             Some(value) => value,
         };
         let del = DelReq { key: params.key };
@@ -203,7 +203,7 @@ impl MyCache {
         }
         // Check if source key exists
         let my_value = match cached.get_entry(&params.key) {
-            None => return Value::Error("no such key".to_string()),
+            None => return Value::Error(Bytes::from_static(b"no such key")),
             Some(value) => value,
         };
         // Delete the old key

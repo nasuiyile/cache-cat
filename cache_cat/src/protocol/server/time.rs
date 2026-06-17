@@ -37,8 +37,8 @@ impl Command for TimeCommand {
 
         // Return as array: [seconds, microseconds]
         Ok(Value::Array(Some(vec![
-            Value::BulkString(Some(seconds.to_string().into_bytes())),
-            Value::BulkString(Some(microseconds.to_string().into_bytes())),
+            Value::BulkString(Some(seconds.to_string().into())),
+            Value::BulkString(Some(microseconds.to_string().into())),
         ])))
     }
 }

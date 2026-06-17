@@ -40,7 +40,7 @@ mod tests {
                         0,
                         Operation::Base(BaseOperation::Set(SetReq {
                             key: Bytes::from_owner(format!("test_{}", i)),
-                            value: Arc::from(format!("test_value_{}", i).into_bytes()),
+                            value: Bytes::from_owner(format!("test_value_{}", i)),
                             ex_time: 0,
                         })),
                     ),
@@ -115,7 +115,7 @@ mod tests {
             0,
             Operation::Base(BaseOperation::Set(SetReq {
                 key: Bytes::from_owner(format!("test{}", 1)),
-                value: Arc::from(format!("test_value_{}", 1).into_bytes()),
+                value: Bytes::from_owner(format!("test_value_{}", 1)),
                 ex_time: 0,
             })),
         );

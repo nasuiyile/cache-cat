@@ -26,7 +26,7 @@ impl MyCache {
 }
 
 pub trait MultiReadCommand: Send + 'static {
-    fn keys(&self) -> &Vec<Vec<u8>>;
+    fn keys(&self) -> &Vec<Bytes>;
 
     fn execute(&self, values: Vec<Option<MyValue>>) -> Value;
 }

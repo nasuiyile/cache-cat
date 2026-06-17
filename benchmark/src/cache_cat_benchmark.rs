@@ -74,7 +74,7 @@ impl BenchmarkWorker for CacheCatWorker {
                         Operation::Base(
                             (BaseOperation::Set(SetReq {
                                 key: Bytes::from_owner(format!("test{}", request_id)),
-                                value: Arc::from(format!("test_value_{}", request_id).into_bytes()),
+                                value: format!("test_value_{}", request_id).into(),
                                 ex_time: 0,
                             })),
                         ),

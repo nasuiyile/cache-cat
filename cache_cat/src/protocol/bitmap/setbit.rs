@@ -36,87 +36,38 @@ impl SetBitCommand {
             return Err(ProtocolError::WrongArgCount("setbit"));
         }
 
-        let key: Vec<u8> = match &items[1] {
-            Value::BulkString(Some(data)) => data.clone(),
-            Value::SimpleString(s) => s.as_bytes().to_vec(),
-            _ => return Err(ProtocolError::InvalidArgument("setbit")),
-        };
+        let key = items[1]
+            .string_bytes_unchecked()
+            .ok_or(ProtocolError::InvalidArgument("setbit"))?
+            .clone();
 
-        let offset = match &items[2] {
-            Value::BulkString(Some(data)) => {
-                let s = String::from_utf8_lossy(data);
-                match s.parse::<u64>() {
-                    Ok(v) => v,
-                    Err(_) => {
-                        return Err(ProtocolError::Custom(
-                            "ERR bit offset is not an integer or out of range",
-                        ));
-                    }
-                }
-            }
-            Value::SimpleString(s) => match s.parse::<u64>() {
-                Ok(v) => v,
-                Err(_) => {
-                    return Err(ProtocolError::Custom(
-                        "ERR bit offset is not an integer or out of range",
-                    ));
-                }
-            },
-            Value::Integer(i) => {
-                if *i < 0 {
-                    return Err(ProtocolError::Custom(
-                        "ERR bit offset is not an integer or out of range",
-                    ));
-                }
-                *i as u64
-            }
-            _ => {
-                return Err(ProtocolError::Custom(
-                    "ERR bit offset is not an integer or out of range",
-                ));
-            }
-        };
+        let offset = items[2].parse_u64().ok_or(ProtocolError::Custom(
+            "ERR bit offset is not an integer or out of range",
+        ))?;
 
         let value = match &items[3] {
             Value::BulkString(Some(data)) => {
                 let s = String::from_utf8_lossy(data);
                 match s.parse::<u8>() {
-                    Ok(v) if v <= 1 => v,
-                    _ => {
-                        return Err(ProtocolError::Custom(
-                            "ERR bit is not an integer or out of range",
-                        ));
-                    }
+                    Ok(v) if v <= 1 => Some(v),
+                    _ => None,
                 }
             }
-            Value::SimpleString(s) => match s.parse::<u8>() {
-                Ok(v) if v <= 1 => v,
-                _ => {
-                    return Err(ProtocolError::Custom(
-                        "ERR bit is not an integer or out of range",
-                    ));
-                }
-            },
-            Value::Integer(i) => {
-                if *i < 0 || *i > 1 {
-                    return Err(ProtocolError::Custom(
-                        "ERR bit is not an integer or out of range",
-                    ));
-                }
-                *i as u8
-            }
-            _ => {
-                return Err(ProtocolError::Custom(
-                    "ERR bit is not an integer or out of range",
-                ));
-            }
-        };
 
-        Ok(SetBitParams {
-            key: key.into(),
-            offset,
-            value,
-        })
+            Value::SimpleString(s) => match unsafe { str::from_utf8_unchecked(s) }.parse::<u8>() {
+                Ok(v) if v <= 1 => Some(v),
+                _ => None,
+            },
+
+            Value::Integer(i) if !(*i < 0 || *i > 1) => Some(*i as u8),
+
+            _ => None,
+        }
+        .ok_or(ProtocolError::Custom(
+            "ERR bit offset is not an integer or out of range",
+        ))?;
+
+        Ok(SetBitParams { key, offset, value })
     }
 }
 
@@ -141,7 +92,7 @@ impl Command for SetBitCommand {
     ) -> Result<Value, CacheCatError> {
         if let Some(vec) = client.transaction_queue.as_mut() {
             vec.push(self.raft_request(items)?);
-            return Ok(Value::SimpleString(String::from("SETBIT")));
+            return Ok(Value::from_static_string("SETBIT"));
         }
         // Build raft operation
         let operation = self.raft_request(items)?; // Execute write

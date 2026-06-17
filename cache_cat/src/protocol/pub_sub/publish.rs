@@ -13,14 +13,15 @@ use crate::raft::network::model::PublishReq;
 use crate::raft::network::redis_server::RedisServer;
 use crate::raft::types::core::response_value::Value;
 use async_trait::async_trait;
+use bytes::Bytes;
 use serde::{Deserialize, Serialize};
 use std::fmt::{Display, Formatter};
 
 /// PUBLISH command parameters
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct PublishParams {
-    pub channel: Vec<u8>,
-    pub message: Vec<u8>,
+    pub channel: Bytes,
+    pub message: Bytes,
 }
 
 impl PublishParams {
@@ -32,17 +33,15 @@ impl PublishParams {
             return Err(ProtocolError::WrongArgCount("publish"));
         }
 
-        let channel = match &items[1] {
-            Value::BulkString(Some(data)) => data.clone(),
-            Value::SimpleString(s) => s.as_bytes().to_vec(),
-            _ => return Err(ProtocolError::WrongArgCount("publish")),
-        };
+        let channel = items[1]
+            .string_bytes_unchecked()
+            .ok_or(ProtocolError::WrongArgCount("publish"))?
+            .clone();
 
-        let message = match &items[2] {
-            Value::BulkString(Some(data)) => data.clone(),
-            Value::SimpleString(s) => s.as_bytes().to_vec(),
-            _ => return Err(ProtocolError::WrongArgCount("publish")),
-        };
+        let message = items[2]
+            .string_bytes_unchecked()
+            .ok_or(ProtocolError::WrongArgCount("publish"))?
+            .clone();
 
         Ok(PublishParams { channel, message })
     }
@@ -84,6 +83,6 @@ impl Command for PublishCommand {
             _ = s.app.leader_rpc_call::<PublishReq, ()>(11, req).await;
         });
 
-        Ok(Value::SimpleString(String::from("QUEUED")))
+        Ok(Value::from_static_string("QUEUED"))
     }
 }

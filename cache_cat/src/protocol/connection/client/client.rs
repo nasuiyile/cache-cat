@@ -1,12 +1,12 @@
 use crate::error::{CacheCatError, ProtocolError};
 use crate::protocol::command::{Client, Command, SubCommand};
 use crate::protocol::connection::client::info::ClientInfoCommand;
+use crate::protocol::connection::client::setinfo::SetInfoCommand;
+use crate::protocol::connection::client::setname::SetNameCommand;
 use crate::raft::network::redis_server::RedisServer;
 use crate::raft::types::core::response_value::Value;
 use async_trait::async_trait;
 use std::collections::HashMap;
-use crate::protocol::connection::client::setinfo::SetInfoCommand;
-use crate::protocol::connection::client::setname::SetNameCommand;
 
 /// Sentinel command handler
 pub struct ClientCommand {
@@ -35,15 +35,21 @@ impl Command for ClientCommand {
             return Err(ProtocolError::WrongArgCount("CLIENT").into());
         }
 
-        let sub_command = match &items[1] {
-            Value::BulkString(Some(data)) => String::from_utf8_lossy(data).to_uppercase(),
-            Value::SimpleString(s) => s.to_uppercase(),
-            _ => return Err(ProtocolError::InvalidArgument("subcommand").into()),
-        };
+        let sub_command = items[1]
+            .as_str_lossy()
+            .ok_or(ProtocolError::InvalidArgument("subcommand"))?
+            .to_uppercase();
 
         match self.sub_commands.get(&sub_command) {
             Some(cmd) => cmd.execute(client, items, server).await,
             None => Err(ProtocolError::UnknownCommand(format!("CLIENT {}", sub_command)).into()),
         }
+    }
+}
+
+impl Default for ClientCommand {
+    #[inline]
+    fn default() -> Self {
+        Self::new()
     }
 }

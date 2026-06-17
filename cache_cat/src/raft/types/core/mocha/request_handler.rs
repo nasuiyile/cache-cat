@@ -87,7 +87,13 @@ pub fn do_request(
                 }
                 my_cache
                     .lua_env
-                    .exec_lua(my_cache, &*param.script, &param.keys, &param.args, update)
+                    .exec_lua(
+                        my_cache,
+                        unsafe { str::from_utf8_unchecked(&param.script) },
+                        &param.keys,
+                        &param.args,
+                        update,
+                    )
                     .unwrap_or_else(|err| err.into())
             }
             RedisOperation::RedisExec(param) => {

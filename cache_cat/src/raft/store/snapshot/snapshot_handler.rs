@@ -3,7 +3,6 @@ use crate::raft::store::statemachine::SnapshotState::{End, Tail};
 use crate::raft::types::core::mocha::mocha::MyCache;
 use crate::raft::types::entry::request::AtomicRequest;
 use crate::raft::types::raft_types::TypeConfig;
-use bytes::Bytes;
 use openraft::SnapshotMeta;
 use serde::{Deserialize, Serialize};
 use std::io::SeekFrom;
@@ -197,6 +196,8 @@ where
 
 #[tokio::test]
 async fn test_dump_and_load_with_data() {
+    use bytes::Bytes;
+
     pub const TEMP_PATH: &str = r"E:\tmp\raft\raft-engine";
     use crate::raft::types::core::mocha::mocha::MyValue;
     use crate::raft::types::core::value_object::ValueObject;
@@ -206,13 +207,13 @@ async fn test_dump_and_load_with_data() {
     let key1 = Bytes::from_static(b"key1");
     let value1 = MyValue {
         version: 1,
-        data: ValueObject::String(Arc::new(b"value1".to_vec())),
+        data: ValueObject::String(Bytes::from_static(b"value1")),
     };
 
     let key2 = Bytes::from_static(b"key2");
     let value2 = MyValue {
         version: 1,
-        data: ValueObject::String(Arc::new(b"value1".to_vec())),
+        data: ValueObject::String(Bytes::from_static(b"value2")),
     };
 
     cache.databases[0]
@@ -271,14 +272,14 @@ async fn test_dump_and_load_with_data() {
 
     match (&v1.data, &value1.data) {
         (ValueObject::String(a), ValueObject::String(b)) => {
-            assert_eq!(a.as_slice(), b.as_slice(), "key1 value mismatch");
+            assert_eq!(a, b, "key1 value mismatch");
         }
         _ => panic!("key1 type mismatch"),
     }
 
     match (&v2.data, &value2.data) {
         (ValueObject::String(a), ValueObject::String(b)) => {
-            assert_eq!(a.as_slice(), b.as_slice(), "key2 value mismatch");
+            assert_eq!(a, b, "key2 value mismatch");
         }
         _ => panic!("key2 type mismatch"),
     }
