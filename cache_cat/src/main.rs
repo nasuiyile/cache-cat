@@ -73,7 +73,7 @@ async fn benchmark_requests(apps: Arc<CacheCatApp>) {
                     0,
                     Operation::Base(Set(SetReq {
                         key: Bytes::from_owner((num).to_be_bytes().to_vec()),
-                        value: Arc::from(Vec::from(format!("value_{}", i))),
+                        value: format!("value_{}", i).into(),
                         ex_time: 0,
                     })),
                 );

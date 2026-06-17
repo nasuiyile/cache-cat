@@ -1,14 +1,17 @@
+use std::borrow::Cow;
+
+use crate::error::ProtocolError;
+use bytes::{BufMut, Bytes};
 use mlua::{Lua, Value as LuaValue};
 use serde::{Deserialize, Serialize};
-use crate::error::ProtocolError;
 
 /// A response from the KV store.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum Value {
-    SimpleString(String),
-    Error(String),
+    SimpleString(Bytes),
+    Error(Bytes),
     Integer(i64),
-    BulkString(Option<Vec<u8>>),
+    BulkString(Option<Bytes>),
     Array(Option<Vec<Value>>),
     /// Key-value mapping (RESP3: %N map, RESP2: flat array *2N)
     Map(Vec<(Value, Value)>),
@@ -21,11 +24,11 @@ pub enum Value {
 impl Value {
     /// Create a simple OK response
     pub fn ok() -> Self {
-        Value::SimpleString("OK".to_string())
+        Value::SimpleString(Bytes::from_static(b"OK"))
     }
 
     /// Create an error response
-    pub fn error(msg: impl Into<String>) -> Self {
+    pub fn error(msg: impl Into<Bytes>) -> Self {
         Value::Error(msg.into())
     }
 
@@ -33,112 +36,123 @@ impl Value {
     pub fn encode(&self) -> Vec<u8> {
         self.encode_proto(2)
     }
+
     pub fn encode_proto(&self, proto: u8) -> Vec<u8> {
         let mut buf = Vec::new();
         self.encode_to(proto, &mut buf);
         buf
     }
 
-    pub(crate) fn encode_to(&self, proto: u8, buf: &mut Vec<u8>) {
+    pub(crate) fn encode_to(&self, proto: u8, buf: &mut impl BufMut) {
         match self {
             Value::SimpleString(s) => {
-                buf.push(b'+');
-                buf.extend_from_slice(s.as_bytes());
-                buf.extend_from_slice(b"\r\n");
+                buf.put_u8(b'+');
+                buf.put_slice(s);
+                buf.put_slice(b"\r\n");
             }
+
             Value::Error(e) => {
-                buf.push(b'-');
-                buf.extend_from_slice(e.as_bytes());
-                buf.extend_from_slice(b"\r\n");
+                buf.put_u8(b'-');
+                buf.put_slice(e);
+                buf.put_slice(b"\r\n");
             }
+
             Value::Integer(i) => {
-                buf.push(b':');
-                buf.extend_from_slice(i.to_string().as_bytes());
-                buf.extend_from_slice(b"\r\n");
+                buf.put_u8(b':');
+                buf.put_slice(i.to_string().as_bytes());
+                buf.put_slice(b"\r\n");
             }
+
             Value::BulkString(None) => {
                 if proto == 3 {
-                    buf.extend_from_slice(b"_\r\n");
+                    buf.put_slice(b"_\r\n");
                 } else {
-                    buf.extend_from_slice(b"$-1\r\n");
+                    buf.put_slice(b"$-1\r\n");
                 }
             }
+
             Value::BulkString(Some(data)) => {
-                buf.push(b'$');
-                buf.extend_from_slice(data.len().to_string().as_bytes());
-                buf.extend_from_slice(b"\r\n");
-                buf.extend_from_slice(data);
-                buf.extend_from_slice(b"\r\n");
+                buf.put_u8(b'$');
+                buf.put_slice(data.len().to_string().as_bytes());
+                buf.put_slice(b"\r\n");
+                buf.put_slice(data);
+                buf.put_slice(b"\r\n");
             }
+
             Value::Array(None) => {
                 if proto == 3 {
-                    buf.extend_from_slice(b"_\r\n");
+                    buf.put_slice(b"_\r\n");
                 } else {
-                    buf.extend_from_slice(b"*-1\r\n");
+                    buf.put_slice(b"*-1\r\n");
                 }
             }
+
             Value::Array(Some(items)) => {
-                buf.push(b'*');
-                buf.extend_from_slice(items.len().to_string().as_bytes());
-                buf.extend_from_slice(b"\r\n");
+                buf.put_u8(b'*');
+                buf.put_slice(items.len().to_string().as_bytes());
+                buf.put_slice(b"\r\n");
                 for item in items {
                     item.encode_to(proto, buf);
                 }
             }
+
             Value::Map(pairs) => {
                 if proto == 3 {
-                    buf.push(b'%');
-                    buf.extend_from_slice(pairs.len().to_string().as_bytes());
-                    buf.extend_from_slice(b"\r\n");
+                    buf.put_u8(b'%');
+                    buf.put_slice(pairs.len().to_string().as_bytes());
+                    buf.put_slice(b"\r\n");
                 } else {
-                    buf.push(b'*');
-                    buf.extend_from_slice((pairs.len() * 2).to_string().as_bytes());
-                    buf.extend_from_slice(b"\r\n");
+                    buf.put_u8(b'*');
+                    buf.put_slice((pairs.len() * 2).to_string().as_bytes());
+                    buf.put_slice(b"\r\n");
                 }
                 for (k, v) in pairs {
                     k.encode_to(proto, buf);
                     v.encode_to(proto, buf);
                 }
             }
+
             Value::Pairs(pairs) => {
                 if proto == 3 {
-                    buf.push(b'*');
-                    buf.extend_from_slice(pairs.len().to_string().as_bytes());
-                    buf.extend_from_slice(b"\r\n");
+                    buf.put_u8(b'*');
+                    buf.put_slice(pairs.len().to_string().as_bytes());
+                    buf.put_slice(b"\r\n");
                     for (k, v) in pairs {
-                        buf.extend_from_slice(b"*2\r\n");
+                        buf.put_slice(b"*2\r\n");
                         k.encode_to(proto, buf);
                         v.encode_to(proto, buf);
                     }
                 } else {
-                    buf.push(b'*');
-                    buf.extend_from_slice((pairs.len() * 2).to_string().as_bytes());
-                    buf.extend_from_slice(b"\r\n");
+                    buf.put_u8(b'*');
+                    buf.put_slice((pairs.len() * 2).to_string().as_bytes());
+                    buf.put_slice(b"\r\n");
                     for (k, v) in pairs {
                         k.encode_to(proto, buf);
                         v.encode_to(proto, buf);
                     }
                 }
             }
+
             Value::Boolean(val) => {
                 if proto == 3 {
-                    buf.extend_from_slice(if *val { b"#t\r\n" } else { b"#f\r\n" });
+                    buf.put_slice(if *val { b"#t\r\n" } else { b"#f\r\n" });
                 } else {
-                    buf.extend_from_slice(if *val { b":1\r\n" } else { b":0\r\n" });
+                    buf.put_slice(if *val { b":1\r\n" } else { b":0\r\n" });
                 }
             }
         }
     }
+
     pub fn into_lua_value(self, lua: &Lua) -> mlua::Result<mlua::Value> {
         match self {
             Value::SimpleString(s) => {
                 let table = lua.create_table()?;
-                table.set("ok", s)?;
+                table.set("ok", s.to_vec())?;
                 Ok(mlua::Value::Table(table))
             }
             Value::Error(e) => {
                 let table = lua.create_table()?;
-                table.set("err", e)?;
+                table.set("err", unsafe { str::from_utf8_unchecked(&e) })?;
                 Ok(mlua::Value::Table(table))
             }
             Value::Integer(i) => Ok(mlua::Value::Integer(i)),
@@ -160,10 +174,7 @@ impl Value {
                 let table = lua.create_table()?;
 
                 for (k, v) in map {
-                    table.set(
-                        k.into_lua_value(lua)?,
-                        v.into_lua_value(lua)?,
-                    )?;
+                    table.set(k.into_lua_value(lua)?, v.into_lua_value(lua)?)?;
                 }
                 Ok(mlua::Value::Table(table))
             }
@@ -179,17 +190,18 @@ impl Value {
             }
         }
     }
-    pub fn from_lua(lua_val: LuaValue, lua: &Lua) ->  Result<Value, ProtocolError>{
+
+    pub fn from_lua(lua_val: LuaValue, lua: &Lua) -> Result<Value, ProtocolError> {
         match lua_val {
             LuaValue::Nil | LuaValue::Boolean(false) => Ok(Value::BulkString(None)),
             LuaValue::Boolean(true) => Ok(Value::Integer(1)),
             LuaValue::Integer(i) => Ok(Value::Integer(i)),
             LuaValue::Number(n) => {
                 // 浮点数统一转为 BulkString 形式，保持与 Redis 行为一致
-                Ok(Value::BulkString(Some(n.to_string().into_bytes())))
+                Ok(Value::BulkString(Some(n.to_string().into())))
             }
             LuaValue::String(s) => {
-                let bytes = s.as_bytes().to_vec();
+                let bytes = Bytes::copy_from_slice(&s.as_bytes());
                 Ok(Value::BulkString(Some(bytes)))
             }
             LuaValue::Table(t) => {
@@ -205,17 +217,13 @@ impl Value {
                     if let (LuaValue::String(key), value) = &pairs[0] {
                         if key.as_bytes() == b"ok" {
                             if let LuaValue::String(msg) = value {
-                                return Ok(Value::SimpleString(
-                                    String::from_utf8_lossy(msg.as_bytes().as_ref().into())
-                                        .into_owned(),
-                                ));
+                                return Ok(Value::SimpleString(Bytes::copy_from_slice(
+                                    &msg.as_bytes(),
+                                )));
                             }
                         } else if key.as_bytes() == b"err" {
                             if let LuaValue::String(msg) = value {
-                                return Ok(Value::Error(
-                                    String::from_utf8_lossy(msg.as_bytes().as_ref().into())
-                                        .into_owned(),
-                                ));
+                                return Ok(Value::Error(Bytes::copy_from_slice(&msg.as_bytes())));
                             }
                         }
                     }
@@ -260,11 +268,124 @@ impl Value {
                 }
             }
             // 以下类型无法安全映射为 Redis 值，返回错误
-            LuaValue::Error(err) => Ok(Value::Error(err.to_string())),
-            other => Ok(Value::Error(format!(
-                "Cannot convert Lua value to Redis: {:?}",
-                other
-            ))),
+            LuaValue::Error(err) => Ok(Value::Error(err.to_string().into())),
+            other => Ok(Value::Error(
+                format!("Cannot convert Lua value to Redis: {:?}", other).into(),
+            )),
         }
+    }
+
+    #[inline]
+    pub const fn from_static_string(str: &'static str) -> Self {
+        Value::SimpleString(Bytes::from_static(str.as_bytes()))
+    }
+
+    #[inline]
+    pub const fn from_bluk_static_string(str: &'static str) -> Self {
+        Value::BulkString(Some(Bytes::from_static(str.as_bytes())))
+    }
+
+    #[inline]
+    pub const fn string_bytes_unchecked(&self) -> Option<&Bytes> {
+        match self {
+            Value::BulkString(Some(data)) => Some(data),
+            Value::SimpleString(s) => Some(s),
+            _ => None,
+        }
+    }
+
+    #[inline]
+    pub fn string_bytes(&self) -> Option<&Bytes> {
+        match self {
+            Value::BulkString(Some(data)) if str::from_utf8(data).is_ok() => Some(data),
+            Value::SimpleString(s) => Some(s),
+            _ => None,
+        }
+    }
+
+    #[inline]
+    pub unsafe fn as_str_unchecked(&self) -> Option<&str> {
+        self.string_bytes_unchecked()
+            .map(|bytes| unsafe { str::from_utf8_unchecked(bytes) })
+    }
+
+    #[inline]
+    pub fn as_str_lossy(&self) -> Option<Cow<'_, str>> {
+        match self {
+            Value::BulkString(Some(data)) => Some(String::from_utf8_lossy(data)),
+            Value::SimpleString(s) => Some(Cow::Borrowed(unsafe { str::from_utf8_unchecked(s) })),
+            _ => None,
+        }
+    }
+
+    #[inline]
+    pub fn try_as_str_lossy(&self) -> Option<Option<Cow<'_, str>>> {
+        match self {
+            Value::BulkString(Some(data)) => Some(Some(String::from_utf8_lossy(data))),
+            Value::BulkString(None) => Some(None),
+            Value::SimpleString(s) => {
+                Some(Some(Cow::Borrowed(unsafe { str::from_utf8_unchecked(s) })))
+            }
+
+            _ => None,
+        }
+    }
+
+    #[inline]
+    pub fn as_str(&self) -> Option<&str> {
+        match self {
+            Value::BulkString(Some(data)) => str::from_utf8(data).ok(),
+            Value::SimpleString(s) => Some(unsafe { str::from_utf8_unchecked(s) }),
+            _ => None,
+        }
+    }
+
+    #[inline]
+    pub fn parse_u64(&self) -> Option<u64> {
+        match self {
+            Value::BulkString(Some(data)) => String::from_utf8_lossy(data).parse::<u64>().ok(),
+
+            Value::SimpleString(s) => unsafe { str::from_utf8_unchecked(s) }.parse::<u64>().ok(),
+
+            Value::Integer(i) if *i >= 0 => Some(*i as u64),
+
+            _ => None,
+        }
+    }
+
+    #[inline]
+    pub fn try_parse_u64(&self) -> Result<u64, ProtocolError> {
+        self.parse_u64().ok_or(ProtocolError::NotAnInteger)
+    }
+
+    #[inline]
+    pub fn parse_usize(&self) -> Option<usize> {
+        match self {
+            Value::BulkString(Some(data)) => String::from_utf8_lossy(data).parse::<usize>().ok(),
+
+            Value::SimpleString(s) => unsafe { str::from_utf8_unchecked(s) }.parse::<usize>().ok(),
+
+            Value::Integer(i) if *i >= 0 => Some(*i as usize),
+
+            _ => None,
+        }
+    }
+
+    #[inline]
+    pub fn parse_i64(&self) -> Option<i64> {
+        match self {
+            Value::BulkString(Some(data)) => String::from_utf8_lossy(data).parse::<i64>().ok(),
+
+            Value::SimpleString(s) => unsafe { str::from_utf8_unchecked(s) }.parse::<i64>().ok(),
+
+            Value::Integer(i) => Some(*i),
+
+            _ => None,
+        }
+    }
+
+    #[inline]
+    pub fn try_parse_i64(&self) -> Result<i64, ProtocolError> {
+        self.parse_i64().ok_or(ProtocolError::NotAnInteger)
     }
 }

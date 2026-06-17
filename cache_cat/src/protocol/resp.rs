@@ -1,3 +1,5 @@
+use bytes::Bytes;
+
 use crate::raft::types::core::response_value::Value;
 
 pub struct Parser;
@@ -13,6 +15,7 @@ impl Parser {
         let result = Self::parse_value(buffer, &mut pos)?;
         Some((result, pos))
     }
+
     fn parse_value(buffer: &[u8], pos: &mut usize) -> Option<Value> {
         if *pos >= buffer.len() {
             return None;
@@ -30,16 +33,19 @@ impl Parser {
             _ => None,
         }
     }
+
     fn parse_simple_string(buffer: &[u8], pos: &mut usize) -> Option<Value> {
         let line = Self::read_line(buffer, pos)?;
-        Some(Value::SimpleString(
-            String::from_utf8_lossy(line).to_string(),
-        ))
+        Some(Value::SimpleString(Bytes::copy_from_slice(
+            String::from_utf8_lossy(line).as_bytes(),
+        )))
     }
 
     fn parse_error(buffer: &[u8], pos: &mut usize) -> Option<Value> {
         let line = Self::read_line(buffer, pos)?;
-        Some(Value::Error(String::from_utf8_lossy(line).to_string()))
+        Some(Value::Error(Bytes::copy_from_slice(
+            String::from_utf8_lossy(line).as_bytes(),
+        )))
     }
 
     fn parse_integer(buffer: &[u8], pos: &mut usize) -> Option<Value> {
@@ -67,7 +73,7 @@ impl Parser {
             return None;
         }
 
-        let data = buffer[*pos..*pos + len].to_vec();
+        let data = Bytes::copy_from_slice(&buffer[*pos..*pos + len]);
         *pos += len + 2; // +2 for \r\n
 
         Some(Value::BulkString(Some(data)))

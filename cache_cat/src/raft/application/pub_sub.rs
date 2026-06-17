@@ -1,4 +1,5 @@
 use crate::raft::types::core::response_value::Value;
+use bytes::Bytes;
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use tokio::sync::{RwLock, watch};
@@ -7,15 +8,15 @@ use tokio::sync::{RwLock, watch};
 struct ClientState {
     sender: watch::Sender<Option<Value>>,
     // 记录该客户端订阅了哪些频道，用于退订所有频道时清理
-    subscribed_channels: HashSet<Vec<u8>>,
-    subscribed_patterns: HashSet<Vec<u8>>,
+    subscribed_channels: HashSet<Bytes>,
+    subscribed_patterns: HashSet<Bytes>,
 }
 
 pub struct PubSub {
     /// 精确频道订阅：频道 -> 订阅的客户端ID集合
-    subs: Arc<RwLock<HashMap<Vec<u8>, HashSet<u64>>>>,
+    subs: Arc<RwLock<HashMap<Bytes, HashSet<u64>>>>,
     /// 模式订阅：模式 -> 订阅的客户端ID集合
-    patterns: Arc<RwLock<HashMap<Vec<u8>, HashSet<u64>>>>,
+    patterns: Arc<RwLock<HashMap<Bytes, HashSet<u64>>>>,
     /// 客户端状态管理：client_id -> ClientState
     clients: Arc<RwLock<HashMap<u64, ClientState>>>,
 }
@@ -48,7 +49,7 @@ impl PubSub {
     /// 订阅多个精确频道
     pub async fn subscribe(
         &self,
-        channels: Vec<Vec<u8>>,
+        channels: Vec<Bytes>,
         client_id: u64,
     ) -> (Value, watch::Receiver<Option<Value>>) {
         let rx = self.get_or_create_client(client_id).await;
@@ -76,20 +77,20 @@ impl PubSub {
     }
 
     /// 订阅单个精确频道
-    async fn subscribe_single(&self, channel: Vec<u8>, client_id: u64) -> Value {
+    async fn subscribe_single(&self, channel: Bytes, client_id: u64) -> Value {
         let mut subs = self.subs.write().await;
         subs.entry(channel.clone()).or_default().insert(client_id);
 
         let count = subs.get(&channel).map(|s| s.len()).unwrap_or(0) as i64;
         Value::Array(Some(vec![
-            Value::SimpleString("subscribe".to_string()),
+            Value::from_static_string("subscribe"),
             Value::BulkString(Some(channel)),
             Value::Integer(count),
         ]))
     }
 
     /// 退订多个精确频道
-    pub async fn unsubscribe(&self, channels: Vec<Vec<u8>>, client_id: u64) -> Value {
+    pub async fn unsubscribe(&self, channels: Vec<Bytes>, client_id: u64) -> Value {
         let mut responses = Vec::new();
         for channel in &channels {
             let resp = self.unsubscribe_single(channel.clone(), client_id).await;
@@ -114,7 +115,7 @@ impl PubSub {
     }
 
     /// 退订单个精确频道
-    async fn unsubscribe_single(&self, channel: Vec<u8>, client_id: u64) -> Value {
+    async fn unsubscribe_single(&self, channel: Bytes, client_id: u64) -> Value {
         let mut subs = self.subs.write().await;
         match subs.get_mut(&channel) {
             Some(set) => {
@@ -127,13 +128,13 @@ impl PubSub {
                 // 修复：如果客户端实际订阅了这个频道，返回移除前的计数
                 // 如果没有订阅（不应该发生，但做防护），返回 0
                 Value::Array(Some(vec![
-                    Value::SimpleString("unsubscribe".to_string()),
+                    Value::from_static_string("unsubscribe"),
                     Value::BulkString(Some(channel)),
                     Value::Integer(if existed { count } else { 0 }),
                 ]))
             }
             None => Value::Array(Some(vec![
-                Value::SimpleString("unsubscribe".to_string()),
+                Value::from_static_string("unsubscribe"),
                 Value::BulkString(Some(channel)),
                 Value::Integer(0),
             ])),
@@ -169,7 +170,7 @@ impl PubSub {
                     subs.remove(channel);
                 }
                 responses.push(Value::Array(Some(vec![
-                    Value::SimpleString("unsubscribe".to_string()),
+                    Value::from_static_string("unsubscribe"),
                     Value::BulkString(Some(channel.clone())),
                     Value::Integer(count),
                 ])));
@@ -193,7 +194,7 @@ impl PubSub {
     /// 订阅多个模式
     pub async fn psubscribe(
         &self,
-        patterns: Vec<Vec<u8>>,
+        patterns: Vec<Bytes>,
         client_id: u64,
     ) -> (Value, watch::Receiver<Option<Value>>) {
         let rx = self.get_or_create_client(client_id).await;
@@ -222,7 +223,7 @@ impl PubSub {
     }
 
     /// 订阅单个模式
-    async fn psubscribe_single(&self, pattern: Vec<u8>, client_id: u64) -> Value {
+    async fn psubscribe_single(&self, pattern: Bytes, client_id: u64) -> Value {
         let mut patterns = self.patterns.write().await;
         patterns
             .entry(pattern.clone())
@@ -231,13 +232,13 @@ impl PubSub {
 
         let count = patterns.get(&pattern).map(|s| s.len()).unwrap_or(0) as i64;
         Value::Array(Some(vec![
-            Value::SimpleString("psubscribe".to_string()),
+            Value::from_static_string("psubscribe"),
             Value::BulkString(Some(pattern)),
             Value::Integer(count),
         ]))
     }
 
-    pub async fn publish(&self, channel: &[u8], message_content: Vec<u8>) -> Value {
+    pub async fn publish(&self, channel: &[u8], message_content: Bytes) -> Value {
         let mut delivered_clients = HashSet::new();
 
         // 精确频道订阅者
@@ -248,13 +249,13 @@ impl PubSub {
 
         // 构建精确订阅消息
         let exact_msg = Value::Array(Some(vec![
-            Value::SimpleString("message".to_string()),
-            Value::BulkString(Some(channel.to_vec())),
+            Value::from_static_string("message"),
+            Value::BulkString(Some(Bytes::copy_from_slice(channel))),
             Value::BulkString(Some(message_content.clone())),
         ]));
 
         // 收集所有匹配的模式及其订阅者
-        let mut pattern_targets: Vec<(Vec<u8>, HashSet<u64>)> = Vec::new();
+        let mut pattern_targets: Vec<(Bytes, HashSet<u64>)> = Vec::new();
         {
             let patterns = self.patterns.read().await;
             for (pattern, set) in patterns.iter() {
@@ -278,9 +279,9 @@ impl PubSub {
         // 发送给模式订阅者（每个模式使用独立的 pmessage 格式）
         for (pattern, set) in &pattern_targets {
             let pmessage = Value::Array(Some(vec![
-                Value::SimpleString("pmessage".to_string()),
+                Value::from_static_string("pmessage"),
                 Value::BulkString(Some(pattern.clone())),
-                Value::BulkString(Some(channel.to_vec())),
+                Value::BulkString(Some(Bytes::copy_from_slice(channel))),
                 Value::BulkString(Some(message_content.clone())),
             ]));
             for client_id in set {
@@ -324,7 +325,7 @@ impl PubSub {
     }
 
     /// 退订多个模式（外部调用）
-    pub async fn punsubscribe(&self, patterns: Vec<Vec<u8>>, client_id: u64) -> Value {
+    pub async fn punsubscribe(&self, patterns: Vec<Bytes>, client_id: u64) -> Value {
         let mut responses = Vec::new();
         for pattern in &patterns {
             let resp = self.punsubscribe_single(pattern.clone(), client_id).await;
@@ -348,7 +349,7 @@ impl PubSub {
     }
 
     /// 退订单个模式（内部辅助）
-    async fn punsubscribe_single(&self, pattern: Vec<u8>, client_id: u64) -> Value {
+    async fn punsubscribe_single(&self, pattern: Bytes, client_id: u64) -> Value {
         let mut patterns = self.patterns.write().await;
         match patterns.get_mut(&pattern) {
             Some(set) => {
@@ -359,13 +360,13 @@ impl PubSub {
                 }
                 // 如果实际取消了订阅，返回移除前计数；否则（未订阅此模式）返回 0
                 Value::Array(Some(vec![
-                    Value::SimpleString("punsubscribe".to_string()),
+                    Value::from_static_string("punsubscribe"),
                     Value::BulkString(Some(pattern)),
                     Value::Integer(if existed { count } else { 0 }),
                 ]))
             }
             None => Value::Array(Some(vec![
-                Value::SimpleString("punsubscribe".to_string()),
+                Value::from_static_string("punsubscribe"),
                 Value::BulkString(Some(pattern)),
                 Value::Integer(0),
             ])),
@@ -401,7 +402,7 @@ impl PubSub {
                     pats.remove(pattern);
                 }
                 responses.push(Value::Array(Some(vec![
-                    Value::SimpleString("punsubscribe".to_string()),
+                    Value::from_static_string("punsubscribe"),
                     Value::BulkString(Some(pattern.clone())),
                     Value::Integer(count),
                 ])));
@@ -441,7 +442,7 @@ impl PubSub {
 
     /// PUBSUB NUMSUB [channel [channel ...]]
     /// 返回指定频道的订阅者数量
-    pub async fn pubsub_numsub(&self, channels: &[Vec<u8>]) -> Value {
+    pub async fn pubsub_numsub(&self, channels: &[Bytes]) -> Value {
         let subs = self.subs.read().await;
         let mut result = Vec::with_capacity(channels.len() * 2);
         for ch in channels {
@@ -481,10 +482,7 @@ impl PubSub {
 
     /// 当客户端不再有任何订阅时，发送空消息并移除客户端状态。
     /// 调用前需保证已持有 `clients` 的写锁，并已更新完订阅集合。
-    fn cleanup_client_if_empty(
-        clients: &mut HashMap<u64, ClientState>,
-        client_id: u64,
-    ) {
+    fn cleanup_client_if_empty(clients: &mut HashMap<u64, ClientState>, client_id: u64) {
         if let Some(state) = clients.get_mut(&client_id) {
             if state.subscribed_channels.is_empty() && state.subscribed_patterns.is_empty() {
                 // 发送一个 None 作为关闭信号，通知所有 Receiver 订阅已结束

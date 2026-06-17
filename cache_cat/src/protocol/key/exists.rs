@@ -31,18 +31,20 @@ impl ExistsParams {
     /// Format: EXISTS key [key ...]
     fn parse(items: &[Value]) -> Result<Self, ProtocolError> {
         // Need at least: EXISTS key (2 items)
-        if items.len() < 2 {
+        let len = items.len();
+        if len < 2 {
             return Err(ProtocolError::WrongArgCount("exists"));
         }
 
-        let mut keys: Vec<Bytes> = Vec::with_capacity(items.len() - 1);
-        for item in items.iter().skip(1) {
-            let key = match item {
-                Value::BulkString(Some(data)) => data.clone(),
-                Value::SimpleString(s) => s.as_bytes().to_vec(),
-                _ => return Err(ProtocolError::WrongArgCount("del")),
-            };
-            keys.push(key.into());
+        let keys = items
+            .iter()
+            .skip(1)
+            .map_while(Value::string_bytes_unchecked)
+            .cloned()
+            .collect::<Vec<_>>();
+
+        if keys.len() < len - 1 {
+            return Err(ProtocolError::InvalidArgument("exists"));
         }
 
         Ok(ExistsParams { keys })
@@ -68,7 +70,7 @@ impl Command for ExistsCommand {
     ) -> Result<Value, CacheCatError> {
         if let Some(vec) = client.transaction_queue.as_mut() {
             vec.push(self.raft_request(items)?);
-            return Ok(Value::SimpleString(String::from("QUEUED")));
+            return Ok(Value::from_static_string("QUEUED"));
         }
         let params = self.read_operation(items)?;
         server.app.multi_read(params, client.db_number).await

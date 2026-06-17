@@ -53,15 +53,20 @@ impl Command for SentinelCommand {
             return Err(ProtocolError::WrongArgCount("SENTINEL").into());
         }
 
-        let sub_command = match &items[1] {
-            Value::BulkString(Some(data)) => String::from_utf8_lossy(data).to_uppercase(),
-            Value::SimpleString(s) => s.to_uppercase(),
-            _ => return Err(ProtocolError::InvalidArgument("subcommand").into()),
-        };
+        let sub_command = items[1]
+            .as_str_lossy()
+            .ok_or(ProtocolError::InvalidArgument("subcommand"))?;
 
-        match self.sub_commands.get(&sub_command) {
+        match self.sub_commands.get(sub_command.as_ref()) {
             Some(cmd) => cmd.execute(client, items, server).await,
             None => Err(ProtocolError::UnknownCommand(format!("SENTINEL {}", sub_command)).into()),
         }
+    }
+}
+
+impl Default for SentinelCommand {
+    #[inline]
+    fn default() -> Self {
+        Self::new()
     }
 }

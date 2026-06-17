@@ -15,10 +15,11 @@
 //!   - number of channels the client is currently subscribed to
 
 use crate::error::{CacheCatError, ProtocolError};
-use crate::protocol::command::{ Client, Command};
+use crate::protocol::command::{Client, Command};
 use crate::raft::network::redis_server::RedisServer;
 use crate::raft::types::core::response_value::Value;
 use async_trait::async_trait;
+use bytes::Bytes;
 use serde::{Deserialize, Serialize};
 use std::fmt::{Display, Formatter};
 
@@ -27,7 +28,7 @@ use std::fmt::{Display, Formatter};
 pub struct UnsubscribeParams {
     /// Channels to unsubscribe from.
     /// None means unsubscribe from all channels.
-    pub channels: Option<Vec<Vec<u8>>>,
+    pub channels: Option<Vec<Bytes>>,
 }
 
 impl UnsubscribeParams {
@@ -39,15 +40,15 @@ impl UnsubscribeParams {
             1 => Ok(UnsubscribeParams { channels: None }),
             // UNSUBSCRIBE channel [channel ...]
             _ => {
-                let mut channels = Vec::with_capacity(items.len() - 1);
+                let channels = items
+                    .iter()
+                    .skip(1)
+                    .map_while(Value::string_bytes_unchecked)
+                    .cloned()
+                    .collect::<Vec<_>>();
 
-                for item in &items[1..] {
-                    let channel = match item {
-                        Value::BulkString(Some(data)) => data.clone(),
-                        Value::SimpleString(s) => s.as_bytes().to_vec(),
-                        _ => return Err(ProtocolError::WrongArgCount("unsubscribe")),
-                    };
-                    channels.push(channel);
+                if channels.len() < items.len() - 1 {
+                    return Err(ProtocolError::WrongArgCount("unsubscribe"));
                 }
 
                 Ok(UnsubscribeParams {

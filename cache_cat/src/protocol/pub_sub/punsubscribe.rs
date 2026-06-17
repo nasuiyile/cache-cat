@@ -19,6 +19,7 @@ use crate::protocol::command::{Client, Command};
 use crate::raft::network::redis_server::RedisServer;
 use crate::raft::types::core::response_value::Value;
 use async_trait::async_trait;
+use bytes::Bytes;
 use serde::{Deserialize, Serialize};
 use std::fmt::{Display, Formatter};
 
@@ -27,7 +28,7 @@ use std::fmt::{Display, Formatter};
 pub struct PunsubscribeParams {
     /// Patterns to unsubscribe from.
     /// None means unsubscribe from all patterns.
-    pub patterns: Option<Vec<Vec<u8>>>,
+    pub patterns: Option<Vec<Bytes>>,
 }
 
 impl PunsubscribeParams {
@@ -42,11 +43,11 @@ impl PunsubscribeParams {
                 let mut patterns = Vec::with_capacity(items.len() - 1);
 
                 for item in &items[1..] {
-                    let pattern = match item {
-                        Value::BulkString(Some(data)) => data.clone(),
-                        Value::SimpleString(s) => s.as_bytes().to_vec(),
-                        _ => return Err(ProtocolError::WrongArgCount("punsubscribe")),
-                    };
+                    let pattern = item
+                        .string_bytes_unchecked()
+                        .ok_or(ProtocolError::WrongArgCount("punsubscribe"))?
+                        .clone();
+
                     patterns.push(pattern);
                 }
 

@@ -21,20 +21,18 @@ impl SetNxCommand {
             return Err(ProtocolError::WrongArgCount("setnx"));
         }
 
-        let key = match &items[1] {
-            Value::BulkString(Some(data)) => data.clone(),
-            Value::SimpleString(s) => s.as_bytes().to_vec(),
-            _ => return Err(ProtocolError::InvalidArgument("key")),
-        };
+        let key = items[1]
+            .string_bytes_unchecked()
+            .ok_or(ProtocolError::InvalidArgument("key"))?
+            .clone();
 
-        let value = match &items[2] {
-            Value::BulkString(Some(data)) => data.clone(),
-            Value::SimpleString(s) => s.as_bytes().to_vec(),
-            _ => return Err(ProtocolError::InvalidArgument("value")),
-        };
+        let value = items[2]
+            .string_bytes_unchecked()
+            .ok_or(ProtocolError::InvalidArgument("value"))?
+            .clone();
 
         Ok(SetParams {
-            key: key.into(),
+            key,
             value,
             mode: Some(SetMode::Nx),
             get: false,
@@ -60,7 +58,7 @@ impl Command for SetNxCommand {
     ) -> Result<Value, CacheCatError> {
         if let Some(vec) = client.transaction_queue.as_mut() {
             vec.push(self.raft_request(items)?);
-            return Ok(Value::SimpleString(String::from("QUEUED")));
+            return Ok(Value::from_static_string("QUEUED"));
         }
         let params = Self::parse(items)?;
         server

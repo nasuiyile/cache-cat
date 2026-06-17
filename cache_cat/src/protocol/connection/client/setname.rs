@@ -17,12 +17,12 @@ impl SubCommand for SetNameCommand {
         if items.len() != 3 {
             return Err(ProtocolError::WrongArgCount("SENTINEL GET-MASTER-ADDR-BY-NAME").into());
         }
-        let name = match &items[2] {
-            Value::BulkString(Some(data)) => String::from_utf8_lossy(data).to_string(),
-            Value::SimpleString(s) => s.clone(),
-            _ => return Err(ProtocolError::InvalidArgument("master name").into()),
-        };
-        client.name = name;
+
+        client.name = items[2]
+            .as_str_lossy()
+            .ok_or(ProtocolError::InvalidArgument("master name"))?
+            .to_string();
+
         Ok(Value::ok())
     }
 }

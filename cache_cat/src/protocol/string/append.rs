@@ -8,17 +8,16 @@ use crate::raft::types::entry::bae_operation::BaseOperation::Append;
 use crate::raft::types::entry::request::Operation;
 use async_trait::async_trait;
 use bytes::Bytes;
-use std::sync::Arc;
 
 /// Parameters for APPEND command
 #[derive(Debug, Clone, PartialEq)]
 pub struct AppendParams {
     pub key: Bytes,
-    pub value: Vec<u8>,
+    pub value: Bytes,
 }
 
 impl AppendParams {
-    pub fn new(key: impl Into<Bytes>, value: impl Into<Vec<u8>>) -> Self {
+    pub fn new(key: impl Into<Bytes>, value: impl Into<Bytes>) -> Self {
         Self {
             key: key.into(),
             value: value.into(),
@@ -30,19 +29,22 @@ impl AppendParams {
             return Err(ProtocolError::WrongArgCount("APPEND"));
         }
 
-        let key: Vec<u8> = match &items[1] {
-            Value::BulkString(Some(data)) => data.clone(),
-            Value::SimpleString(s) => s.as_bytes().to_vec(),
-            _ => return Err(ProtocolError::InvalidArgument("key")),
-        };
+        let key = items[1]
+            .string_bytes_unchecked()
+            .ok_or(ProtocolError::InvalidArgument("key"))?
+            .clone();
 
-        let value = match &items[2] {
-            Value::BulkString(Some(data)) => data.clone(),
-            Value::SimpleString(s) => s.as_bytes().to_vec(),
-            _ => return Err(ProtocolError::InvalidArgument("value")),
-        };
+        let value = items[2]
+            .string_bytes_unchecked()
+            .ok_or(ProtocolError::InvalidArgument("value"))?
+            .clone();
 
         Ok(AppendParams::new(key, value))
+    }
+
+    #[inline]
+    pub fn as_str(&self) -> &str {
+        unsafe { str::from_utf8_unchecked(&self.value) }
     }
 }
 
@@ -51,7 +53,7 @@ impl RaftCommand for AppendCommand {
         let params = AppendParams::parse(items)?;
         Ok(Operation::Base(Append(AppendReq {
             key: params.key,
-            value: Arc::from(params.value),
+            value: params.value,
         })))
     }
 }
@@ -69,7 +71,7 @@ impl Command for AppendCommand {
     ) -> Result<Value, CacheCatError> {
         if let Some(vec) = client.transaction_queue.as_mut() {
             vec.push(self.raft_request(items)?);
-            return Ok(Value::SimpleString(String::from("QUEUED")));
+            return Ok(Value::from_static_string("QUEUED"));
         }
         // Parse arguments
         let operation = self.raft_request(items)?;

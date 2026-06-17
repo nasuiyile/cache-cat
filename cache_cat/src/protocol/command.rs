@@ -21,11 +21,13 @@ use crate::protocol::key::del::DelCommand;
 use crate::protocol::key::exists::ExistsCommand;
 use crate::protocol::key::expire::ExpireCommand;
 use crate::protocol::key::persist::PersistCommand;
+use crate::protocol::key::pexpire::PExpireCommand;
 use crate::protocol::key::rename::RenameCommand;
 use crate::protocol::key::renamenx::RenameNxCommand;
 use crate::protocol::list::llen::LLenCommand;
 use crate::protocol::list::lpush::LPushCommand;
 use crate::protocol::list::lrange::LRangeCommand;
+use crate::protocol::list::rpush::RPushCommand;
 use crate::protocol::lua::eval::EvalCommand;
 use crate::protocol::lua::evalsha::EvalShaCommand;
 use crate::protocol::lua::script::ScriptCommand;
@@ -75,8 +77,6 @@ use tokio::select;
 use tokio::sync::watch;
 use tokio_util::codec::Framed;
 use tracing::{error, warn};
-use crate::protocol::key::pexpire::PExpireCommand;
-use crate::protocol::list::rpush::RPushCommand;
 
 #[async_trait]
 pub trait Command: Send + Sync {
@@ -160,12 +160,20 @@ pub struct ClientFlag {
 }
 
 impl ClientFlag {
-    pub fn new() -> Self {
+    #[inline]
+    pub const fn new() -> Self {
         Self {
             in_sub: false,
             multi: false,
             blocking: false,
         }
+    }
+}
+
+impl Default for ClientFlag {
+    #[inline]
+    fn default() -> Self {
+        Self::new()
     }
 }
 
@@ -306,15 +314,13 @@ impl CommandFactory {
     fn parse_command(value: &Value) -> Result<ParsedCommand, ProtocolError> {
         match value {
             Value::Array(Some(items)) if !items.is_empty() => {
-                let name = match &items[0] {
-                    Value::BulkString(Some(data)) => String::from_utf8_lossy(data).to_uppercase(),
-                    Value::SimpleString(s) => s.to_uppercase(),
-                    _ => {
-                        return Err(ProtocolError::InvalidFormat(
-                            "invalid command name".to_string(),
-                        ));
-                    }
-                };
+                let name = items[0]
+                    .as_str_lossy()
+                    .ok_or(ProtocolError::InvalidFormat(
+                        "invalid command name".to_string(),
+                    ))?
+                    .to_string();
+
                 Ok(ParsedCommand {
                     name,
                     items: items.clone(),
@@ -442,14 +448,12 @@ impl CommandFactory {
             }
         };
         client.last_cmd = parsed.name.clone();
-        if !client.authenticated {
-            if parsed.name != "AUTH" && parsed.name != "QUIT" {
-                client
-                    .framed
-                    .send(Value::from(ProtocolError::NotAuthenticated))
-                    .await?;
-                return Ok(());
-            }
+        if !client.authenticated && parsed.name != "AUTH" && parsed.name != "QUIT" {
+            client
+                .framed
+                .send(Value::from(ProtocolError::NotAuthenticated))
+                .await?;
+            return Ok(());
         }
 
         if let Some(cmd) = self.commands.get(&parsed.name) {

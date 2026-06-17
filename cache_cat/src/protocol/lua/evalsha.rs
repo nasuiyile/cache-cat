@@ -6,6 +6,7 @@ use crate::raft::types::core::response_value::Value;
 use crate::raft::types::entry::request::Operation;
 use crate::raft::types::entry::request::RedisOperation::RedisEval;
 use async_trait::async_trait;
+use bytes::Bytes;
 use serde::{Deserialize, Serialize};
 use std::fmt::Display;
 
@@ -16,25 +17,27 @@ use std::fmt::Display;
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct EvalShaParams {
     /// SHA1 hash of the Lua script
-    pub sha1: String,
+    pub sha1: Bytes,
     /// Number of keys
     pub numkeys: usize,
     /// Key names
-    pub keys: Vec<Vec<u8>>,
+    pub keys: Vec<Bytes>,
     /// Arguments
-    pub args: Vec<Vec<u8>>,
+    pub args: Vec<Bytes>,
 }
 
 impl Display for EvalShaParams {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let sha1 = self.sha1();
+        let sha1 = if self.sha1.len() > 20 {
+            format_args!("{}...", &sha1[..20])
+        } else {
+            format_args!("{}", sha1)
+        };
         write!(
             f,
             "EVALSHA {} ({} keys, {} args)",
-            if self.sha1.len() > 20 {
-                format!("{}...", &self.sha1[..20])
-            } else {
-                self.sha1.clone()
-            },
+            sha1,
             self.numkeys,
             self.args.len()
         )
@@ -43,7 +46,7 @@ impl Display for EvalShaParams {
 
 impl EvalShaParams {
     /// Create a new EvalShaParams
-    pub fn new(sha1: String, numkeys: usize, keys: Vec<Vec<u8>>, args: Vec<Vec<u8>>) -> Self {
+    pub fn new(sha1: Bytes, numkeys: usize, keys: Vec<Bytes>, args: Vec<Bytes>) -> Self {
         Self {
             sha1,
             numkeys,
@@ -61,26 +64,13 @@ impl EvalShaParams {
         }
 
         // Parse sha1
-        let sha1 = match &items[1] {
-            Value::BulkString(Some(data)) => String::from_utf8_lossy(data).to_string(),
-            Value::SimpleString(s) => s.clone(),
-            _ => return Err(ProtocolError::InvalidArgument("sha1")),
-        };
+        let sha1 = items[1]
+            .string_bytes_unchecked()
+            .ok_or(ProtocolError::InvalidArgument("sha1"))?
+            .clone();
 
         // Parse numkeys
-        let numkeys = match &items[2] {
-            Value::BulkString(Some(data)) => String::from_utf8_lossy(data)
-                .parse::<usize>()
-                .map_err(|_| ProtocolError::NotAnInteger)?,
-
-            Value::SimpleString(s) => s
-                .parse::<usize>()
-                .map_err(|_| ProtocolError::NotAnInteger)?,
-
-            Value::Integer(i) if *i >= 0 => *i as usize,
-
-            _ => return Err(ProtocolError::NotAnInteger),
-        };
+        let numkeys = items[2].parse_usize().ok_or(ProtocolError::NotAnInteger)?;
 
         // Validate key count
         let remaining = items.len() - 3;
@@ -92,13 +82,10 @@ impl EvalShaParams {
         let mut keys = Vec::with_capacity(numkeys);
 
         for i in 0..numkeys {
-            let key_value = &items[3 + i];
-
-            let key = match key_value {
-                Value::BulkString(Some(data)) => data.clone(),
-                Value::SimpleString(s) => s.as_bytes().to_vec(),
-                _ => return Err(ProtocolError::InvalidArgument("key")),
-            };
+            let key = items[3 + i]
+                .string_bytes_unchecked()
+                .ok_or(ProtocolError::InvalidArgument("key"))?
+                .clone();
 
             keys.push(key);
         }
@@ -107,22 +94,23 @@ impl EvalShaParams {
         let mut args = Vec::new();
 
         for i in (3 + numkeys)..items.len() {
-            let arg_value = &items[i];
-
-            let arg = match arg_value {
-                Value::BulkString(Some(data)) => data.clone(),
-
-                Value::SimpleString(s) => s.as_bytes().to_vec(),
-
-                Value::Integer(i) => i.to_string().into_bytes(),
-
-                _ => return Err(ProtocolError::InvalidArgument("argument")),
-            };
+            let arg = match &items[i] {
+                Value::BulkString(Some(data)) => Some(data.clone()),
+                Value::SimpleString(s) => Some(s.clone()),
+                Value::Integer(i) => Some(i.to_string().into()),
+                _ => None,
+            }
+            .ok_or(ProtocolError::InvalidArgument("argument"))?;
 
             args.push(arg);
         }
 
         Ok(EvalShaParams::new(sha1, numkeys, keys, args))
+    }
+
+    #[inline]
+    pub fn sha1(&self) -> &str {
+        unsafe { str::from_utf8_unchecked(&self.sha1) }
     }
 }
 

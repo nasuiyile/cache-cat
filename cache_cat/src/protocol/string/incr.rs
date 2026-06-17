@@ -21,13 +21,12 @@ impl IncrParams {
             return Err(ProtocolError::WrongArgCount("INCR"));
         }
 
-        let key: Vec<u8> = match &items[1] {
-            Value::BulkString(Some(data)) => data.clone(),
-            Value::SimpleString(s) => s.as_bytes().to_vec(),
-            _ => return Err(ProtocolError::InvalidArgument("key")),
-        };
+        let key = items[1]
+            .string_bytes_unchecked()
+            .ok_or(ProtocolError::InvalidArgument("key"))?
+            .clone();
 
-        Ok(IncrParams { key: key.into() })
+        Ok(IncrParams { key })
     }
 }
 
@@ -53,7 +52,7 @@ impl Command for IncrCommand {
     ) -> Result<Value, CacheCatError> {
         if let Some(vec) = client.transaction_queue.as_mut() {
             vec.push(self.raft_request(items)?);
-            return Ok(Value::SimpleString(String::from("QUEUED")));
+            return Ok(Value::from_static_string("QUEUED"));
         }
         // Parse arguments
         let operation = self.raft_request(items)?;

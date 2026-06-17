@@ -17,15 +17,16 @@ use crate::protocol::command::{Client, Command};
 use crate::raft::network::redis_server::RedisServer;
 use crate::raft::types::core::response_value::Value;
 use async_trait::async_trait;
+use bytes::Bytes;
 use std::fmt::{Display, Formatter};
 
 /// PUBSUB subcommand types
 #[derive(Debug, Clone, PartialEq)]
 pub enum PubSubSubCommand {
     /// CHANNELS [pattern] - List active channels matching pattern (or all if pattern not provided)
-    Channels(Option<Vec<u8>>),
+    Channels(Option<Bytes>),
     /// NUMSUB [channel ...] - Get number of subscribers for specified channels
-    NumSub(Vec<Vec<u8>>),
+    NumSub(Vec<Bytes>),
     /// NUMPAT - Get number of pattern subscriptions
     NumPat,
 }
@@ -46,21 +47,21 @@ impl PubSubParams {
         }
 
         // Get subcommand (should be at index 1)
-        let subcommand_str = match &items[1] {
-            Value::BulkString(Some(data)) => String::from_utf8_lossy(data).to_ascii_uppercase(),
-            Value::SimpleString(s) => s.to_ascii_uppercase(),
-            _ => return Err(ProtocolError::InvalidArgument("Invalid subcommand format")),
-        };
+        let subcommand_str = items[1]
+            .as_str_lossy()
+            .ok_or(ProtocolError::InvalidArgument("Invalid subcommand format"))?
+            .to_ascii_uppercase();
 
         match subcommand_str.as_str() {
             "CHANNELS" => {
                 // CHANNELS [pattern]
                 let pattern = if items.len() >= 3 {
-                    match &items[2] {
-                        Value::BulkString(Some(data)) => Some(data.clone()),
-                        Value::SimpleString(s) => Some(s.as_bytes().to_vec()),
-                        _ => return Err(ProtocolError::InvalidArgument("Invalid pattern format")),
-                    }
+                    let pattern = items[2]
+                        .string_bytes_unchecked()
+                        .ok_or(ProtocolError::InvalidArgument("Invalid pattern format"))?
+                        .clone();
+
+                    Some(pattern)
                 } else {
                     None
                 };
@@ -72,11 +73,10 @@ impl PubSubParams {
                 // NUMSUB [channel ...]
                 let mut channels = Vec::new();
                 for item in items.iter().skip(2) {
-                    let channel = match item {
-                        Value::BulkString(Some(data)) => data.clone(),
-                        Value::SimpleString(s) => s.as_bytes().to_vec(),
-                        _ => return Err(ProtocolError::InvalidArgument("Invalid channel format")),
-                    };
+                    let channel = item
+                        .string_bytes_unchecked()
+                        .ok_or(ProtocolError::InvalidArgument("Invalid channel format"))?
+                        .clone();
                     channels.push(channel);
                 }
                 Ok(PubSubParams {

@@ -32,23 +32,26 @@ impl DelParams {
     /// Format: DEL key [key ...]
     fn parse(items: &[Value]) -> Result<Self, ProtocolError> {
         // Need at least: DEL key (2 items)
-        if items.len() < 2 {
+        let len = items.len();
+        if len < 2 {
             return Err(ProtocolError::WrongArgCount("del"));
         }
 
-        let mut keys: Vec<Bytes> = Vec::with_capacity(items.len() - 1);
-        for item in items.iter().skip(1) {
-            let key = match item {
-                Value::BulkString(Some(data)) => data.clone(),
-                Value::SimpleString(s) => s.as_bytes().to_vec(),
-                _ => return Err(ProtocolError::WrongArgCount("del")),
-            };
-            keys.push(key.into());
+        let keys = items
+            .iter()
+            .skip(1)
+            .map_while(Value::string_bytes_unchecked)
+            .cloned()
+            .collect::<Vec<_>>();
+
+        if keys.len() < len - 1 {
+            return Err(ProtocolError::InvalidArgument("del"));
         }
 
         Ok(DelParams { keys })
     }
 }
+
 impl Display for DelParams {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         write!(f, "DelReq {{ keys: {:?} }}", self.keys)
@@ -82,7 +85,7 @@ impl Command for DelCommand {
     ) -> Result<Value, CacheCatError> {
         if let Some(vec) = client.transaction_queue.as_mut() {
             vec.push(self.raft_request(items)?);
-            return Ok(Value::SimpleString(String::from("QUEUED")));
+            return Ok(Value::from_static_string("QUEUED"));
         }
         // Parse arguments
         let operation = self.raft_request(items)?;

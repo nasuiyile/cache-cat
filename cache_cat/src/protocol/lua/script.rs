@@ -3,6 +3,7 @@ use crate::protocol::command::{Client, Command};
 use crate::raft::network::redis_server::RedisServer;
 use crate::raft::types::core::response_value::Value;
 use async_trait::async_trait;
+use bytes::Bytes;
 use serde::{Deserialize, Serialize};
 use sha1::{Digest, Sha1};
 use std::fmt;
@@ -10,13 +11,20 @@ use std::fmt;
 /// SCRIPT LOAD 的参数
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ScriptLoadParams {
-    pub script: String,
+    pub script: Bytes,
+}
+
+impl ScriptLoadParams {
+    #[inline]
+    pub fn script(&self) -> &str {
+        unsafe { str::from_utf8_unchecked(&self.script) }
+    }
 }
 
 /// SCRIPT EXISTS 的参数
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ScriptExistsParams {
-    pub sha1s: Vec<String>,
+    pub sha1s: Vec<Bytes>,
 }
 
 /// SCRIPT FLUSH 的参数 (Redis 6+ 支持 ASYNC/SYNC)
@@ -48,14 +56,21 @@ pub enum ScriptParam {
     Kill,
     Debug(ScriptDebugMode),
 }
+
 impl fmt::Display for ScriptParam {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             ScriptParam::Load(params) => {
-                write!(f, "LOAD {}", params.script)
+                write!(f, "LOAD {}", params.script())
             }
             ScriptParam::Exists(params) => {
-                write!(f, "EXISTS {}", params.sha1s.join(" "))
+                let sha1s = params
+                    .sha1s
+                    .iter()
+                    .map(|bytes| unsafe { str::from_utf8_unchecked(bytes) })
+                    .collect::<Vec<_>>();
+
+                write!(f, "EXISTS {}", sha1s.join(" "))
             }
             ScriptParam::Flush(params) => match params.flush_mode {
                 FlushMode::Sync => write!(f, "FLUSH SYNC"),
@@ -82,11 +97,10 @@ impl ScriptParam {
         }
 
         // 子命令名
-        let sub_cmd = match &items[1] {
-            Value::BulkString(Some(data)) => String::from_utf8_lossy(data).to_uppercase(),
-            Value::SimpleString(s) => s.to_uppercase(),
-            _ => return Err(ProtocolError::InvalidArgument("script subcommand")),
-        };
+        let sub_cmd = items[1]
+            .as_str_lossy()
+            .ok_or(ProtocolError::InvalidArgument("script subcommand"))?
+            .to_uppercase();
 
         match sub_cmd.as_str() {
             "LOAD" => {
@@ -94,14 +108,14 @@ impl ScriptParam {
                 if items.len() != 3 {
                     return Err(ProtocolError::WrongArgCount("script|load"));
                 }
-                let script = string_from_value(&items[2], "script")?;
+                let script = string_from_value(&items[2], "script")?.clone();
                 Ok(ScriptParam::Load(ScriptLoadParams { script }))
             }
             "EXISTS" => {
                 // SCRIPT EXISTS sha1 [sha1 ...]
                 let mut sha1s = Vec::new();
                 for item in &items[2..] {
-                    sha1s.push(string_from_value(item, "sha1")?);
+                    sha1s.push(string_from_value(item, "sha1")?.clone());
                 }
                 Ok(ScriptParam::Exists(ScriptExistsParams { sha1s }))
             }
@@ -112,7 +126,7 @@ impl ScriptParam {
                     return Err(ProtocolError::WrongArgCount("script|flush"));
                 }
                 if items.len() == 3 {
-                    let mode_str = string_from_value(&items[2], "flush mode")?.to_uppercase();
+                    let mode_str = uppercase_string_from_value(&items[2], "flush mode")?;
                     flush_mode = match mode_str.as_str() {
                         "ASYNC" => FlushMode::Async,
                         "SYNC" => FlushMode::Sync,
@@ -133,7 +147,7 @@ impl ScriptParam {
                 if items.len() != 3 {
                     return Err(ProtocolError::WrongArgCount("script|debug"));
                 }
-                let mode_str = string_from_value(&items[2], "debug mode")?.to_uppercase();
+                let mode_str = uppercase_string_from_value(&items[2], "debug mode")?;
                 let mode = match mode_str.as_str() {
                     "YES" => ScriptDebugMode::Yes,
                     "SYNC" => ScriptDebugMode::Sync,
@@ -148,14 +162,17 @@ impl ScriptParam {
 }
 
 /// 辅助函数：从 Value 提取字符串
-fn string_from_value(value: &Value, _context: &str) -> Result<String, ProtocolError> {
-    match value {
-        Value::BulkString(Some(data)) => {
-            String::from_utf8(data.clone()).map_err(|_| ProtocolError::InvalidArgument("script"))
-        }
-        Value::SimpleString(s) => Ok(s.clone()),
-        _ => Err(ProtocolError::InvalidArgument("script")),
-    }
+fn string_from_value<'a>(value: &'a Value, _context: &str) -> Result<&'a Bytes, ProtocolError> {
+    value
+        .string_bytes()
+        .ok_or(ProtocolError::InvalidArgument("script"))
+}
+
+fn uppercase_string_from_value(value: &Value, _context: &str) -> Result<String, ProtocolError> {
+    value
+        .as_str()
+        .map(|str| str.to_uppercase())
+        .ok_or(ProtocolError::InvalidArgument("script"))
 }
 
 pub struct ScriptCommand;
@@ -176,10 +193,12 @@ impl Command for ScriptCommand {
 
                 let hash = hasher.finalize();
 
-                let sha1_hex = hash
+                // TODO: optimize
+                let sha1_hex: Bytes = hash
                     .iter()
                     .map(|b| format!("{:02x}", b))
-                    .collect::<String>();
+                    .collect::<String>()
+                    .into();
 
                 server
                     .app
@@ -191,7 +210,7 @@ impl Command for ScriptCommand {
                     .lock()
                     .insert(sha1_hex.clone(), v.script);
 
-                Value::BulkString(Some(sha1_hex.into_bytes()))
+                Value::BulkString(Some(sha1_hex))
             }
             ScriptParam::Exists(v) => {
                 let map = server.app.state_machine.data.kvs.lua_env.script_map.lock();
@@ -236,10 +255,12 @@ impl Command for ScriptCommand {
                 if executor {
                     Value::ok()
                 } else {
-                    Value::Error(String::from("ERR No scripts in execution right now."))
+                    Value::Error(Bytes::from_static(
+                        b"ERR No scripts in execution right now.",
+                    ))
                 }
             }
-            ScriptParam::Debug(_) => Value::Error("Not implemented".to_string()),
+            ScriptParam::Debug(_) => Value::Error(Bytes::from_static(b"Not implemented")),
         };
         Ok(value)
     }

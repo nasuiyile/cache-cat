@@ -212,11 +212,9 @@ impl ReadCommand for HMGetParams {
                         .map(|field| match guard.get(field) {
                             None => Value::BulkString(None),
                             Some(value) => match value {
-                                HashValue::Str(str) => {
-                                    Value::BulkString(Some(str.as_ref().clone()))
-                                }
+                                HashValue::Str(str) => Value::BulkString(Some(str.clone())),
                                 HashValue::Int(int) => {
-                                    Value::BulkString(Some(int.to_string().as_bytes().to_vec()))
+                                    Value::BulkString(Some(int.to_string().into()))
                                 }
                             },
                         })
@@ -242,7 +240,7 @@ impl ReadCommand for HKeysParams {
                     let guard = map.lock();
                     let mut result = Vec::with_capacity(guard.len());
                     for (field, _) in guard.iter() {
-                        result.push(Value::BulkString(Some(field.as_ref().clone())));
+                        result.push(Value::BulkString(Some(field.clone())));
                     }
                     Value::Array(Some(result))
                 }
@@ -267,8 +265,8 @@ impl ReadCommand for HValsParams {
 
                     for value in guard.values() {
                         let value_bytes = match value {
-                            HashValue::Str(str) => str.as_ref().clone(),
-                            HashValue::Int(int) => int.to_string().into_bytes(),
+                            HashValue::Str(str) => str.clone(),
+                            HashValue::Int(int) => int.to_string().into(),
                         };
 
                         result.push(Value::BulkString(Some(value_bytes)));
@@ -296,11 +294,11 @@ impl ReadCommand for HGetAllParams {
                     let mut result = Vec::with_capacity(guard.len());
                     for (field, value) in guard.iter() {
                         let value_bytes = match value {
-                            HashValue::Str(str) => str.as_ref().clone(),
-                            HashValue::Int(int) => int.to_string().into_bytes(),
+                            HashValue::Str(str) => str.clone(),
+                            HashValue::Int(int) => int.to_string().into(),
                         };
                         result.push((
-                            Value::BulkString(Some(field.as_ref().clone())),
+                            Value::BulkString(Some(field.clone())),
                             Value::BulkString(Some(value_bytes)),
                         ));
                     }
@@ -327,10 +325,8 @@ impl ReadCommand for HGetParams {
                     match option {
                         None => Value::BulkString(None),
                         Some(value) => match value {
-                            HashValue::Str(str) => Value::BulkString(Some(str.as_ref().clone())),
-                            HashValue::Int(int) => {
-                                Value::BulkString(Some(int.to_string().as_bytes().to_vec()))
-                            }
+                            HashValue::Str(str) => Value::BulkString(Some(str.clone())),
+                            HashValue::Int(int) => Value::BulkString(Some(int.to_string().into())),
                         },
                     }
                 }

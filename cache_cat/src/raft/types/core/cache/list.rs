@@ -47,7 +47,7 @@ impl ComputeCommand for RPushReq {
             }
             _ => (
                 MochaOperation::Abort,
-                Value::Error("Key exists but is not a List".to_string()),
+                Value::Error(Bytes::from_static(b"Key exists but is not a List")),
             ),
         }
     }
@@ -98,7 +98,7 @@ impl ComputeCommand for LPushReq {
             }
             _ => (
                 MochaOperation::Abort,
-                Value::Error("Key exists but is not a List".to_string()),
+                Value::Error(Bytes::from_static(b"Key exists but is not a List")),
             ),
         }
     }
@@ -142,7 +142,7 @@ impl ComputeCommand for LPopReq {
                             value: entry.value.clone(),
                             expire: entry.get_expire_policy(),
                         },
-                        Value::BulkString(Some((*value).clone())),
+                        Value::BulkString(Some(value)),
                     ),
                     None => (
                         MochaOperation::Insert {
@@ -155,7 +155,7 @@ impl ComputeCommand for LPopReq {
             }
             _ => (
                 Abort,
-                Value::Error("Key exists but is not a List".to_string()),
+                Value::Error(Bytes::from_static(b"Key exists but is not a List")),
             ),
         }
     }
@@ -178,7 +178,7 @@ impl ReadCommand for LRangeParams {
                     let vec = crate::utils::lrange(&list.lock(), self.start, self.stop);
                     let mut array = Vec::new();
                     for x in vec {
-                        let value = Value::BulkString(Some(x.as_ref().clone()));
+                        let value = Value::BulkString(Some(x.clone()));
                         array.push(value);
                     }
                     Value::Array(Some(array))

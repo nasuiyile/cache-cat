@@ -37,7 +37,7 @@ pub enum BaseOperation {
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct RPushReq {
     pub key: Bytes,
-    pub elements: Vec<Arc<Vec<u8>>>,
+    pub elements: Vec<Bytes>,
 }
 
 impl Display for RPushReq {
@@ -90,7 +90,7 @@ impl Display for SetBitReq {
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct SRemReq {
     pub key: Bytes,
-    pub members: Vec<Arc<Vec<u8>>>,
+    pub members: Vec<Bytes>,
 }
 
 impl Display for SRemReq {
@@ -107,7 +107,7 @@ impl Display for SRemReq {
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct HDelReq {
     pub key: Bytes,
-    pub fields: Vec<Arc<Vec<u8>>>,
+    pub fields: Vec<Bytes>,
 }
 
 impl Display for HDelReq {
@@ -158,7 +158,7 @@ impl fmt::Display for PersistReq {
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct HIncrReq {
     pub key: Bytes,
-    pub field: Arc<Vec<u8>>,
+    pub field: Bytes,
     pub value: i64,
 }
 
@@ -177,7 +177,7 @@ impl fmt::Display for HIncrReq {
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct SAddReq {
     pub key: Bytes,
-    pub elements: Vec<Arc<Vec<u8>>>,
+    pub elements: Vec<Bytes>,
 }
 
 impl fmt::Display for SAddReq {
@@ -199,7 +199,7 @@ pub struct ZAddReq {
     pub gt: bool,
     pub lt: bool,
     pub ch: bool,
-    pub members: Vec<(Arc<Vec<u8>>, f64)>,
+    pub members: Vec<(Bytes, f64)>,
 }
 
 impl fmt::Display for ZAddReq {
@@ -221,7 +221,7 @@ impl fmt::Display for ZAddReq {
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct HSetReq {
     pub key: Bytes,
-    pub elements: Vec<(Arc<Vec<u8>>, Arc<Vec<u8>>)>,
+    pub elements: Vec<(Bytes, Bytes)>,
 }
 
 impl fmt::Display for HSetReq {
@@ -238,7 +238,7 @@ impl fmt::Display for HSetReq {
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct AppendReq {
     pub key: Bytes,
-    pub value: Arc<Vec<u8>>,
+    pub value: Bytes,
 }
 
 impl Display for AppendReq {
@@ -290,7 +290,7 @@ impl fmt::Display for IncrReq {
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct SetReq {
     pub key: Bytes,
-    pub value: Arc<Vec<u8>>,
+    pub value: Bytes,
     pub ex_time: u64,
 }
 
@@ -309,7 +309,7 @@ impl Display for SetReq {
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct LPushReq {
     pub key: Bytes,
-    pub elements: Vec<Arc<Vec<u8>>>,
+    pub elements: Vec<Bytes>,
 }
 
 impl Display for LPushReq {

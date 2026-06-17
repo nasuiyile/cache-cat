@@ -1,4 +1,5 @@
 use crate::raft::types::entry::bae_operation::ZAddReq;
+use bytes::Bytes;
 use ordered_float::OrderedFloat;
 use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
@@ -7,8 +8,8 @@ use std::sync::Arc;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct SortedSet {
-    tree: BTreeMap<(OrderedFloat<f64>, Arc<Vec<u8>>), ()>,
-    hash: HashMap<Arc<Vec<u8>>, f64>,
+    tree: BTreeMap<(OrderedFloat<f64>, Bytes), ()>,
+    hash: HashMap<Bytes, f64>,
 }
 
 impl SortedSet {
@@ -18,6 +19,7 @@ impl SortedSet {
             hash: HashMap::new(),
         }
     }
+
     pub fn zadd(&mut self, req: ZAddReq) -> i64 {
         let mut added = 0;
         let mut changed = 0;
@@ -65,7 +67,7 @@ impl SortedSet {
         if req.ch { changed } else { added }
     }
 
-    pub fn zrange(&self, start: i64, stop: i64, with_scores: bool) -> Vec<Vec<u8>> {
+    pub fn zrange(&self, start: i64, stop: i64, with_scores: bool) -> Vec<Bytes> {
         let len = self.hash.len() as i64;
         if len == 0 {
             return vec![];
@@ -95,23 +97,24 @@ impl SortedSet {
 
         for (score, member) in range_iter {
             // 插入成员
-            result.push((**member).clone());
+            result.push(member.clone());
 
             // 如果需要分数，将 f64 转换为字符串字节
             if with_scores {
-                let s = score.0.to_string();
-                result.push(s.into_bytes());
+                result.push(score.0.to_string().into());
             }
         }
+
         result
     }
+
     pub fn zrangebyscore(
         &self,
         min: f64,
         max: f64,
         with_scores: bool,
         limit: Option<(usize, usize)>,
-    ) -> Vec<Vec<u8>> {
+    ) -> Vec<Bytes> {
         if self.tree.is_empty() {
             return vec![];
         }
@@ -128,9 +131,10 @@ impl SortedSet {
         let mut skipped = 0;
         let mut taken = 0;
 
-        for ((score, member), _) in self.tree.range(
-            (min_score, Arc::new(vec![]))..=(max_score, Arc::new(vec![]))
-        ) {
+        for ((score, member), _) in self
+            .tree
+            .range((min_score, Bytes::new())..=(max_score, Bytes::new()))
+        {
             if skipped < skip_count {
                 skipped += 1;
                 continue;
@@ -140,9 +144,9 @@ impl SortedSet {
                 break;
             }
 
-            result.push((**member).clone());
+            result.push(member.clone());
             if with_scores {
-                result.push(score.0.to_string().into_bytes());
+                result.push(score.0.to_string().into());
             }
             taken += 1;
         }
@@ -152,22 +156,22 @@ impl SortedSet {
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum HashValue {
-    Str(Arc<Vec<u8>>),
+    Str(Bytes),
     Int(i64),
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum ValueObject {
     Int(i64),
-    String(Arc<Vec<u8>>),
+    String(Bytes),
     #[serde(with = "mutex_vecdeque_serde")]
-    List(Arc<Mutex<VecDeque<Arc<Vec<u8>>>>>),
+    List(Arc<Mutex<VecDeque<Bytes>>>),
     #[serde(with = "mutex_hashmap_serde")]
-    Hash(Arc<Mutex<HashMap<Arc<Vec<u8>>, HashValue>>>),
+    Hash(Arc<Mutex<HashMap<Bytes, HashValue>>>),
     #[serde(with = "mutex_zset_serde")]
     ZSet(Arc<Mutex<SortedSet>>),
     #[serde(with = "mutex_hashset_serde")]
-    Set(Arc<Mutex<HashSet<Arc<Vec<u8>>>>>),
+    Set(Arc<Mutex<HashSet<Bytes>>>),
 }
 
 // 通用序列化宏
@@ -200,7 +204,7 @@ macro_rules! impl_mutex_serde {
     };
 }
 
-impl_mutex_serde!(mutex_vecdeque_serde, VecDeque<Arc<Vec<u8>>>);
-impl_mutex_serde!(mutex_hashmap_serde, HashMap<Arc<Vec<u8>>, HashValue>);
+impl_mutex_serde!(mutex_vecdeque_serde, VecDeque<Bytes>);
+impl_mutex_serde!(mutex_hashmap_serde, HashMap<Bytes, HashValue>);
 impl_mutex_serde!(mutex_zset_serde, SortedSet);
-impl_mutex_serde!(mutex_hashset_serde, HashSet<Arc<Vec<u8>>>);
+impl_mutex_serde!(mutex_hashset_serde, HashSet<Bytes>);

@@ -20,6 +20,7 @@ use crate::protocol::pub_sub::punsubscribe::PunsubscribeParams;
 use crate::raft::network::redis_server::RedisServer;
 use crate::raft::types::core::response_value::Value;
 use async_trait::async_trait;
+use bytes::Bytes;
 use serde::{Deserialize, Serialize};
 use std::fmt::{Display, Formatter};
 use tokio::sync::watch;
@@ -27,7 +28,7 @@ use tokio::sync::watch;
 /// PSUBSCRIBE command parameters
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct PsubscribeParams {
-    pub patterns: Vec<Vec<u8>>,
+    pub patterns: Vec<Bytes>,
 }
 
 impl PsubscribeParams {
@@ -39,16 +40,15 @@ impl PsubscribeParams {
             return Err(ProtocolError::WrongArgCount("psubscribe"));
         }
 
-        let mut patterns = Vec::with_capacity(items.len() - 1);
+        let patterns = items
+            .iter()
+            .skip(1)
+            .map_while(Value::string_bytes_unchecked)
+            .cloned()
+            .collect::<Vec<_>>();
 
-        // Parse all pattern arguments
-        for item in &items[1..] {
-            let pattern = match item {
-                Value::BulkString(Some(data)) => data.clone(),
-                Value::SimpleString(s) => s.as_bytes().to_vec(),
-                _ => return Err(ProtocolError::WrongArgCount("psubscribe")),
-            };
-            patterns.push(pattern);
+        if patterns.len() < items.len() - 1 {
+            return Err(ProtocolError::WrongArgCount("psubscribe"));
         }
 
         Ok(PsubscribeParams { patterns })
@@ -118,7 +118,7 @@ impl BlockCommand for PsubscribeCommand {
         } else if cmd.name == "PING" {
             let params = PingParam::parse(&cmd.items)?;
             return Ok(Value::Array(Some(vec![
-                Value::SimpleString("PONG".to_string()),
+                Value::from_static_string("PONG"),
                 Value::BulkString(params.message),
             ])));
         } else if cmd.name == "QUIT" {

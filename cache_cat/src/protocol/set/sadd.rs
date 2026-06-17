@@ -8,11 +8,10 @@ use crate::raft::types::entry::bae_operation::SAddReq;
 use crate::raft::types::entry::request::Operation;
 use async_trait::async_trait;
 use bytes::Bytes;
-use std::sync::Arc;
 
 struct SAddArgs {
     key: Bytes,
-    members: Vec<Vec<u8>>,
+    members: Vec<Bytes>,
 }
 
 pub struct SAddCommand;
@@ -24,39 +23,32 @@ impl SAddCommand {
         }
 
         // Parse key
-        let key: Vec<u8> = match &items[1] {
-            Value::BulkString(Some(data)) => data.clone(),
-            Value::SimpleString(s) => s.as_bytes().to_vec(),
-            _ => return Err(ProtocolError::InvalidArgument("key")),
-        };
+        let key = items[1]
+            .string_bytes_unchecked()
+            .ok_or(ProtocolError::InvalidArgument("key"))?
+            .clone();
 
-        let mut members = Vec::with_capacity(items.len() - 2);
-        for item in &items[2..] {
-            let member = match item {
-                Value::BulkString(Some(data)) => data.clone(),
-                Value::SimpleString(s) => s.as_bytes().to_vec(),
-                _ => return Err(ProtocolError::InvalidArgument("member")),
-            };
-            members.push(member);
+        let members = items
+            .iter()
+            .skip(2)
+            .map_while(Value::string_bytes_unchecked)
+            .cloned()
+            .collect::<Vec<_>>();
+
+        if members.len() < items.len() - 2 {
+            return Err(ProtocolError::InvalidArgument("member"));
         }
 
-        Ok(SAddArgs {
-            key: key.into(),
-            members,
-        })
+        Ok(SAddArgs { key, members })
     }
 }
 
 impl RaftCommand for SAddCommand {
     fn raft_request(&self, items: &[Value]) -> Result<Operation, ProtocolError> {
         let params = Self::parse_args(items)?;
-        let mut elements = Vec::new();
-        for v in params.members {
-            elements.push(Arc::new(v));
-        }
         Ok(Operation::Base(SAdd(SAddReq {
             key: params.key,
-            elements,
+            elements: params.members,
         })))
     }
 }
@@ -71,7 +63,7 @@ impl Command for SAddCommand {
     ) -> Result<Value, CacheCatError> {
         if let Some(vec) = client.transaction_queue.as_mut() {
             vec.push(self.raft_request(items)?);
-            return Ok(Value::SimpleString(String::from("QUEUED")));
+            return Ok(Value::from_static_string("QUEUED"));
         }
         // Parse arguments
         let operation = self.raft_request(items)?;

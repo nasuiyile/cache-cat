@@ -29,19 +29,17 @@ impl MsetParams {
         let mut pairs = Vec::with_capacity(args_count / 2);
         let mut i = 1;
         while i < items.len() {
-            let key = match &items[i] {
-                Value::BulkString(Some(data)) => data.clone(),
-                Value::SimpleString(s) => s.as_bytes().to_vec(),
-                _ => return Err(ProtocolError::InvalidArgument("key")),
-            };
+            let key = items[i]
+                .string_bytes_unchecked()
+                .ok_or(ProtocolError::InvalidArgument("key"))?
+                .clone();
 
-            let value = match &items[i + 1] {
-                Value::BulkString(Some(data)) => data.clone(),
-                Value::SimpleString(s) => s.as_bytes().to_vec(),
-                _ => return Err(ProtocolError::InvalidArgument("value")),
-            };
+            let value = items[i + 1]
+                .string_bytes_unchecked()
+                .ok_or(ProtocolError::InvalidArgument("value"))?
+                .clone();
 
-            pairs.push((key.into(), value.into()));
+            pairs.push((key, value));
             i += 2;
         }
 
@@ -75,7 +73,7 @@ impl Command for MsetCommand {
     ) -> Result<Value, CacheCatError> {
         if let Some(vec) = client.transaction_queue.as_mut() {
             vec.push(self.raft_request(items)?);
-            return Ok(Value::SimpleString(String::from("QUEUED")));
+            return Ok(Value::from_static_string("QUEUED"));
         }
         // Parse arguments
         let operation = self.raft_request(items)?;
