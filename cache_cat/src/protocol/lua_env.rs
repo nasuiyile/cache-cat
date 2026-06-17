@@ -116,6 +116,7 @@ impl LuaEnv {
                     // SAFETY:
                     // - Lua 虚拟机是单线程的，redis.call 和 redis.pcall 绝不会并发调用。
                     // - 此处获取的可变引用只在当前闭包调用期间存活，不会逃逸到外部。
+                    #[allow(unsafe_code)]
                     let update = unsafe { &mut *update_ptr };
 
                     let operation = self
@@ -142,6 +143,7 @@ impl LuaEnv {
                     for param in args {
                         vec.push(Value::SimpleString(param));
                     }
+                    #[allow(unsafe_code)]
                     let update = unsafe { &mut *update_ptr };
                     let result = match self.raft_command.parse_request(&vec) {
                         Ok(operation) => {

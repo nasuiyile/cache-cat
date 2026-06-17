@@ -57,3 +57,6 @@ tempfile = "3.27.0"
 default = []
 tokio-console = ["dep:console-subscriber"]
 flamegraph = ["dep:tracing-flame"]
+
+[lints]
+workspace = true
