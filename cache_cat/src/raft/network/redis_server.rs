@@ -1,6 +1,6 @@
 use crate::error::CacheCatError;
 use crate::node::parsed_config::ParsedConfig;
-use crate::protocol::command::{Client, CommandFactory};
+use crate::protocol::command::{Client, CommandFactory, Connection};
 use crate::protocol::resp::Parser;
 use crate::raft::application::pub_sub::PubSub;
 use crate::raft::network::tls::load_tls_config;
@@ -100,18 +100,18 @@ impl RedisServer {
         }
     }
 
-    async fn handle_connection_pipeline<S>(
+    async fn handle_connection_pipeline<T>(
         self: Arc<Self>,
-        stream: S,
+        connection: T,
         peer_addr: SocketAddr,
         client_id: u64,
     ) -> Result<(), CacheCatError>
     where
-        S: AsyncRead + AsyncWrite + Unpin + Send + 'static,
+        T: Into<Connection>,
     {
         // let framed = Framed::new(stream, RespCodec::new());
         let auth = self.app.config.password.is_none();
-        let client = Client::new(client_id, stream, auth);
+        let client = Client::new(client_id, connection, auth);
         self.cmd_factory.process_connection(&self, client).await?;
         self.app.pubsub.remove_client(client_id).await;
         info!("Connection handler ended for {}", peer_addr);

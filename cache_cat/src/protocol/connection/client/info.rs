@@ -1,29 +1,26 @@
 use crate::error::CacheCatError;
-use crate::protocol::command::{Client, SubCommand};
+use crate::protocol::command::{Client, Connection, SubCommand};
 use crate::raft::network::redis_server::{RedisServer, RespCodec};
 use crate::raft::types::core::response_value::Value;
+use crate::utils::now_ms;
 use async_trait::async_trait;
 use std::collections::HashMap;
-
 #[cfg(unix)]
 use std::os::fd::AsRawFd;
-
-use crate::utils::now_ms;
 #[cfg(windows)]
 use std::os::windows::io::AsRawSocket;
-use tokio::net::TcpStream;
 use tokio_util::codec::Framed;
 
-fn connection_id(framed: &Framed<TcpStream, RespCodec>) -> u64 {
-    let stream = framed.get_ref();
+fn connection_id(framed: &Framed<Connection, RespCodec>) -> u64 {
+    let conn = framed.get_ref();
     #[cfg(unix)]
     {
-        stream.as_raw_fd() as u64
+        conn.as_raw_fd() as u64
     }
 
     #[cfg(windows)]
     {
-        stream.as_raw_socket() as u64
+        conn.as_raw_socket() as u64
     }
 }
 
@@ -45,16 +42,21 @@ impl SubCommand for ClientInfoCommand {
         server: &RedisServer,
     ) -> Result<Value, CacheCatError> {
         let mut map: HashMap<String, String> = HashMap::new();
-        // map.insert("id".to_string(), client.id.to_string());
-        // let client_addr = client.framed.get_ref().peer_addr()?.to_string();
-        // // client.framed.get_ref().peer_addr()?.port().to_string();
-        // map.insert("addr".to_string(), client_addr);
-        //
-        // let local_addr = client.framed.get_ref().local_addr()?.to_string();
-        // map.insert("laddr".to_string(), local_addr);
-        //
-        // let fd = connection_id(&client.framed);
-        // map.insert("fd".to_string(), fd.to_string());
+        map.insert("id".to_string(), client.id.to_string());
+        let client_addr = client.framed.get_ref().as_stream().peer_addr()?.to_string();
+        // client.framed.get_ref().peer_addr()?.port().to_string();
+        map.insert("addr".to_string(), client_addr);
+
+        let local_addr = client
+            .framed
+            .get_ref()
+            .as_stream()
+            .local_addr()?
+            .to_string();
+        map.insert("laddr".to_string(), local_addr);
+
+        let fd = connection_id(&client.framed);
+        map.insert("fd".to_string(), fd.to_string());
 
         map.insert("name".to_string(), client.name.to_string());
 
