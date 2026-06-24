@@ -12,7 +12,7 @@ use std::sync::Arc;
 use tokio::io::{AsyncRead, AsyncWrite};
 use tokio::net::TcpListener;
 use tokio_rustls::TlsAcceptor;
-use tokio_util::codec::{Decoder, Encoder, Framed};
+use tokio_util::codec::{Decoder, Encoder};
 use tracing::{error, info};
 
 #[derive(Clone)]
@@ -111,7 +111,7 @@ impl RedisServer {
     {
         // let framed = Framed::new(stream, RespCodec::new());
         let auth = self.app.config.password.is_none();
-        let client = Client::new(client_id, stream, auth);
+        let client = Client::from_stream(client_id, stream, auth);
         self.cmd_factory.process_connection(&self, client).await?;
         self.app.pubsub.remove_client(client_id).await;
         info!("Connection handler ended for {}", peer_addr);

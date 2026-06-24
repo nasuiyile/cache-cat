@@ -216,9 +216,9 @@ impl Command for HelloCommand {
 
         // Update client protocol version
         if params.proto_version == 2 {
-            client.framed.codec_mut().switch_resp2();
+            client.framed.switch_resp(2);
         } else {
-            client.framed.codec_mut().switch_resp3();
+            client.framed.switch_resp(3);
         }
 
         // Build response data

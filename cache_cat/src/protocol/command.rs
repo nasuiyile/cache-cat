@@ -67,13 +67,12 @@ use crate::raft::types::core::response_value::Value;
 use crate::raft::types::entry::request::Operation;
 use crate::utils::now_ms;
 use async_trait::async_trait;
-use futures::SinkExt;
-use futures::StreamExt;
+use futures::{Sink, SinkExt};
+use futures::{Stream, StreamExt};
 use std::collections::HashMap;
 use std::fmt;
 use std::fmt::{Display, Formatter};
 use tokio::io::{AsyncRead, AsyncWrite};
-use tokio::net::TcpStream;
 use tokio::select;
 use tokio::sync::watch;
 use tokio_util::codec::Framed;
@@ -119,8 +118,23 @@ pub trait SubCommand: Send + Sync {
     ) -> Result<Value, CacheCatError>;
 }
 
-pub trait AsyncReadWrite: AsyncRead + AsyncWrite + Unpin + Send {}
-impl<T: AsyncRead + AsyncWrite + Unpin + Send> AsyncReadWrite for T {}
+pub trait RespFramed:
+    Stream<Item = std::io::Result<Value>> + Sink<Value, Error = std::io::Error>
+{
+    fn switch_resp(&mut self, version: u8);
+}
+
+impl<T: AsyncRead + AsyncWrite> RespFramed for Framed<T, RespCodec> {
+    #[inline]
+    fn switch_resp(&mut self, version: u8) {
+        match version {
+            2 => self.codec_mut().switch_resp2(),
+            3 => self.codec_mut().switch_resp3(),
+
+            _ => unreachable!("Invalied resp version: {}", version),
+        }
+    }
+}
 
 pub struct Client {
     pub id: u64,
@@ -128,7 +142,7 @@ pub struct Client {
     pub transaction_queue: Option<Vec<Operation>>,
     pub closed: bool,
     pub authenticated: bool,
-    pub framed: Framed<Box<dyn AsyncReadWrite>, RespCodec>,
+    pub framed: Box<dyn RespFramed + Unpin + Send>,
     pub name: String,
     pub connection_time: u64,
     pub last_interaction: u64,
@@ -139,14 +153,17 @@ pub struct Client {
 }
 
 impl Client {
-    pub fn new<S: AsyncReadWrite + 'static>(id: u64, stream: S, auth: bool) -> Self {
+    pub fn new<T>(id: u64, framed: T, auth: bool) -> Self
+    where
+        T: RespFramed + Unpin + Send + 'static,
+    {
         Self {
             id,
             db_number: 0,
             transaction_queue: None,
             closed: false,
             authenticated: auth,
-            framed: Framed::new(Box::new(stream), RespCodec::new()),
+            framed: Box::new(framed),
             name: "".to_string(),
             connection_time: now_ms(),
             last_interaction: now_ms(),
@@ -156,7 +173,15 @@ impl Client {
             lib_ver: "".to_string(),
         }
     }
+
+    pub fn from_stream<S>(id: u64, stream: S, auth: bool) -> Self
+    where
+        S: AsyncRead + AsyncWrite + Unpin + Send + 'static,
+    {
+        Self::new(id, Framed::new(stream, RespCodec::new()), auth)
+    }
 }
+
 pub struct ClientFlag {
     pub in_sub: bool,
     pub multi: bool,
