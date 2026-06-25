@@ -91,7 +91,7 @@ impl ParsedConfig {
             cleaning_interval: config.redis.cleaning_interval,
             db_number: config.redis.databases,
             // TLS
-            tls_port: config.tls.tls_port,
+            tls_port: config.redis.tls_port.filter(|&p| p != 0),
             tls_cert_file: config.tls.tls_cert_file.clone(),
             tls_key_file: config.tls.tls_key_file.clone(),
             tls_ca_cert_file: config.tls.tls_ca_cert_file.clone(),

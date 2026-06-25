@@ -143,7 +143,14 @@ pub enum ErrorKind {
     #[error(transparent)]
     Tls(#[from] TlsError),
 }
-
+impl From<TlsError> for Error {
+    fn from(err: TlsError) -> Self {
+        Self {
+            kind: ErrorKind::from(err), // 利用 ErrorKind 的 #[from] 属性
+            source: None,
+        }
+    }
+}
 /// Storage-related errors (Raft, RocksDB operations)
 #[derive(thiserror::Error, Clone, Debug, PartialEq, Eq)]
 pub enum StorageError {

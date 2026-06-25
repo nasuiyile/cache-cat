@@ -36,14 +36,20 @@ impl Server {
         startup_tx: Sender<StdResult<(), String>>,
         redis_addr: String,
         config: &ParsedConfig,
-    ) -> Self {
-        let redis_server = RedisServer::new(app.clone(), redis_addr, config);
-        Server {
-            app: app.clone(),
+    ) -> Result<Self, CacheCatError> {
+        let redis_server = match RedisServer::new(app.clone(), redis_addr, config) {
+            Ok(rs) => rs,
+            Err(e) => {
+                let _ = startup_tx.send(Err(format!("Failed to create RedisServer: {}", e)));
+                return Err(e);
+            }
+        };
+        Ok(Server {
+            app,
             addr,
             startup_tx,
             redis_server,
-        }
+        })
     }
     pub async fn start_server(
         self: Self,

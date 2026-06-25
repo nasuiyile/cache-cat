@@ -167,7 +167,7 @@ pub fn load_config_with_cli() -> Result<Config, Box<dyn std::error::Error>> {
 
     // TLS 配置覆盖
     if let Some(v) = cli.tls_port {
-        config.tls.tls_port = Some(v);
+        config.redis.tls_port = Some(v);
     }
     if let Some(v) = cli.tls_cert_file {
         config.tls.tls_cert_file = Some(v);

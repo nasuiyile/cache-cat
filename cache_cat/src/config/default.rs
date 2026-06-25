@@ -18,6 +18,7 @@ pub fn default_node_id() -> u16 {
 
 pub fn default_redis_config() -> RedisConfig {
     RedisConfig {
+        tls_port: None,
         redis_port: 6379,
         requirepass: None,
         cleaning_interval: 10,
@@ -28,7 +29,6 @@ pub fn default_redis_config() -> RedisConfig {
 
 pub fn default_tls_config() -> TlsConfig {
     TlsConfig {
-        tls_port: None,
         tls_cert_file: None,
         tls_key_file: None,
         tls_ca_cert_file: None,

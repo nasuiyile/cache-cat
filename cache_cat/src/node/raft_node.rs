@@ -221,7 +221,14 @@ impl RaftNode {
         let redis_addr = config.raft_advertise_endpoint.redis_addr();
         let handle = tokio::task::spawn(async move {
             // Signal startup success
-            let server = Server::new(app, addr.clone(), startup_tx, redis_addr, &config);
+            let server = match Server::new(app, addr.clone(), startup_tx, redis_addr, &config) {
+                Ok(s) => s,
+                Err(e) => {
+                    // new 内部已经通过 startup_tx 发送了错误信息，外层会正常收到
+                    error!("Failed to create TCP server: {e}");
+                    return;
+                }
+            };
             if let Err(e) = server.start_server(shutdown_rx).await {
                 error!("Server error: {}", e);
             }

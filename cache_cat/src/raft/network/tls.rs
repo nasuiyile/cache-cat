@@ -1,14 +1,46 @@
 use crate::error::TlsError;
 use crate::node::parsed_config::ParsedConfig;
 use rustls::pki_types::{CertificateDer, PrivateKeyDer};
-use rustls::{RootCertStore, ServerConfig};
+use rustls::{RootCertStore, ServerConfig, version};
 use std::sync::Arc;
+
+fn parse_tls_versions(
+    protocol: Option<&str>,
+) -> Result<Vec<&'static rustls::SupportedProtocolVersion>, TlsError> {
+    // Redis 默认支持 TLSv1.2 TLSv1.3
+    let protocol = protocol.unwrap_or("TLSv1.2 TLSv1.3");
+
+    let mut versions = Vec::new();
+
+    for p in protocol.split_whitespace() {
+        match p {
+            "TLSv1.2" => versions.push(&version::TLS12),
+            "TLSv1.3" => versions.push(&version::TLS13),
+            _ => {
+                return Err(TlsError::InvalidConfig(format!( 
+                    "unsupported TLS protocol version '{}'",
+                    p
+                )));
+            }
+        }
+    }
+
+    if versions.is_empty() {
+        return Err(TlsError::InvalidConfig(
+            "no TLS protocol versions specified".to_string(),
+        ));
+    }
+
+    Ok(versions)
+}
 
 pub fn load_tls_config(
     cert_file: &str,
     key_file: &str,
     config: &ParsedConfig,
+    protocol: Option<&str>,
 ) -> Result<Arc<ServerConfig>, TlsError> {
+    let versions = parse_tls_versions(protocol)?;
     // 读取证书
     let certs_data = std::fs::read(cert_file).map_err(|e| {
         TlsError::CertificateLoad(format!(
@@ -92,7 +124,7 @@ pub fn load_tls_config(
                     TlsError::InvalidConfig(format!("failed to build client verifier: {}", e))
                 })?;
 
-            ServerConfig::builder()
+            ServerConfig::builder_with_protocol_versions(&versions)
                 .with_client_cert_verifier(client_verifier)
                 .with_single_cert(cert_chain, key)
                 .map_err(|e| {
@@ -110,7 +142,7 @@ pub fn load_tls_config(
         }
     } else {
         // 不需要客户端证书
-        ServerConfig::builder()
+        ServerConfig::builder_with_protocol_versions(&versions)
             .with_no_client_auth()
             .with_single_cert(cert_chain, key)
             .map_err(|e| TlsError::InvalidConfig(format!("failed to configure TLS: {}", e)))?

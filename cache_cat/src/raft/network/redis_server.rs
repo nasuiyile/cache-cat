@@ -68,36 +68,37 @@ impl Encoder<Value> for RespCodec {
 }
 
 impl RedisServer {
-    pub fn new(app: Arc<CacheCatApp>, redis_addr: String, config: &ParsedConfig) -> Self {
+    pub fn new(
+        app: Arc<CacheCatApp>,
+        redis_addr: String,
+        config: &ParsedConfig,
+    ) -> Result<Self, CacheCatError> {
         let cmd_factory = Arc::new(CommandFactory::init());
         let broadcast = app.pubsub.clone();
 
         // 构建TLS配置
         let tls_acceptor =
             if let (Some(cert), Some(key)) = (&config.tls_cert_file, &config.tls_key_file) {
-                match load_tls_config(cert, key, config) {
+                match load_tls_config(cert, key, config, config.tls_protocols.as_deref()) {
                     Ok(config) => Some(TlsAcceptor::from(config)),
                     Err(e) => {
-                        error!("Failed to load TLS config: {}", e);
-                        None
+                        return Err(e.into());
                     }
                 }
             } else {
                 None
             };
-
         let tls_addr = config
             .tls_port
             .map(|port| format!("{}:{}", config.raft_endpoint.addr(), port));
-
-        Self {
+        Ok(Self {
             app,
             redis_addr,
             tls_addr,
             cmd_factory,
             broadcast,
             tls_acceptor,
-        }
+        })
     }
 
     async fn handle_connection_pipeline<S>(
@@ -124,7 +125,7 @@ impl RedisServer {
 
         let tls_listener =
             if let (Some(tls_addr), Some(tls_acceptor)) = (&self.tls_addr, &self.tls_acceptor) {
-                let listener = tokio::net::TcpListener::bind(tls_addr).await?;
+                let listener = TcpListener::bind(tls_addr).await?;
                 info!("Redis TLS server listening on {}", tls_addr);
                 Some((listener, tls_acceptor.clone()))
             } else {

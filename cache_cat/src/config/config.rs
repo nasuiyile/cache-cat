@@ -27,6 +27,9 @@ pub struct Config {
 
 #[derive(Debug, Deserialize, Serialize, Clone, Default)]
 pub struct RedisConfig {
+    /// TLS监听端口
+    pub tls_port: Option<u32>,
+
     pub redis_port: u32,
 
     pub requirepass: Option<String>,
@@ -70,9 +73,6 @@ pub struct RaftConfig {
 /// 所有字段均允许为空
 #[derive(Debug, Deserialize, Serialize, Clone, Default)]
 pub struct TlsConfig {
-    /// TLS监听端口
-    pub tls_port: Option<u32>,
-
     /// 服务端证书
     pub tls_cert_file: Option<String>,
 
