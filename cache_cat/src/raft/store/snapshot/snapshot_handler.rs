@@ -74,7 +74,7 @@ where
     let mut raft_meta_data = raft_meta.lock().await;
     raft_meta_data.snapshot_state = Tail;
     let snapshot_meta = SnapshotMeta {
-        last_log_id: raft_meta_data.last_applied_log_id.clone(),
+        last_log_id: raft_meta_data.last_applied_log_id,
         last_membership: raft_meta_data.last_membership.clone(),
         snapshot_id: "".into(),
     };
@@ -121,12 +121,12 @@ where
     let mut magic = [0u8; 4];
     reader.read_exact(&mut magic).await?;
     if &magic != CACHE_MAGIC_NUM {
-        return Err(io::Error::new(io::ErrorKind::Other, "invalid file magic"));
+        return Err(io::Error::other("invalid file magic"));
     }
 
     let version = reader.read_u8().await?;
     if version != VERSION {
-        return Err(io::Error::new(io::ErrorKind::Other, "unsupported version"));
+        return Err(io::Error::other("unsupported version"));
     }
 
     let meta_len = reader.read_u32().await? as usize;

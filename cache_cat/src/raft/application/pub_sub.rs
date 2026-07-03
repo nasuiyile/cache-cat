@@ -13,6 +13,7 @@ struct ClientState {
     subscribed_patterns: HashSet<Bytes>,
 }
 
+#[derive(Default)]
 pub struct PubSub {
     /// Precise channel subscription: Channel -> Collection of subscribed client IDs
     subs: Arc<RwLock<HashMap<Bytes, HashSet<u64>>>>,
@@ -24,11 +25,7 @@ pub struct PubSub {
 
 impl PubSub {
     pub fn new() -> Self {
-        Self {
-            subs: Arc::new(RwLock::new(HashMap::new())),
-            patterns: Arc::new(RwLock::new(HashMap::new())),
-            clients: Arc::new(RwLock::new(HashMap::new())),
-        }
+        Self::default()
     }
 
     /// Retrieve or create status for the client and return a new Receiver
@@ -243,20 +240,19 @@ impl PubSub {
         ]))
     }
 
-    // TODO: arg `&[u8]` to `Bytes`
-    pub async fn publish(&self, channel: &[u8], message_content: Bytes) -> Value {
+    pub async fn publish(&self, channel: Bytes, message_content: Bytes) -> Value {
         let mut delivered_clients = HashSet::new();
 
         // Precise channel subscribers
         let exact_subs: HashSet<u64> = {
             let subs = self.subs.read().await;
-            subs.get(channel).cloned().unwrap_or_default()
+            subs.get(&channel).cloned().unwrap_or_default()
         };
 
         // Build precise subscription messages
         let exact_msg = Value::Array(Some(vec![
             Value::SimpleString("message".to_string()),
-            Value::BulkString(Some(channel.to_vec().into())),
+            Value::BulkString(Some(channel.clone())),
             Value::BulkString(Some(message_content.clone())),
         ]));
 
@@ -265,7 +261,7 @@ impl PubSub {
         {
             let patterns = self.patterns.read().await;
             for (pattern, set) in patterns.iter() {
-                if matches_pattern(channel, pattern) {
+                if matches_pattern(&channel, pattern) {
                     pattern_targets.push((pattern.clone(), set.clone()));
                 }
             }
@@ -275,10 +271,10 @@ impl PubSub {
 
         // Send to precise subscribers
         for client_id in &exact_subs {
-            if let Some(state) = clients.get(client_id) {
-                if state.sender.send(Some(exact_msg.clone())).is_ok() {
-                    delivered_clients.insert(*client_id);
-                }
+            if let Some(state) = clients.get(client_id)
+                && state.sender.send(Some(exact_msg.clone())).is_ok()
+            {
+                delivered_clients.insert(*client_id);
             }
         }
 
@@ -290,11 +286,12 @@ impl PubSub {
                 Value::BulkString(Some(channel.to_vec().into())),
                 Value::BulkString(Some(message_content.clone())),
             ]));
+
             for client_id in set {
-                if let Some(state) = clients.get(client_id) {
-                    if state.sender.send(Some(pmessage.clone())).is_ok() {
-                        delivered_clients.insert(*client_id);
-                    }
+                if let Some(state) = clients.get(client_id)
+                    && state.sender.send(Some(pmessage.clone())).is_ok()
+                {
+                    delivered_clients.insert(*client_id);
                 }
             }
         }
@@ -493,13 +490,14 @@ impl PubSub {
     /// Before calling, it is necessary to ensure that the write lock for 'clients'
     /// is already held and the subscription collection has been updated.
     fn cleanup_client_if_empty(clients: &mut HashMap<u64, ClientState>, client_id: u64) {
-        if let Some(state) = clients.get_mut(&client_id) {
-            if state.subscribed_channels.is_empty() && state.subscribed_patterns.is_empty() {
-                // Send a 'None' as a shutdown signal to notify all receivers
-                // that the subscription has ended
-                let _ = state.sender.send(None);
-                clients.remove(&client_id);
-            }
+        if let Some(state) = clients.get_mut(&client_id)
+            && state.subscribed_channels.is_empty()
+            && state.subscribed_patterns.is_empty()
+        {
+            // Send a 'None' as a shutdown signal to notify all receivers
+            // that the subscription has ended
+            let _ = state.sender.send(None);
+            clients.remove(&client_id);
         }
     }
 }

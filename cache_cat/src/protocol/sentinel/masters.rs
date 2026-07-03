@@ -28,25 +28,23 @@ impl SubCommand for SentinelMastersCommand {
         };
         let nodes_num = server.app.cluster.nodes().len();
 
-        let mut result = Vec::new();
-        let mut master_info = Vec::new();
-        master_info.push(Value::BulkString(Some(Bytes::from_static(b"name"))));
-        master_info.push(Value::BulkString(Some(master_name.into())));
-        master_info.push(Value::BulkString(Some(Bytes::from_static(b"ip"))));
-        master_info.push(Value::BulkString(Some(endpoint.addr().to_string().into())));
-        master_info.push(Value::BulkString(Some(Bytes::from_static(b"port"))));
-        master_info.push(Value::BulkString(Some(
+        let master_info = vec![
+            Bytes::from_static(b"name"),
+            master_name.into(),
+            Bytes::from_static(b"ip"),
+            endpoint.addr().to_string().into(),
+            Bytes::from_static(b"port"),
             endpoint.redis_port().to_string().into(),
-        )));
-        master_info.push(Value::BulkString(Some(Bytes::from_static(b"flags"))));
-        master_info.push(Value::BulkString(Some(flags.to_string().into())));
+            Bytes::from_static(b"flags"),
+            flags.to_string().into(),
+            Bytes::from_static(b"num-other-sentinels"),
+            nodes_num.to_string().into(),
+        ]
+        .into_iter()
+        .map(|v| Value::BulkString(Some(v)))
+        .collect::<Vec<_>>();
 
-        master_info.push(Value::BulkString(Some(Bytes::from_static(
-            b"num-other-sentinels",
-        ))));
-        master_info.push(Value::BulkString(Some(nodes_num.to_string().into())));
-
-        result.push(Value::Array(Some(master_info)));
+        let result = vec![Value::Array(Some(master_info))];
 
         Ok(Value::Array(Some(result)))
     }

@@ -14,11 +14,14 @@ use tokio_util::codec::{Framed, LengthDelimitedCodec};
 use crate::raft::types::entry::request::Request;
 use crate::raft::types::raft_types::TypeConfig;
 
+type RequestSender = mpsc::Sender<(
+    Request,
+    oneshot::Sender<Result<ClientWriteResponse<TypeConfig>, String>>,
+)>;
+
+#[derive(Clone)]
 pub struct PipelineClient {
-    tx: mpsc::Sender<(
-        Request,
-        oneshot::Sender<Result<ClientWriteResponse<TypeConfig>, String>>,
-    )>,
+    tx: RequestSender,
 }
 
 impl PipelineClient {
@@ -161,13 +164,6 @@ impl PipelineMultiClient {
 
                 fresh.call(req).await
             }
-        }
-    }
-}
-impl Clone for PipelineClient {
-    fn clone(&self) -> Self {
-        Self {
-            tx: self.tx.clone(),
         }
     }
 }

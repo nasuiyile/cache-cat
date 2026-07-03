@@ -164,7 +164,7 @@ impl RaftNetworkV2<TypeConfig> for TcpNetwork {
                     id: node_id,
                 }));
             }
-            send_result = snapshot.snapshot.send_file(&*client.addr) => {
+            send_result = snapshot.snapshot.send_file(&client.addr) => {
                 send_result
             }
         };

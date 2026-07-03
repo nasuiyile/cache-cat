@@ -41,6 +41,13 @@ impl SentinelCommand {
     }
 }
 
+impl Default for SentinelCommand {
+    #[inline]
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 #[async_trait]
 impl Command for SentinelCommand {
     async fn execute(

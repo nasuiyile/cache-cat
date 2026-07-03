@@ -27,14 +27,23 @@ pub struct RespCodec {
 }
 
 impl RespCodec {
-    pub fn new() -> Self {
+    pub const fn new() -> Self {
         Self { proto_version: 2 }
     }
-    pub fn switch_resp2(&mut self) {
+
+    pub const fn switch_resp2(&mut self) {
         self.proto_version = 2;
     }
-    pub fn switch_resp3(&mut self) {
+
+    pub const fn switch_resp3(&mut self) {
         self.proto_version = 3;
+    }
+}
+
+impl Default for RespCodec {
+    #[inline]
+    fn default() -> Self {
+        Self::new()
     }
 }
 

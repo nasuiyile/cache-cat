@@ -1,12 +1,12 @@
 use crate::error::{CacheCatError, ProtocolError};
 use crate::protocol::command::{Client, Command, SubCommand};
 use crate::protocol::connection::client::info::ClientInfoCommand;
+use crate::protocol::connection::client::setinfo::SetInfoCommand;
+use crate::protocol::connection::client::setname::SetNameCommand;
 use crate::raft::network::redis_server::RedisServer;
 use crate::raft::types::core::response_value::Value;
 use async_trait::async_trait;
 use std::collections::HashMap;
-use crate::protocol::connection::client::setinfo::SetInfoCommand;
-use crate::protocol::connection::client::setname::SetNameCommand;
 
 /// Sentinel command handler
 pub struct ClientCommand {
@@ -20,6 +20,13 @@ impl ClientCommand {
         sub_commands.insert("SETNAME".to_string(), Box::new(SetNameCommand));
         sub_commands.insert("SETINFO".to_string(), Box::new(SetInfoCommand));
         Self { sub_commands }
+    }
+}
+
+impl Default for ClientCommand {
+    #[inline]
+    fn default() -> Self {
+        Self::new()
     }
 }
 

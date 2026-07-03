@@ -1,11 +1,11 @@
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::mocha::{EntrySnapshot, ExpirePolicy, Mocha};
     use std::sync::Arc;
     use std::sync::atomic::{AtomicU64, Ordering};
     use std::thread;
     use std::time::Duration;
-    use crate::mocha::{EntrySnapshot, ExpirePolicy, Mocha};
 
     // Helper function to create a new Mocha instance for testing
     fn create_mocha() -> Mocha<String, String> {
@@ -308,13 +308,13 @@ mod tests {
         mocha.insert_persistent("key1".to_string(), "value1".to_string());
         mocha.insert_persistent("key2".to_string(), "value2".to_string());
 
-        assert_eq!(mocha.contains_key(&"key1".to_string()), true);
+        assert!(mocha.contains_key(&"key1".to_string()));
 
         let cleared = mocha.clear();
         assert_eq!(cleared, 2);
 
-        assert_eq!(mocha.contains_key(&"key1".to_string()), false);
-        assert_eq!(mocha.contains_key(&"key2".to_string()), false);
+        assert!(!mocha.contains_key(&"key1".to_string()));
+        assert!(!mocha.contains_key(&"key2".to_string()));
     }
 
     #[test]
@@ -337,7 +337,7 @@ mod tests {
         thread::sleep(Duration::from_millis(10));
 
         // Key should now be expired
-        let result = mocha.get(&"key1".to_string());
+        let _result = mocha.get(&"key1".to_string());
         // Note: This might still return value if wheel hasn't processed yet
         // In practice, you might need to wait for the worker thread
     }
@@ -505,8 +505,6 @@ mod tests {
         };
         assert_eq!(snapshot.get_expire_policy(), ExpirePolicy::Absolute(100));
     }
-
-
 
     #[test]
     fn test_logic_clock() {

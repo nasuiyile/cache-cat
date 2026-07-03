@@ -120,21 +120,16 @@ impl RaftLogStorage<TypeConfig> for LogStore {
     async fn get_log_state(&mut self) -> Result<LogState<TypeConfig>, io::Error> {
         let last_log_id = match self.engine.last_index(self.group_id as u64) {
             None => None, //  只要 last_index 为 None，直接返回 None
-            Some(i) => {
-                match self
-                    .engine
-                    .get_entry::<MessageExtTyped>(self.group_id as u64, i)
-                    .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?
-                {
-                    None => None, //  get_entry 为 None 也返回 None
-                    Some(entry) => Some(entry.log_id()),
-                }
-            }
+            Some(i) => self
+                .engine
+                .get_entry::<MessageExtTyped>(self.group_id as u64, i)
+                .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?
+                .map(|entry| entry.log_id()),
         };
 
         let last_purged_log_id = self.get_meta::<meta::LastPurged>()?;
         let last_log_id = match last_log_id {
-            None => last_purged_log_id.clone(),
+            None => last_purged_log_id,
             Some(x) => Some(x),
         };
 
@@ -178,20 +173,18 @@ impl RaftLogStorage<TypeConfig> for LogStore {
         // 但上面的 `pub_cf()` 必须在这个函数中调用，而不能放到另一个任务里。
         // 因为当函数返回时，需要能够读取到这些日志条目。
         // let db = self.db.clone();
-        let res = self
-            .engine
+        self.engine
             .write(&mut batch, false)
-            .map(|_| ())
             .map_err(io::Error::other)?;
 
         let engine = self.engine.clone();
         let _hand = tokio::task::spawn_blocking(move || {
-            let res = engine.sync().map(|_| ()).map_err(io::Error::other);
+            let res = engine.sync().map_err(io::Error::other);
             callback.io_completed(res);
         })
         .instrument(tracing::debug_span!("raft-engine-sync"));
         // Return now, and the callback will be invoked later when IO is done.
-        Ok(res)
+        Ok(())
     }
 
     // 如果follower的日志与leader的日志不匹配，follower会删除冲突的日志

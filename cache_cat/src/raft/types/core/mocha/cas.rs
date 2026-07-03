@@ -53,7 +53,7 @@ impl MyCache {
             }
             Some(v) => v,
         };
-        let mut return_value = Integer(0);
+        let mut return_value;
 
         match update.update_type {
             UpdateType::None => {
@@ -94,6 +94,9 @@ impl MyCache {
             UpdateType::CAS(cas_version) => {
                 let expected_version = *cas_version - 1;
                 if entry.value.version != expected_version {
+                    // TODO: the value set there is invalid，
+                    // can remove it or this `if`
+
                     return_value = Integer(0);
                 }
                 let (changed, res) = cmd.mutate(entry, update.write_clock);

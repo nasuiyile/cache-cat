@@ -178,6 +178,8 @@ impl Value {
             }
         }
     }
+
+    // TODO: param `lua` is only used in recursion
     pub fn from_lua(lua_val: LuaValue, lua: &Lua) -> Result<Value, ProtocolError> {
         match lua_val {
             LuaValue::Nil | LuaValue::Boolean(false) => Ok(Value::BulkString(None)),
@@ -198,23 +200,21 @@ impl Value {
                 }
 
                 // Check if it is a status reply: { ok = "..." } or { err = "..." }
-                if pairs.len() == 1 {
-                    if let (LuaValue::String(key), value) = &pairs[0] {
-                        if key.as_bytes() == b"ok" {
-                            if let LuaValue::String(msg) = value {
-                                return Ok(Value::SimpleString(
-                                    String::from_utf8_lossy(msg.as_bytes().as_ref().into())
-                                        .into_owned(),
-                                ));
-                            }
-                        } else if key.as_bytes() == b"err" {
-                            if let LuaValue::String(msg) = value {
-                                return Ok(Value::Error(
-                                    String::from_utf8_lossy(msg.as_bytes().as_ref().into())
-                                        .into_owned(),
-                                ));
-                            }
+                if pairs.len() == 1
+                    && let (LuaValue::String(key), value) = &pairs[0]
+                {
+                    if key.as_bytes() == b"ok" {
+                        if let LuaValue::String(msg) = value {
+                            return Ok(Value::SimpleString(
+                                String::from_utf8_lossy(msg.as_bytes().as_ref()).into_owned(),
+                            ));
                         }
+                    } else if key.as_bytes() == b"err"
+                        && let LuaValue::String(msg) = value
+                    {
+                        return Ok(Value::Error(
+                            String::from_utf8_lossy(msg.as_bytes().as_ref()).into_owned(),
+                        ));
                     }
                 }
 
@@ -222,11 +222,12 @@ impl Value {
                 let mut is_array = true;
                 let mut seen = vec![false; pairs.len()];
                 for (k, _) in &pairs {
-                    if let LuaValue::Integer(idx) = k {
-                        if *idx >= 1 && *idx <= pairs.len() as i64 {
-                            seen[(*idx - 1) as usize] = true;
-                            continue;
-                        }
+                    if let LuaValue::Integer(idx) = k
+                        && *idx >= 1
+                        && *idx <= pairs.len() as i64
+                    {
+                        seen[(*idx - 1) as usize] = true;
+                        continue;
                     }
                     is_array = false;
                     break;

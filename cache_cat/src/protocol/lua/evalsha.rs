@@ -86,17 +86,21 @@ impl EvalShaParams {
             return Err(ProtocolError::InvalidArgument("key"));
         }
 
+        let start = 3 + numkeys;
         // Parse args
-        let mut args = Vec::new();
-        for i in (3 + numkeys)..items.len() {
-            let arg_value = &items[i];
-            let arg = match arg_value {
-                Value::BulkString(Some(data)) => data.clone(),
-                Value::SimpleString(s) => s.clone().into(),
-                Value::Integer(i) => i.to_string().into(),
-                _ => return Err(ProtocolError::InvalidArgument("argument")),
-            };
-            args.push(arg);
+        let args = items
+            .iter()
+            .skip(start)
+            .map_while(|arg_value| match arg_value {
+                Value::BulkString(Some(data)) => Some(data.clone()),
+                Value::SimpleString(s) => Some(s.clone().into()),
+                Value::Integer(i) => Some(i.to_string().into()),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+
+        if args.len() < items.len() - start {
+            return Err(ProtocolError::InvalidArgument("argument"));
         }
 
         Ok(EvalShaParams::new(sha1, numkeys, keys, args))

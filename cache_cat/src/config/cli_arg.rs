@@ -1,4 +1,4 @@
-use crate::config::config::{load_config, Config};
+use crate::config::config::{Config, load_config};
 use clap::Parser;
 use std::path::PathBuf;
 
@@ -24,7 +24,6 @@ pub struct CliArgs {
     // ------------------------------------------------------------------------
     // Redis
     // ------------------------------------------------------------------------
-
     /// Redis port.
     #[arg(long = "redis-port")]
     pub redis_port: Option<u32>,
@@ -48,7 +47,6 @@ pub struct CliArgs {
     // ------------------------------------------------------------------------
     // Raft
     // ------------------------------------------------------------------------
-
     /// Raft log directory.
     #[arg(long = "log-path")]
     pub raft_log_path: Option<String>,
@@ -84,7 +82,6 @@ pub struct CliArgs {
     // ------------------------------------------------------------------------
     // TLS
     // ------------------------------------------------------------------------
-
     /// TLS listening port.
     #[arg(long = "tls-port")]
     pub tls_port: Option<u32>,

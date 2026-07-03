@@ -4,6 +4,7 @@ use crate::raft::network::redis_server::RedisServer;
 use crate::raft::types::core::response_value::Value;
 use async_trait::async_trait;
 use bytes::Bytes;
+use futures::{StreamExt, stream};
 
 pub struct SentinelSentinelsCommand;
 
@@ -30,38 +31,35 @@ impl SubCommand for SentinelSentinelsCommand {
         if server.app.config.sentinel_master_name != name {
             return Ok(Value::Array(None));
         }
-        let nodes = server.app.cluster.nodes();
-        let mut result = Vec::new();
-        for (node_id, node) in nodes {
-            let mut info = Vec::new();
-            info.push(Value::BulkString(Some(Bytes::from_static(b"name"))));
-            // Here returns node_id as the name of the sentinel
-            info.push(Value::BulkString(Some(node_id.to_string().into())));
 
-            info.push(Value::BulkString(Some(Bytes::from_static(b"ip"))));
-            info.push(Value::BulkString(Some(
-                node.endpoint.addr().to_string().into(),
-            )));
+        let result = stream::iter(server.app.cluster.nodes())
+            .then(async move |(node_id, node)| {
+                let shared_node_id: Bytes = node_id.to_string().into();
 
-            info.push(Value::BulkString(Some(Bytes::from_static(b"port"))));
-            info.push(Value::BulkString(Some(
-                node.endpoint.redis_port().to_string().into(),
-            )));
-
-            info.push(Value::BulkString(Some(Bytes::from_static(b"runid"))));
-            info.push(Value::BulkString(Some(node_id.to_string().into())));
-
-            info.push(Value::BulkString(Some(Bytes::from_static(b"flags"))));
-            if server.app.cluster.is_survive(node_id).await {
-                info.push(Value::BulkString(Some(Bytes::from_static(b"sentinel"))));
-            } else {
-                info.push(Value::BulkString(Some(Bytes::from_static(
-                    b"sentinel,o_down,disconnected",
-                ))));
-            }
-
-            result.push(Value::Array(Some(info)));
-        }
+                vec![
+                    Bytes::from_static(b"name"),
+                    // Here returns node_id as the name of the sentinel
+                    shared_node_id.clone(),
+                    Bytes::from_static(b"ip"),
+                    node.endpoint.addr().to_string().into(),
+                    Bytes::from_static(b"port"),
+                    node.endpoint.redis_port().to_string().into(),
+                    Bytes::from_static(b"runid"),
+                    shared_node_id,
+                    Bytes::from_static(b"flags"),
+                    if server.app.cluster.is_survive(node_id).await {
+                        Bytes::from_static(b"sentinel")
+                    } else {
+                        Bytes::from_static(b"sentinel,o_down,disconnected")
+                    },
+                ]
+                .into_iter()
+                .map(|v| Value::BulkString(Some(v)))
+                .collect::<Vec<_>>()
+            })
+            .map(|info| Value::Array(Some(info)))
+            .collect::<Vec<_>>()
+            .await;
 
         Ok(Value::Array(Some(result)))
     }

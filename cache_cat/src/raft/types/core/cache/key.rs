@@ -1,5 +1,7 @@
 use crate::mocha::{EntrySnapshot, ExpirePolicy, MochaOperation};
 use crate::protocol::key::del::{DelParams, DelReq};
+use crate::protocol::key::persist::PersistReq;
+use crate::protocol::key::pexpire::PExpireReq;
 use crate::protocol::key::rename::RenameParams;
 use crate::protocol::key::renamenx::RenameNxParams;
 use crate::raft::types::core::mocha::cas::ComputeCommand;
@@ -8,8 +10,6 @@ use crate::raft::types::core::response_value::Value;
 use crate::raft::types::entry::bae_operation::{BaseOperation, InsertReq};
 use crate::raft::types::entry::request::AtomicRequest;
 use bytes::Bytes;
-use crate::protocol::key::persist::PersistReq;
-use crate::protocol::key::pexpire::PExpireReq;
 
 impl ComputeCommand for InsertReq {
     fn key(&self) -> &Bytes {
@@ -134,14 +134,12 @@ impl MyCache {
             let del = DelReq { key };
             match self.del(del, update) {
                 Value::Error(err) => return Value::Error(err),
-                Value::Integer(num) => count = count + num,
+                Value::Integer(num) => count += num,
                 _ => {}
             }
         }
         Value::Integer(count)
     }
-
-
 
     pub fn persist(&self, persist: PersistReq, update: &mut Update) -> Value {
         self.execute_compute(persist, update)
@@ -188,11 +186,11 @@ impl MyCache {
                 }
             }
             UpdateType::CAS(cas_version) => {
-                if let Some(entry) = cache.get(&del_req.key) {
-                    if entry.version == *cas_version - 1 {
-                        cache.remove(&del_req.key);
-                        return Value::Integer(1);
-                    }
+                if let Some(entry) = cache.get(&del_req.key)
+                    && entry.version == *cas_version - 1
+                {
+                    cache.remove(&del_req.key);
+                    return Value::Integer(1);
                 }
                 Value::Integer(0)
             }

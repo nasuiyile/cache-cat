@@ -1,4 +1,4 @@
-use crate::raft::types::raft_types::{ TypeConfig};
+use crate::raft::types::raft_types::TypeConfig;
 use openraft::SnapshotMeta;
 use serde::{Deserialize, Serialize};
 use std::error::Error;
@@ -14,8 +14,10 @@ const CACHE_MAGIC_NUM: &[u8; 4] = b"MCDC";
 const VERSION: u8 = 1;
 
 /// 发送硬链接文件到其他节点的辅助结构体。
+///
 /// - 创建时会产生硬链接（async 构造函数 try_create ）
 /// - drop 时会删除硬链接（同步删除）
+///
 /// FileOperator可以直接在内部使用或发送给客户端，但是客户端收到后要修改file_path
 #[derive(Serialize, Deserialize, Debug, PartialEq, Default)]
 pub struct FileOperator {
@@ -26,13 +28,8 @@ pub struct FileOperator {
 impl FileOperator {
     /// - 如果原文件不存在，返回 Ok(None)
     /// - 否则创建硬链接并返回 Ok(Some(HardlinkSender))
-    pub async fn new<P: AsRef<Path>>(
-        file_path: P,
-    ) -> Result<Option<Self>, io::Error> {
-        let snapshot_path = file_path
-            .as_ref()
-            .join("snapshot")
-            .join("snapshot.bin");
+    pub async fn new<P: AsRef<Path>>(file_path: P) -> Result<Option<Self>, io::Error> {
+        let snapshot_path = file_path.as_ref().join("snapshot").join("snapshot.bin");
         // 1. 检查文件是否存在
         match fs::metadata(&snapshot_path).await {
             Ok(_) => {
@@ -53,15 +50,15 @@ impl FileOperator {
     }
     pub fn get_hard_link_buf(&self) -> PathBuf {
         let hardlink_filename = format!("hardlink_snapshot_{}.tmp", self.uuid);
-        let hardlink_path = self.file_path.join(hardlink_filename);
-        hardlink_path
+
+        self.file_path.join(hardlink_filename)
     }
 
     //在收到快照后从节点安装的时候会调用这个方法来获得新的硬链接路径
-    pub fn get_local_hard_link_buf(&self, path: &PathBuf) -> PathBuf {
+    pub fn get_local_hard_link_buf(&self, path: &Path) -> PathBuf {
         let hardlink_filename = format!("hardlink_snapshot_{}.tmp", self.uuid);
-        let hardlink_path = path.join("snapshot").join(hardlink_filename);
-        hardlink_path
+
+        path.join("snapshot").join(hardlink_filename)
     }
 
     /// 发送文件（使用硬链接路径），返回 send_file_once 的结果（成功时返回 Uuid）。
@@ -92,12 +89,12 @@ where
     let mut magic = [0u8; 4];
     reader.read_exact(&mut magic).await?;
     if &magic != CACHE_MAGIC_NUM {
-        return Err(io::Error::new(io::ErrorKind::Other, "invalid file magic"));
+        return Err(io::Error::other("invalid file magic"));
     }
     let mut version = [0u8; 1];
     reader.read_exact(&mut version).await?;
     if version[0] != VERSION {
-        return Err(io::Error::new(io::ErrorKind::Other, "unsupported version"));
+        return Err(io::Error::other("unsupported version"));
     }
 
     let meta_len = reader.read_u32().await? as usize;
@@ -108,6 +105,7 @@ where
 
     Ok(Some(meta))
 }
+
 //发送的时候一定要转u32
 pub async fn send_file_once<P: AsRef<Path>>(
     addr: &str,
@@ -121,7 +119,6 @@ pub async fn send_file_once<P: AsRef<Path>>(
 
     // 第一个字节：模式标识，服务端代码中 0 是 RPC，非 0 是 stream
     stream.write_all(&[1u8]).await?;
-
 
     //发送uuid
     stream.write_all(uuid.as_bytes()).await?;

@@ -130,7 +130,7 @@ impl LuaEnv {
                     let operation = self
                         .raft_command
                         .parse_request(&vec)
-                        .map_err(|e| LuaError::external(e))?;
+                        .map_err(LuaError::external)?;
                     let value = do_request(cache, operation, update, false);
                     if let Value::Error(e) = value {
                         return Err(LuaError::external(e));
@@ -153,7 +153,8 @@ impl LuaEnv {
                         vec.push(Value::SimpleString(param));
                     }
                     let update = unsafe { &mut *update_ptr };
-                    let result = match self.raft_command.parse_request(&vec) {
+
+                    match self.raft_command.parse_request(&vec) {
                         Ok(operation) => {
                             do_request(cache, operation, update, false).into_lua_value(&self.lua)
                         }
@@ -162,8 +163,7 @@ impl LuaEnv {
                             err_table.set("err", e.to_string())?;
                             Ok(LuaValue::Table(err_table))
                         }
-                    };
-                    result
+                    }
                 })?;
 
             // ---- Inject global Redis table ----

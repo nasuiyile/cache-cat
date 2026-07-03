@@ -9,7 +9,7 @@ use std::fs;
 use std::net::SocketAddr;
 use std::result::Result as StdResult;
 
-#[derive(Debug, Deserialize, Serialize, Clone, Default)]
+#[derive(Debug, Deserialize, Serialize, Clone)]
 #[serde(rename_all = "kebab-case")]
 pub struct Config {
     #[serde(default = "default_node_id")]
@@ -132,4 +132,16 @@ pub fn load_config(path: &str) -> StdResult<Config, Box<dyn std::error::Error>> 
         .map_err(|e| format!("Failed to parse config file '{}': {}", path, e))?;
 
     Ok(config)
+}
+
+impl Default for Config {
+    #[inline]
+    fn default() -> Self {
+        Self {
+            node_id: default_node_id(),
+            redis: default_redis_config(),
+            raft: default_raft_config(),
+            tls: default_tls_config(),
+        }
+    }
 }

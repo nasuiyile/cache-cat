@@ -77,8 +77,8 @@ impl MyCache {
     pub fn generate_new_write_clock(&self) -> u64 {
         let read_time = self.read_logic_clock.load(Ordering::Acquire);
         let system_now = now_ms();
-        let target = max(read_time, system_now);
-        target
+
+        max(read_time, system_now)
     }
 
     pub fn set_write_clock(&self, new_clock: u64) -> u64 {

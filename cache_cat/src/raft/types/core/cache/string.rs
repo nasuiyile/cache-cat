@@ -87,37 +87,36 @@ impl MyCache {
 
         // Apply NX/XX mode logic
         match params.mode {
-            Some(SetMode::Nx) => {
-                // NX: Only set if key does not exist
-                if key_exists {
-                    // Key exists, do not set
-                    return if params.get {
-                        // GET with NX: return current value if it's a string, otherwise nil
-                        match existing_key {
-                            ExistingKey::Data(v) => Value::BulkString(Some(v)),
-                            _ => Value::BulkString(None), // Other type, return nil
-                        }
-                    } else {
-                        // Just return nil (nil bulk string)
-                        Value::BulkString(None)
-                    };
-                }
+            // NX: Only set if key does not exist
+            Some(SetMode::Nx) if key_exists => {
+                // Key exists, do not set
+                return if params.get {
+                    // GET with NX: return current value if it's a string, otherwise nil
+                    match existing_key {
+                        ExistingKey::Data(v) => Value::BulkString(Some(v)),
+                        _ => Value::BulkString(None), // Other type, return nil
+                    }
+                } else {
+                    // Just return nil (nil bulk string)
+                    Value::BulkString(None)
+                };
             }
-            Some(SetMode::Xx) => {
-                // XX: Only set if key exists
-                if !key_exists {
-                    // Key does not exist, do not set
-                    return if params.get {
-                        // GET with XX: return nil since key doesn't exist
-                        Value::BulkString(None)
-                    } else {
-                        Value::BulkString(None)
-                    };
-                }
+
+            Some(SetMode::Xx) if !key_exists => {
+                // Key does not exist, do not set
+                return if params.get {
+                    // GET with XX: return nil since key doesn't exist
+                    Value::BulkString(None)
+                } else {
+                    Value::BulkString(None)
+                };
             }
+
             None => {
                 // No mode restriction, always set
             }
+
+            _ => {}
         }
         let set = SetReq {
             key: params.key,

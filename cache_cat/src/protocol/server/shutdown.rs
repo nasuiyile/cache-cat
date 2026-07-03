@@ -20,6 +20,7 @@ pub enum ShutdownOption {
 pub struct ShutdownParam {
     pub option: ShutdownOption,
 }
+// TODO: not exported struct
 
 impl ShutdownParam {
     /// Parse arguments from RESP items

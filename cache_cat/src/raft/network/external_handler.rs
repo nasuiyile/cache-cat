@@ -100,9 +100,7 @@ async fn print_test(_app: Arc<CacheCatApp>, d: PrintTestReq) -> Result<PrintTest
 }
 
 async fn publish(app: Arc<CacheCatApp>, param: PublishReq) -> Result<(), String> {
-    app.pubsub
-        .publish(&param.channel, param.message.into())
-        .await;
+    app.pubsub.publish(param.channel, param.message).await;
     Ok(())
 }
 
@@ -163,12 +161,10 @@ async fn append_entries(
     app: Arc<CacheCatApp>,
     req: AppendEntriesReq,
 ) -> Result<AppendEntriesResponse<TypeConfig>, String> {
-    let res = app
-        .cluster
+    app.cluster
         .append_entries(req.append_entries)
         .await
-        .map_err(|e| e.to_string());
-    res
+        .map_err(|e| e.to_string())
 }
 
 // 从节点收到数据 在这里序列化到磁盘 后续install_full_snapshot会从磁盘中反序列化

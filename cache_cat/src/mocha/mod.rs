@@ -66,6 +66,7 @@ pub enum MochaOperation<V> {
     Abort,
 }
 
+// TODO: Unused or not re-exported enum
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum MochaCompute<K, V> {
     Unchanged,

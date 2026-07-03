@@ -1,3 +1,5 @@
+pub mod cli_arg;
 pub mod config;
 mod default;
-pub mod cli_arg;
+
+// TODO: change sub mod name of `config`

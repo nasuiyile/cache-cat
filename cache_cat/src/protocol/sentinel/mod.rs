@@ -1,6 +1,7 @@
 pub mod get_master_addr;
 pub mod masters;
 pub mod sentinel;
-mod slaves;
 pub mod sentinels;
+mod slaves;
 
+// TODO: change sub mod name of `sentinel`

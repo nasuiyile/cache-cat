@@ -1,5 +1,6 @@
 use crate::config::config::{RaftConfig, RedisConfig, TlsConfig};
 
+#[inline]
 pub fn default_raft_config() -> RaftConfig {
     RaftConfig {
         log_path: ".data".to_string(),
@@ -12,7 +13,9 @@ pub fn default_raft_config() -> RaftConfig {
         replication_lag_threshold: 60000,
     }
 }
-pub fn default_node_id() -> u16 {
+
+#[inline]
+pub const fn default_node_id() -> u16 {
     1
 }
 
@@ -27,7 +30,8 @@ pub fn default_redis_config() -> RedisConfig {
     }
 }
 
-pub fn default_tls_config() -> TlsConfig {
+#[inline]
+pub const fn default_tls_config() -> TlsConfig {
     TlsConfig {
         tls_cert_file: None,
         tls_key_file: None,

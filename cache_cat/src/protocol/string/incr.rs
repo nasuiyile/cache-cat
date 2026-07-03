@@ -102,7 +102,7 @@ impl ComputeCommand for IncrReq {
                 (ValueObject::Int(num), Value::Integer(num))
             }
             ValueObject::String(s) => {
-                if let Some(v) = parse_i64(&s) {
+                if let Some(v) = parse_i64(s) {
                     let new_val = v + self.value;
                     (ValueObject::Int(new_val), Value::Integer(new_val))
                 } else {

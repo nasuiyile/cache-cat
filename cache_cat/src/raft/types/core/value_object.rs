@@ -6,19 +6,18 @@ use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 use std::sync::Arc;
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct SortedSet {
     tree: BTreeMap<(OrderedFloat<f64>, Bytes), ()>,
     hash: HashMap<Bytes, f64>,
 }
 
 impl SortedSet {
+    #[inline]
     pub fn new() -> Self {
-        SortedSet {
-            tree: BTreeMap::new(),
-            hash: HashMap::new(),
-        }
+        Self::default()
     }
+
     pub fn zadd(&mut self, req: ZAddReq) -> i64 {
         let mut added = 0;
         let mut changed = 0;
@@ -152,6 +151,7 @@ impl SortedSet {
         result
     }
 }
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum HashValue {
     Str(Bytes),

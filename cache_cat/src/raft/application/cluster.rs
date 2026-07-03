@@ -145,12 +145,12 @@ impl Cluster {
     pub fn nodes(&self) -> Vec<(NodeId, Node)> {
         let metrics_guard = self.raft.metrics();
         let metrics = metrics_guard.borrow_watched();
-        let vec = metrics
+
+        metrics
             .membership_config
             .nodes()
             .map(|(node_id, node)| (*node_id, node.clone()))
-            .collect::<Vec<_>>();
-        vec
+            .collect::<Vec<_>>()
     }
 
     pub async fn initialize(&self, members: BTreeMap<NodeId, Node>) -> Result<(), CacheCatError> {

@@ -6,7 +6,6 @@ use openraft::SnapshotMeta;
 use openraft::alias::VoteOf;
 use openraft::raft::{AppendEntriesRequest, VoteRequest};
 use serde::{Deserialize, Serialize};
-use std::hash::Hasher;
 
 #[derive(Serialize, Deserialize, Debug, PartialEq, Clone)]
 pub struct PublishReq {

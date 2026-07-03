@@ -93,12 +93,11 @@ impl RaftSnapshotBuilder<TypeConfig> for StateMachineStore {
         //理论上这里读取的快照可能不是这里dump的快照了，因此这里返回的metadata需要重新load
         let file = FileOperator::new(&self.path).await?;
         //正常情况不该为空如果为空就抛IO异常
-        let file_operator =
-            file.ok_or(io::Error::new(io::ErrorKind::Other, "snapshot is empty"))?;
+        let file_operator = file.ok_or(io::Error::other("snapshot is empty"))?;
         let meta_data = file_operator
             .load_meta_data()
             .await?
-            .ok_or(io::Error::new(io::ErrorKind::Other, "meta data is empty"))?;
+            .ok_or(io::Error::other("meta data is empty"))?;
         _ = self.data.snapshot_message.send(());
         Ok(Snapshot {
             meta: meta_data,
@@ -190,12 +189,11 @@ impl RaftStateMachine<TypeConfig> for StateMachineStore {
                     update.db_number = db_number;
                     update.write_clock = write_clock;
                     //只有哲理external为true因为是外部调用
-                    let value = do_request(&self.data.kvs, req.operation, &mut update, true);
-                    value
+                    do_request(&self.data.kvs, req.operation, &mut update, true)
                 }
                 EntryPayload::Membership(mem) => {
                     raft_meta.last_membership =
-                        StoredMembership::new(Some(entry.log_id.clone()), mem.clone());
+                        StoredMembership::new(Some(entry.log_id), mem.clone());
                     Value::ok()
                 }
             };
@@ -226,7 +224,7 @@ impl RaftStateMachine<TypeConfig> for StateMachineStore {
         //理论上快照一定会存在
         let res = load_cache_from_path(self.data.kvs.clone(), &path_buf)
             .await?
-            .ok_or(io::Error::new(io::ErrorKind::Other, "meta data is empty"))?;
+            .ok_or(io::Error::other("meta data is empty"))?;
         for atomic_request in res.1 {
             let update_type = &mut UpdateType::CAS(atomic_request.version);
             let mut update = Update {
@@ -248,7 +246,7 @@ impl RaftStateMachine<TypeConfig> for StateMachineStore {
                 let meta = res
                     .load_meta_data()
                     .await?
-                    .ok_or(io::Error::new(io::ErrorKind::Other, "meta data is empty"))?;
+                    .ok_or(io::Error::other("meta data is empty"))?;
                 Ok(Some(Snapshot {
                     meta,
                     snapshot: res,

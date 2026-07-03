@@ -70,7 +70,7 @@ impl Command for PublishCommand {
         // 直接传入原始消息，让 publish_message 封装
         server
             .broadcast
-            .publish(&params.channel, params.message.clone())
+            .publish(params.channel.clone(), params.message.clone())
             .await;
         let req = PublishReq {
             channel: params.channel,

@@ -1,5 +1,6 @@
 use crate::error::CacheCatError;
 use crate::protocol::command::{Client, SubCommand};
+use crate::raft::network::connection::Connection;
 use crate::raft::network::redis_server::{RedisServer, RespCodec};
 use crate::raft::types::core::response_value::Value;
 use crate::utils::now_ms;
@@ -10,8 +11,8 @@ use std::os::fd::AsRawFd;
 #[cfg(windows)]
 use std::os::windows::io::AsRawSocket;
 use tokio_util::codec::Framed;
-use crate::raft::network::connection::Connection;
 
+#[allow(clippy::unnecessary_cast)]
 fn connection_id(framed: &Framed<Connection, RespCodec>) -> u64 {
     let conn = framed.get_ref();
     #[cfg(unix)]

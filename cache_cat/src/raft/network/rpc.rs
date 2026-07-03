@@ -56,7 +56,7 @@ impl Server {
     }
 
     pub async fn start_server(
-        self: Self,
+        self,
         mut shutdown_rx: tokio::sync::broadcast::Receiver<()>,
     ) -> std::io::Result<()> {
         tokio::spawn(async move {
@@ -127,7 +127,7 @@ async fn handle_connection(
                     }
                     Err(e) => {
                         error!("TLS handshake failed for {}: {}", peer_addr, e);
-                        return Err(std::io::Error::new(std::io::ErrorKind::Other, e));
+                        return Err(std::io::Error::other(e));
                     }
                 }
             }
@@ -137,8 +137,7 @@ async fn handle_connection(
                     "TLS replication is enabled but TLS acceptor is not configured for {}",
                     peer_addr
                 );
-                return Err(std::io::Error::new(
-                    std::io::ErrorKind::Other,
+                return Err(std::io::Error::other(
                     "TLS replication is enabled but TLS acceptor is not configured",
                 ));
             }
@@ -235,7 +234,7 @@ async fn rpc_mode(app: Arc<CacheCatApp>, connection: Connection, peer_addr: Sock
                 let package = frame_bytes.freeze();
 
                 tokio::spawn(async move {
-                    if let Err(_) = hand(app, tx, package).await {
+                    if hand(app, tx, package).await.is_err() {
                         error!("处理请求失败 {}", peer_addr);
                     }
                 });
