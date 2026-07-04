@@ -35,7 +35,8 @@ mimalloc = "0.1.50"
 crossbeam-utils = "0.8.21"
 parking_lot = "0.12.5"
 raft-engine = { git = "https://github.com/nasuiyile/raft-engine-serde" }
-tracing-subscriber = { version = "0.3.23", features = ["env-filter", "fmt"] }
+time = { version = "0.3", features = ["local-offset"] }
+tracing-subscriber = { version = "0.3.23", features = ["local-time"] }
 uuid = { version = "1.23.1", features = ["v4", "serde"] }
 #遥测相关默认不启用
 console-subscriber = { version = "0.5", optional = true }

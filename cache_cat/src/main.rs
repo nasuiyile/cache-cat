@@ -12,6 +12,7 @@ use std::sync::Arc;
 use tokio::signal;
 use tokio::time::sleep;
 use tracing::{error, info};
+use tracing_subscriber::fmt::time::LocalTime;
 
 #[global_allocator]
 static GLOBAL: MiMalloc = MiMalloc;
@@ -20,12 +21,12 @@ static GLOBAL: MiMalloc = MiMalloc;
 async fn main() -> Result<(), Box<dyn Error>> {
     let config = load_config_with_cli()?;
 
-    //设置日志级别
     tracing_subscriber::fmt()
+        .with_timer(LocalTime::rfc_3339())
         .with_max_level(tracing::Level::INFO)
         .init();
 
-    let (_raft_node, mut shutdown_rx) = RaftNodeBuilder::build(&config).await?;
+    let (raft_node, mut shutdown_rx) = RaftNodeBuilder::build(&config).await?;
     print_msg(&config);
     // if config.node_id == 1 {
     //     let app_clone = raft_node.app.clone();
@@ -43,6 +44,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
         }
          _ = shutdown_rx.recv()=>{
             info!("Received shutdown signal");
+            _ = raft_node.app.cluster.shutdown().await;
         }
     }
 

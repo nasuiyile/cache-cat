@@ -20,11 +20,11 @@ election-timeout = 799
 snapshot-policy = 5000000
 # 超过这个阈值表示严重落后，主节点会将快照发给从节点，而不是增量同步。需要大于 snapshot-policy，防止快照还没生成。
 replication-lag-threshold = 500000000
-[tls]
-tls-cert-file = "C:/tmp/openssl/redis.crt"
-tls-key-file = "C:/tmp/openssl/redis.key"
-tls-ca-cert-file = "C:/tmp/openssl/ca.crt"
-# 是否要求客户端开启验证
-tls-auth-clients = false
-tls-protocols = "TLSv1.2 TLSv1.3"
-tls-replication = true
+#[tls]
+#tls-cert-file = "C:/tmp/openssl/redis.crt"
+#tls-key-file = "C:/tmp/openssl/redis.key"
+#tls-ca-cert-file = "C:/tmp/openssl/ca.crt"
+## 是否要求客户端开启验证
+#tls-auth-clients = false
+#tls-protocols = "TLSv1.2 TLSv1.3"
+#tls-replication = true
