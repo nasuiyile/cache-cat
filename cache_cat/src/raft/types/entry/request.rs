@@ -1,20 +1,23 @@
-use crate::protocol::key::del::DelParams;
-use crate::protocol::key::rename::RenameParams;
-use crate::protocol::key::renamenx::RenameNxParams;
-use crate::protocol::lua::eval::EvalParams;
-use crate::protocol::string::mset::MsetParams;
-use crate::protocol::string::set::SetParams;
-use crate::protocol::transaction::exec::ExecParams;
 use crate::raft::types::entry::bae_operation::BaseOperation;
 use crate::raft::types::entry::read_operation::ReadOperation;
 use crate::utils::merge_u64;
 use serde::{Deserialize, Serialize};
 use std::fmt;
 
+#[cfg(all(feature = "lua", feature = "redis"))]
+use crate::protocol::lua::eval::EvalParams;
+#[cfg(feature = "redis")]
+use crate::protocol::{
+    key::{del::DelParams, rename::RenameParams, renamenx::RenameNxParams},
+    string::{mset::MsetParams, set::SetParams},
+    transaction::exec::ExecParams,
+};
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum Operation {
     Base(BaseOperation),
     Read(ReadOperation),
+    #[cfg(feature = "redis")]
     Redis(RedisOperation),
 }
 
@@ -24,6 +27,7 @@ pub struct Request {
     pub number: u64,
     pub operation: Operation,
 }
+
 impl Request {
     #[inline]
     pub fn new(write_clock: u64, db_number: u16, operation: Operation) -> Self {
@@ -52,6 +56,7 @@ impl Request {
     }
 }
 
+#[cfg(feature = "redis")]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum RedisOperation {
     RedisSet(SetParams),
@@ -59,6 +64,7 @@ pub enum RedisOperation {
     RedisDel(DelParams),
     RedisRename(RenameParams),
     RedisRenameNx(RenameNxParams),
+    #[cfg(feature = "lua")]
     RedisEval(EvalParams),
     RedisExec(ExecParams),
 }
@@ -109,11 +115,13 @@ impl fmt::Display for Request {
                 BaseOperation::LRem(req) => write!(f, "LRem: {}", req),
                 BaseOperation::LSet(req) => write!(f, "LSet: {}", req),
             },
+            #[cfg(feature = "redis")]
             Operation::Redis(op) => match op {
                 RedisOperation::RedisSet(req) => write!(f, "RedisSet: {}", req),
                 RedisOperation::RedisMset(req) => write!(f, "RedisMset: {}", req),
                 RedisOperation::RedisDel(req) => write!(f, "RedisDel: {}", req),
                 RedisOperation::RedisRename(req) => write!(f, "RedisRename: {}", req),
+                #[cfg(feature = "lua")]
                 RedisOperation::RedisEval(req) => write!(f, "RedisEval: {}", req),
                 RedisOperation::RedisExec(req) => write!(f, "RedisExec: {}", req),
                 RedisOperation::RedisRenameNx(req) => write!(f, "RedisRenameNx: {}", req),
@@ -121,6 +129,7 @@ impl fmt::Display for Request {
         }
     }
 }
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AtomicRequest {
     pub request: BaseOperation,

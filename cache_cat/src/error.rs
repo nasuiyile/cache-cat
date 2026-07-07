@@ -6,6 +6,7 @@
 use crate::error::ErrorKind::{Internal, InvalidConfig, Protocol, RPC, Retryable, Storage, Tls};
 use crate::raft::types::core::response_value::Value;
 use crate::raft::types::raft_types::TypeConfig;
+#[cfg(all(feature = "lua", feature = "redis"))]
 use mlua::prelude::LuaError;
 use openraft::error::RPCError;
 use std::error::Error as StdError;
@@ -283,6 +284,7 @@ pub enum RpcError {
     Remote(String),
 }
 
+#[cfg(all(feature = "lua", feature = "redis"))]
 impl From<LuaError> for ProtocolError {
     fn from(err: LuaError) -> Self {
         match err {
@@ -296,6 +298,7 @@ impl From<LuaError> for ProtocolError {
 }
 
 // 这样 Error 的转换链就自动工作了
+#[cfg(all(feature = "lua", feature = "redis"))]
 impl From<LuaError> for Error {
     fn from(err: LuaError) -> Self {
         // LuaError -> ProtocolError -> ErrorKind -> Error

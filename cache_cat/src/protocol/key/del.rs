@@ -14,7 +14,6 @@ use crate::raft::network::redis_server::RedisServer;
 use crate::raft::types::core::response_value::Value;
 use crate::raft::types::entry::bae_operation::BaseOperation::Del;
 use crate::raft::types::entry::request::Operation;
-use crate::raft::types::entry::request::RedisOperation::RedisDel;
 use async_trait::async_trait;
 use bytes::Bytes;
 use serde::{Deserialize, Serialize};
@@ -66,7 +65,17 @@ impl RaftCommand for DelCommand {
                 key: params.keys[0].clone(),
             }))
         } else {
-            Operation::Redis(RedisDel(params))
+            cfg_select! {
+                feature = "redis" => {
+                    use crate::raft::types::entry::request::RedisOperation::RedisDel;
+
+                    Operation::Redis(RedisDel(params))
+                }
+
+                _ => {
+                    return Err(ProtocolError::InvalidArgument("command of `redis` is not enabled"));
+                }
+            }
         };
         Ok(operation)
     }

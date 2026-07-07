@@ -3,7 +3,6 @@ pub mod connection;
 pub mod hash;
 pub mod key;
 pub mod list;
-pub mod lua;
 pub mod resp;
 pub mod set;
 pub mod string;
@@ -11,11 +10,15 @@ pub mod transaction;
 pub mod zset;
 
 pub mod bitmap;
-pub mod lua_env;
 pub mod pub_sub;
 mod raft_command;
-mod server;
 pub mod sentinel;
+mod server;
+
+#[cfg(all(feature = "lua", feature = "redis"))]
+pub mod lua;
+#[cfg(all(feature = "lua", feature = "redis"))]
+pub mod lua_env;
 
 /// Current format version for all encoded types (stored in high 4 bits of flags)
 pub const CURRENT_VERSION: u8 = 1;

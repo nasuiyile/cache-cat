@@ -2,14 +2,15 @@ use crate::mocha::{EntrySnapshot, ExpirePolicy, MochaOperation};
 use crate::protocol::key::del::{DelParams, DelReq};
 use crate::protocol::key::persist::PersistReq;
 use crate::protocol::key::pexpire::PExpireReq;
-use crate::protocol::key::rename::RenameParams;
-use crate::protocol::key::renamenx::RenameNxParams;
 use crate::raft::types::core::mocha::cas::ComputeCommand;
 use crate::raft::types::core::mocha::mocha::{MyCache, MyValue, Update, UpdateType};
 use crate::raft::types::core::response_value::Value;
 use crate::raft::types::entry::bae_operation::{BaseOperation, InsertReq};
 use crate::raft::types::entry::request::AtomicRequest;
 use bytes::Bytes;
+
+#[cfg(feature = "redis")]
+use crate::protocol::key::{rename::RenameParams, renamenx::RenameNxParams};
 
 impl ComputeCommand for InsertReq {
     fn key(&self) -> &Bytes {
@@ -58,7 +59,9 @@ impl ComputeCommand for InsertReq {
         (MochaOperation::Insert { value, expire }, Value::ok())
     }
 }
+
 impl MyCache {
+    #[cfg(feature = "redis")]
     pub fn redis_rename(
         &self,
         params: RenameParams,
@@ -87,6 +90,7 @@ impl MyCache {
         Value::ok()
     }
 
+    #[cfg(feature = "redis")]
     pub fn redis_rename_nx(
         &self,
         params: RenameNxParams,

@@ -1,5 +1,6 @@
 use crate::error::ProtocolError;
 use bytes::{BufMut, Bytes};
+#[cfg(all(feature = "lua", feature = "redis"))]
 use mlua::{Lua, Value as LuaValue};
 use serde::{Deserialize, Serialize};
 use std::borrow::Cow;
@@ -131,6 +132,8 @@ impl Value {
             }
         }
     }
+
+    #[cfg(all(feature = "lua", feature = "redis"))]
     pub fn into_lua_value(self, lua: &Lua) -> mlua::Result<mlua::Value> {
         match self {
             Value::SimpleString(s) => {
@@ -180,6 +183,7 @@ impl Value {
     }
 
     // TODO: param `lua` is only used in recursion
+    #[cfg(all(feature = "lua", feature = "redis"))]
     pub fn from_lua(lua_val: LuaValue, lua: &Lua) -> Result<Value, ProtocolError> {
         match lua_val {
             LuaValue::Nil | LuaValue::Boolean(false) => Ok(Value::BulkString(None)),

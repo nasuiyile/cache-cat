@@ -2,7 +2,10 @@ use crate::raft::types::core::mocha::mocha::{MyCache, Update};
 use crate::raft::types::core::response_value::Value;
 use crate::raft::types::entry::bae_operation::BaseOperation;
 use crate::raft::types::entry::read_operation::ReadOperation;
-use crate::raft::types::entry::request::{Operation, RedisOperation};
+use crate::raft::types::entry::request::Operation;
+
+#[cfg(feature = "redis")]
+use crate::raft::types::entry::request::RedisOperation;
 
 pub fn read_request(
     my_cache: &MyCache,
@@ -67,6 +70,7 @@ pub fn base_request(
     }
 }
 
+#[cfg_attr(not(feature = "redis"), allow(unused_variables))]
 #[inline]
 pub fn do_request(
     my_cache: &MyCache,
@@ -77,6 +81,8 @@ pub fn do_request(
     match operation {
         Operation::Read(read) => read_request(my_cache, read, update.db_number, None),
         Operation::Base(base) => base_request(my_cache, base, update),
+
+        #[cfg(feature = "redis")]
         Operation::Redis(redis) => match redis {
             RedisOperation::RedisDel(param) => my_cache.redis_del(param, update, external),
             RedisOperation::RedisSet(param) => my_cache.redis_set(param, update),
@@ -85,6 +91,7 @@ pub fn do_request(
             RedisOperation::RedisRenameNx(param) => {
                 my_cache.redis_rename_nx(param, update, external)
             }
+            #[cfg(feature = "lua")]
             RedisOperation::RedisEval(param) => {
                 if external {
                     let _exclusive_lock = my_cache.read_lock.write();

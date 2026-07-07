@@ -9,6 +9,7 @@ use crate::raft::types::core::response_value::Value;
 use crate::raft::types::core::value_object::ValueObject;
 use crate::raft::types::entry::bae_operation::BaseOperation;
 use crate::raft::types::entry::request::Operation;
+#[cfg(feature = "redis")]
 use crate::raft::types::entry::request::RedisOperation::RedisSet;
 use crate::utils::parse_i64;
 use async_trait::async_trait;
@@ -172,6 +173,15 @@ impl SetParams {
 
         Ok(params)
     }
+
+    #[cfg(not(feature = r"redis"))]
+    fn into_req(self) -> SetReq {
+        SetReq {
+            key: self.key,
+            value: self.value,
+            ex_time: 0,
+        }
+    }
 }
 
 /// SET command executor
@@ -180,10 +190,20 @@ pub struct SetCommand;
 impl RaftCommand for SetCommand {
     fn raft_request(&self, items: &[Value]) -> Result<Operation, ProtocolError> {
         let params = SetParams::parse(items)?;
-        Ok(Operation::Redis(RedisSet(params)))
+
+        cfg_select! {
+            feature = "redis" => {
+                Ok(Operation::Redis(RedisSet(params)))
+            }
+
+            _ => {
+                Ok(Operation::Base(BaseOperation::Set(params.into_req())))
+            }
+        }
     }
 }
 
+// TODO: `Set` Command usage while `redis` feature is not enabled
 #[async_trait]
 impl Command for SetCommand {
     async fn execute(
@@ -198,10 +218,18 @@ impl Command for SetCommand {
         }
         let params = SetParams::parse(items)?;
         let get = params.get;
-        let value = server
-            .app
-            .write(Operation::Redis(RedisSet(params)), client.db_number)
-            .await?;
+
+        let ops = cfg_select! {
+            feature = "redis" => {
+                Operation::Redis(RedisSet(params))
+            }
+
+            _ => {
+                Operation::Base(BaseOperation::Set(params.into_req()))
+            }
+        };
+
+        let value = server.app.write(ops, client.db_number).await?;
         if get { Ok(value) } else { Ok(Value::ok()) }
     }
 }

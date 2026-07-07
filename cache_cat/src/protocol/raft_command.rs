@@ -1,55 +1,42 @@
 use crate::error::ProtocolError;
-use crate::protocol::bitmap::getbit::GetBitCommand;
-use crate::protocol::bitmap::setbit::SetBitCommand;
-use crate::protocol::hash::hget::HGetCommand;
-use crate::protocol::hash::hgetall::HGetAllCommand;
-use crate::protocol::hash::hincrby::HIncrByCommand;
-use crate::protocol::hash::hkeys::HKeysCommand;
-use crate::protocol::hash::hmget::HMGetCommand;
-use crate::protocol::hash::hset::HSetCommand;
-use crate::protocol::hash::hvals::HValsCommand;
-use crate::protocol::key::del::DelCommand;
-use crate::protocol::key::exists::ExistsCommand;
-use crate::protocol::key::expire::ExpireCommand;
-use crate::protocol::key::persist::PersistCommand;
-use crate::protocol::key::pexpire::PExpireCommand;
-use crate::protocol::key::rename::RenameCommand;
-use crate::protocol::key::renamenx::RenameNxCommand;
-use crate::protocol::key::type_::TypeCommand;
-use crate::protocol::list::lindex::LIndexCommand;
-use crate::protocol::list::llen::LLenCommand;
-use crate::protocol::list::lpop::LPopCommand;
-use crate::protocol::list::lpush::LPushCommand;
-use crate::protocol::list::lrange::LRangeCommand;
-use crate::protocol::list::lrem::LRemCommand;
-use crate::protocol::list::lset::LSetCommand;
-use crate::protocol::list::rpop::RPopCommand;
-use crate::protocol::list::rpush::RPushCommand;
-use crate::protocol::lua::eval::EvalCommand;
-use crate::protocol::set::sadd::SAddCommand;
-use crate::protocol::set::sismember::SIsMemberCommand;
-use crate::protocol::set::smembers::SMembersCommand;
-use crate::protocol::set::srem::SRemCommand;
-use crate::protocol::string::append::AppendCommand;
-use crate::protocol::string::get::GetCommand;
-use crate::protocol::string::incr::IncrCommand;
-use crate::protocol::string::incrby::IncrByCommand;
-use crate::protocol::string::len::StrLenCommand;
-use crate::protocol::string::mget::MgetCommand;
-use crate::protocol::string::mset::MsetCommand;
-use crate::protocol::string::psetex::PSetExCommand;
-use crate::protocol::string::set::SetCommand;
-use crate::protocol::string::setex::SetExCommand;
-use crate::protocol::string::setnx::SetNxCommand;
-use crate::protocol::zset::zadd::ZAddCommand;
-use crate::protocol::zset::zrange::ZRangeCommand;
-use crate::protocol::zset::zrangegetscore::ZRangeByScoreCommand;
 use crate::raft::types::core::response_value::Value;
 use crate::raft::types::entry::read_operation::ReadOperation;
 use crate::raft::types::entry::request::Operation;
-use std::collections::HashMap;
-use std::fmt;
+
+#[cfg(all(feature = "lua", feature = "redis"))]
+use std::{collections::HashMap, fmt};
+#[cfg(all(feature = "lua", feature = "redis"))]
 use tracing::warn;
+
+#[cfg(all(feature = "lua", feature = "redis"))]
+use crate::protocol::{
+    bitmap::{getbit::GetBitCommand, setbit::SetBitCommand},
+    hash::{
+        hget::HGetCommand, hgetall::HGetAllCommand, hincrby::HIncrByCommand, hkeys::HKeysCommand,
+        hmget::HMGetCommand, hset::HSetCommand, hvals::HValsCommand,
+    },
+    key::{
+        del::DelCommand, exists::ExistsCommand, expire::ExpireCommand, persist::PersistCommand,
+        pexpire::PExpireCommand, rename::RenameCommand, renamenx::RenameNxCommand,
+        type_::TypeCommand,
+    },
+    list::{
+        lindex::LIndexCommand, llen::LLenCommand, lpop::LPopCommand, lpush::LPushCommand,
+        lrange::LRangeCommand, lrem::LRemCommand, lset::LSetCommand, rpop::RPopCommand,
+        rpush::RPushCommand,
+    },
+    lua::eval::EvalCommand,
+    set::{
+        sadd::SAddCommand, sismember::SIsMemberCommand, smembers::SMembersCommand,
+        srem::SRemCommand,
+    },
+    string::{
+        append::AppendCommand, get::GetCommand, incr::IncrCommand, incrby::IncrByCommand,
+        len::StrLenCommand, mget::MgetCommand, mset::MsetCommand, psetex::PSetExCommand,
+        set::SetCommand, setex::SetExCommand, setnx::SetNxCommand,
+    },
+    zset::{zadd::ZAddCommand, zrange::ZRangeCommand, zrangegetscore::ZRangeByScoreCommand},
+};
 
 pub trait RaftCommand: Send + Sync {
     fn raft_request(&self, items: &[Value]) -> Result<Operation, ProtocolError>;
@@ -68,9 +55,12 @@ impl<T: ReadRaftCommand> RaftCommand for T {
 
 /// Command factory for creating and executing commands
 ///
+#[cfg(all(feature = "lua", feature = "redis"))]
 pub struct RaftCommandFactory {
     commands: HashMap<String, Box<dyn RaftCommand>>,
 }
+
+#[cfg(all(feature = "lua", feature = "redis"))]
 impl fmt::Debug for RaftCommandFactory {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("RaftCommandFactory")
@@ -79,6 +69,7 @@ impl fmt::Debug for RaftCommandFactory {
     }
 }
 
+#[cfg(all(feature = "lua", feature = "redis"))]
 impl RaftCommandFactory {
     /// Create a new empty command factory
     fn new() -> Self {
@@ -97,11 +88,9 @@ impl RaftCommandFactory {
         let mut factory = Self::new();
         // Register connection commands
         factory.register("GET", GetCommand);
-        factory.register("SET", SetCommand);
         factory.register("DEL", DelCommand);
         factory.register("INCR", IncrCommand);
         factory.register("INCRBY", IncrByCommand);
-        factory.register("MSET", MsetCommand);
         factory.register("MGET", MgetCommand);
         factory.register("LPUSH", LPushCommand);
         factory.register("LRANGE", LRangeCommand);
@@ -119,19 +108,14 @@ impl RaftCommandFactory {
         factory.register("HINCRBY", HIncrByCommand);
         factory.register("EXISTS", ExistsCommand);
         factory.register("PERSIST", PersistCommand);
-        factory.register("RENAME", RenameCommand);
-        factory.register("RENAMENX", RenameNxCommand);
+
         factory.register("SMEMBERS", SMembersCommand);
         factory.register("HMGET", HMGetCommand);
-        factory.register("EVAL", EvalCommand); // Prohibiting nesting (not prohibited)
         factory.register("SREM", SRemCommand);
         factory.register("SETBIT", SetBitCommand);
         factory.register("GETBIT", GetBitCommand);
         factory.register("LPOP", LPopCommand);
         factory.register("RPOP", RPopCommand);
-        factory.register("PSETEX", PSetExCommand);
-        factory.register("SETEX", SetExCommand);
-        factory.register("SETNX", SetNxCommand);
         factory.register("STRLEN", StrLenCommand);
         factory.register("HVALS", HValsCommand);
         factory.register("LLEN", LLenCommand);
@@ -141,6 +125,21 @@ impl RaftCommandFactory {
         factory.register("LREM", LRemCommand);
         factory.register("LSET", LSetCommand);
         factory.register("SISMEMBER", SIsMemberCommand);
+
+        #[cfg(feature = "redis")]
+        {
+            factory.register("RENAME", RenameCommand);
+            factory.register("RENAMENX", RenameNxCommand);
+            factory.register("SET", SetCommand);
+            factory.register("MSET", MsetCommand);
+            factory.register("PSETEX", PSetExCommand);
+            factory.register("SETEX", SetExCommand);
+            factory.register("SETNX", SetNxCommand);
+        }
+
+        #[cfg(all(feature = "lua", feature = "redis"))]
+        factory.register("EVAL", EvalCommand); // Prohibiting nesting (not prohibited)
+
         factory
     }
 

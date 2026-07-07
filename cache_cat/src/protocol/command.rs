@@ -22,19 +22,16 @@ use crate::protocol::key::exists::ExistsCommand;
 use crate::protocol::key::expire::ExpireCommand;
 use crate::protocol::key::persist::PersistCommand;
 use crate::protocol::key::pexpire::PExpireCommand;
-use crate::protocol::key::rename::RenameCommand;
-use crate::protocol::key::renamenx::RenameNxCommand;
 use crate::protocol::key::type_::TypeCommand;
 use crate::protocol::list::lindex::LIndexCommand;
 use crate::protocol::list::llen::LLenCommand;
 use crate::protocol::list::lpop::LPopCommand;
 use crate::protocol::list::lpush::LPushCommand;
 use crate::protocol::list::lrange::LRangeCommand;
+use crate::protocol::list::lrem::LRemCommand;
+use crate::protocol::list::lset::LSetCommand;
 use crate::protocol::list::rpop::RPopCommand;
 use crate::protocol::list::rpush::RPushCommand;
-use crate::protocol::lua::eval::EvalCommand;
-use crate::protocol::lua::evalsha::EvalShaCommand;
-use crate::protocol::lua::script::ScriptCommand;
 use crate::protocol::pub_sub::psubscribe::PsubscribeCommand;
 use crate::protocol::pub_sub::publish::PublishCommand;
 use crate::protocol::pub_sub::pubsub::PubSubCommand;
@@ -47,6 +44,7 @@ use crate::protocol::server::save::SaveCommand;
 use crate::protocol::server::shutdown::ShutdownCommand;
 use crate::protocol::server::time::TimeCommand;
 use crate::protocol::set::sadd::SAddCommand;
+use crate::protocol::set::sismember::SIsMemberCommand;
 use crate::protocol::set::smembers::SMembersCommand;
 use crate::protocol::set::srem::SRemCommand;
 use crate::protocol::string::append::AppendCommand;
@@ -55,13 +53,8 @@ use crate::protocol::string::incr::IncrCommand;
 use crate::protocol::string::incrby::IncrByCommand;
 use crate::protocol::string::len::StrLenCommand;
 use crate::protocol::string::mget::MgetCommand;
-use crate::protocol::string::mset::MsetCommand;
-use crate::protocol::string::psetex::PSetExCommand;
 use crate::protocol::string::set::SetCommand;
-use crate::protocol::string::setex::SetExCommand;
-use crate::protocol::string::setnx::SetNxCommand;
 use crate::protocol::transaction::discard::DiscardCommand;
-use crate::protocol::transaction::exec::ExecCommand;
 use crate::protocol::transaction::multi::MultiCommand;
 use crate::protocol::zset::zadd::ZAddCommand;
 use crate::protocol::zset::zrange::ZRangeCommand;
@@ -81,9 +74,15 @@ use tokio::select;
 use tokio::sync::watch;
 use tokio_util::codec::Framed;
 use tracing::{error, warn};
-use crate::protocol::list::lrem::LRemCommand;
-use crate::protocol::list::lset::LSetCommand;
-use crate::protocol::set::sismember::SIsMemberCommand;
+
+#[cfg(all(feature = "lua", feature = "redis"))]
+use crate::protocol::lua::{eval::EvalCommand, evalsha::EvalShaCommand, script::ScriptCommand};
+#[cfg(feature = "redis")]
+use crate::protocol::{
+    key::{rename::RenameCommand, renamenx::RenameNxCommand},
+    string::{mset::MsetCommand, psetex::PSetExCommand, setex::SetExCommand, setnx::SetNxCommand},
+    transaction::exec::ExecCommand,
+};
 
 #[async_trait]
 pub trait Command: Send + Sync {
@@ -248,24 +247,30 @@ impl CommandFactory {
         factory.register("HELLO", HelloCommand);
         // Register data commands
         factory.register("GET", GetCommand);
-        factory.register("SET", SetCommand);
         factory.register("DEL", DelCommand);
         factory.register("INCR", IncrCommand);
         factory.register("INCRBY", IncrByCommand);
-        factory.register("MSET", MsetCommand);
         factory.register("MGET", MgetCommand);
         factory.register("APPEND", AppendCommand);
         factory.register("EXPIRE", ExpireCommand);
         factory.register("PEXPIRE", PExpireCommand);
         factory.register("EXISTS", ExistsCommand);
         factory.register("PERSIST", PersistCommand);
-        factory.register("RENAME", RenameCommand);
-        factory.register("RENAMENX", RenameNxCommand);
-        factory.register("PSETEX", PSetExCommand);
-        factory.register("SETEX", SetExCommand);
-        factory.register("SETNX", SetNxCommand);
         factory.register("STRLEN", StrLenCommand);
         factory.register("TYPE", TypeCommand);
+
+        #[cfg(feature = "redis")]
+        {
+            factory.register("MSET", MsetCommand);
+            factory.register("RENAME", RenameCommand);
+            factory.register("RENAMENX", RenameNxCommand);
+            factory.register("PSETEX", PSetExCommand);
+            factory.register("SETEX", SetExCommand);
+            factory.register("SETNX", SetNxCommand);
+        }
+
+        factory.register("SET", SetCommand);
+
         // List commands
         factory.register("LPUSH", LPushCommand);
         factory.register("RPUSH", RPushCommand);
@@ -297,13 +302,19 @@ impl CommandFactory {
         // Bitmap commands
         factory.register("SETBIT", SetBitCommand);
         factory.register("GETBIT", GetBitCommand);
+
         // Lua scripting
-        factory.register("EVAL", EvalCommand);
-        factory.register("EVALSHA", EvalShaCommand);
-        factory.register("SCRIPT", ScriptCommand);
+        #[cfg(all(feature = "lua", feature = "redis"))]
+        {
+            factory.register("EVAL", EvalCommand);
+            factory.register("EVALSHA", EvalShaCommand);
+            factory.register("SCRIPT", ScriptCommand);
+        }
+
         // Transaction commands
         factory.register("MULTI", MultiCommand);
         factory.register("DISCARD", DiscardCommand);
+        #[cfg(feature = "redis")]
         factory.register("EXEC", ExecCommand);
         // Connection management
         factory.register("BGSAVE", BgsaveCommand);

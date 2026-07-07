@@ -1,14 +1,25 @@
-use crate::protocol::NO_EXPIRATION;
 use crate::protocol::string::append::AppendReq;
 use crate::protocol::string::incr::IncrReq;
-use crate::protocol::string::mset::MsetParams;
-use crate::protocol::string::set::{Expiration, SetMode, SetParams, SetReq};
+use crate::protocol::string::set::SetReq;
 use crate::raft::types::core::mocha::mocha::{MyCache, Update};
 use crate::raft::types::core::response_value::Value;
-use crate::raft::types::core::value_object::ValueObject;
+
+#[cfg(feature = "redis")]
+use crate::{
+    protocol::{
+        NO_EXPIRATION,
+        string::{
+            mset::MsetParams,
+            set::{Expiration, SetMode, SetParams},
+        },
+    },
+    raft::types::core::value_object::ValueObject,
+};
+#[cfg(feature = "redis")]
 use bytes::Bytes;
 
 impl MyCache {
+    #[cfg(feature = "redis")]
     pub fn redis_mset(&self, params: MsetParams, update: &mut Update<'_>, external: bool) -> Value {
         if external {
             let _exclusive_lock = self.read_lock.write();
@@ -24,6 +35,7 @@ impl MyCache {
         Value::ok()
     }
 
+    #[cfg(feature = "redis")]
     pub fn redis_set(&self, params: SetParams, update: &mut Update<'_>) -> Value {
         // The latest write logic time
         let now = update.write_clock;
