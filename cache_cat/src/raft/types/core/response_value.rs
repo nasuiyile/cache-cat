@@ -1,5 +1,6 @@
 use crate::error::ProtocolError;
 use bytes::{BufMut, Bytes};
+#[cfg(feature = "lua")]
 use mlua::{Lua, Value as LuaValue};
 use serde::{Deserialize, Serialize};
 use std::borrow::Cow;
@@ -131,6 +132,8 @@ impl Value {
             }
         }
     }
+
+    #[cfg(feature = "lua")]
     pub fn into_lua_value(self, lua: &Lua) -> mlua::Result<mlua::Value> {
         match self {
             Value::SimpleString(s) => {
@@ -180,6 +183,7 @@ impl Value {
     }
 
     // TODO: param `lua` is only used in recursion
+    #[cfg(feature = "lua")]
     pub fn from_lua(lua_val: LuaValue, lua: &Lua) -> Result<Value, ProtocolError> {
         match lua_val {
             LuaValue::Nil | LuaValue::Boolean(false) => Ok(Value::BulkString(None)),
@@ -266,6 +270,7 @@ impl Value {
         }
     }
 
+    #[inline]
     pub(crate) fn string_bytes_clone(&self) -> Option<Bytes> {
         match self {
             Value::BulkString(Some(data)) => Some(data.clone()),
@@ -283,9 +288,18 @@ impl Value {
         }
     }
 
+    #[inline]
+    pub fn as_str_utf8(&self) -> Option<&str> {
+        match self {
+            Value::BulkString(Some(data)) => str::from_utf8(data).ok(),
+            Value::SimpleString(s) => Some(s),
+            _ => None,
+        }
+    }
+
     pub(crate) fn parse_u64(&self) -> Option<u64> {
         match self {
-            Value::BulkString(Some(data)) => String::from_utf8_lossy(data).parse::<u64>().ok(),
+            Value::BulkString(Some(data)) => str::from_utf8(data).ok()?.parse::<u64>().ok(),
 
             Value::SimpleString(s) => s.parse::<u64>().ok(),
 
@@ -302,7 +316,7 @@ impl Value {
 
     pub(crate) fn parse_i64(&self) -> Option<i64> {
         match self {
-            Value::BulkString(Some(data)) => String::from_utf8_lossy(data).parse::<i64>().ok(),
+            Value::BulkString(Some(data)) => str::from_utf8(data).ok()?.parse::<i64>().ok(),
 
             Value::SimpleString(s) => s.parse::<i64>().ok(),
 
@@ -319,7 +333,7 @@ impl Value {
 
     pub(crate) fn parse_usize(&self) -> Option<usize> {
         match self {
-            Value::BulkString(Some(data)) => String::from_utf8_lossy(data).parse::<usize>().ok(),
+            Value::BulkString(Some(data)) => str::from_utf8(data).ok()?.parse::<usize>().ok(),
 
             Value::SimpleString(s) => s.parse::<usize>().ok(),
 
@@ -337,7 +351,7 @@ impl Value {
     pub(crate) fn parse_bool_u8(&self) -> Option<u8> {
         match self {
             Value::BulkString(Some(data)) => {
-                if let Ok(v) = String::from_utf8_lossy(data).parse::<u8>()
+                if let Ok(v) = str::from_utf8(data).ok()?.parse::<u8>()
                     && v <= 1
                 {
                     Some(v)

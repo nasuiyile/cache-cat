@@ -4,7 +4,6 @@ use crate::raft::network::redis_server::RedisServer;
 use crate::raft::types::core::response_value::Value;
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
-use sha1::{Digest, Sha1};
 use std::fmt;
 
 /// SCRIPT LOAD args
@@ -167,78 +166,92 @@ impl Command for ScriptCommand {
         server: &RedisServer,
     ) -> Result<Value, CacheCatError> {
         let param = ScriptParam::parse(items)?;
-        let value = match param {
-            ScriptParam::Load(v) => {
-                let mut hasher = Sha1::new();
-                hasher.update(&v.script);
 
-                let hash = hasher.finalize();
+        cfg_select! {
+            feature = "lua" => {
+                use sha1::{Digest, Sha1};
 
-                let sha1_hex = hash
-                    .iter()
-                    .map(|b| format!("{:02x}", b))
-                    .collect::<String>();
+                let value = match param {
+                    ScriptParam::Load(v) => {
+                        let mut hasher = Sha1::new();
+                        hasher.update(&v.script);
 
-                server
-                    .app
-                    .state_machine
-                    .data
-                    .kvs
-                    .lua_env
-                    .script_map
-                    .lock()
-                    .insert(sha1_hex.clone(), v.script);
+                        let hash = hasher.finalize();
 
-                Value::BulkString(Some(sha1_hex.into()))
-            }
-            ScriptParam::Exists(v) => {
-                let map = server.app.state_machine.data.kvs.lua_env.script_map.lock();
-                let mut exists = Vec::new();
-                for sha in v.sha1s {
-                    if map.contains_key(&sha) {
-                        exists.push(Value::Integer(1));
-                    } else {
-                        exists.push(Value::Integer(0));
+                        let sha1_hex = hash
+                            .iter()
+                            .map(|b| format!("{:02x}", b))
+                            .collect::<String>();
+
+                        server
+                            .app
+                            .state_machine
+                            .data
+                            .kvs
+                            .lua_env
+                            .script_map
+                            .lock()
+                            .insert(sha1_hex.clone(), v.script);
+
+                        Value::BulkString(Some(sha1_hex.into()))
                     }
-                }
-                Value::Array(Some(exists))
+                    ScriptParam::Exists(v) => {
+                        let map = server.app.state_machine.data.kvs.lua_env.script_map.lock();
+                        let mut exists = Vec::new();
+                        for sha in v.sha1s {
+                            if map.contains_key(&sha) {
+                                exists.push(Value::Integer(1));
+                            } else {
+                                exists.push(Value::Integer(0));
+                            }
+                        }
+                        Value::Array(Some(exists))
+                    }
+                    ScriptParam::Flush(mode) => match mode.flush_mode {
+                        FlushMode::Sync => {
+                            server
+                                .app
+                                .state_machine
+                                .data
+                                .kvs
+                                .lua_env
+                                .script_map
+                                .lock()
+                                .clear();
+                            Value::ok()
+                        }
+                        FlushMode::Async => {
+                            server
+                                .app
+                                .state_machine
+                                .data
+                                .kvs
+                                .lua_env
+                                .script_map
+                                .lock()
+                                .clear();
+                            Value::ok()
+                        }
+                    },
+                    ScriptParam::Kill => {
+                        let executor = server.app.state_machine.data.kvs.lua_env.interrupt();
+                        if executor {
+                            Value::ok()
+                        } else {
+                            Value::Error(String::from("ERR No scripts in execution right now."))
+                        }
+                    }
+                    ScriptParam::Debug(_) => Value::Error("Not implemented".to_string()),
+                };
+                Ok(value)
             }
-            ScriptParam::Flush(mode) => match mode.flush_mode {
-                FlushMode::Sync => {
-                    server
-                        .app
-                        .state_machine
-                        .data
-                        .kvs
-                        .lua_env
-                        .script_map
-                        .lock()
-                        .clear();
-                    Value::ok()
-                }
-                FlushMode::Async => {
-                    server
-                        .app
-                        .state_machine
-                        .data
-                        .kvs
-                        .lua_env
-                        .script_map
-                        .lock()
-                        .clear();
-                    Value::ok()
-                }
-            },
-            ScriptParam::Kill => {
-                let executor = server.app.state_machine.data.kvs.lua_env.interrupt();
-                if executor {
-                    Value::ok()
-                } else {
-                    Value::Error(String::from("ERR No scripts in execution right now."))
-                }
+
+            _ => {
+                let _ = (server, param);
+
+                // todo!("command handle while `lua` is not enabled")
+                Err(ProtocolError::Custom("Command cannot run because `lua` is not enabled").into())
             }
-            ScriptParam::Debug(_) => Value::Error("Not implemented".to_string()),
-        };
-        Ok(value)
+        }
     }
 }

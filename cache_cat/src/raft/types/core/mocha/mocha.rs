@@ -1,6 +1,7 @@
 use crate::error::ProtocolError;
+#[cfg(feature = "lua")]
+use crate::lua::lua_env::LuaEnv;
 use crate::mocha::Mocha;
-use crate::protocol::lua_env::LuaEnv;
 use crate::raft::types::core::response_value::Value;
 use crate::raft::types::core::value_object::ValueObject;
 use crate::raft::types::entry::request::AtomicRequest;
@@ -45,6 +46,7 @@ impl Clone for Database {
 
 #[derive(Debug)]
 pub struct MyCache {
+    #[cfg(feature = "lua")]
     pub lua_env: LuaEnv,
 
     pub databases: Vec<Database>,
@@ -101,8 +103,12 @@ impl MyCache {
             let db = Database { mocha };
             vec.push(db);
         }
+
+        #[cfg(feature = "lua")]
         let lua_env = LuaEnv::new()?;
+
         Ok(Self {
+            #[cfg(feature = "lua")]
             lua_env,
             read_logic_clock: Arc::new(AtomicU64::new(0)),
             write_logic_clock,

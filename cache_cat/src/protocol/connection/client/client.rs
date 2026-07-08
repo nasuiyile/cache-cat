@@ -6,19 +6,21 @@ use crate::protocol::connection::client::setname::SetNameCommand;
 use crate::raft::network::redis_server::RedisServer;
 use crate::raft::types::core::response_value::Value;
 use async_trait::async_trait;
-use std::collections::HashMap;
+use rustc_hash::FxHashMap;
 
 /// Sentinel command handler
+#[repr(transparent)]
 pub struct ClientCommand {
-    sub_commands: HashMap<String, Box<dyn SubCommand>>,
+    sub_commands: FxHashMap<&'static str, Box<dyn SubCommand>>,
 }
 
+// TODO: can use LazyLock to replace the field
 impl ClientCommand {
     pub fn new() -> Self {
-        let mut sub_commands: HashMap<String, Box<dyn SubCommand>> = HashMap::new();
-        sub_commands.insert("INFO".to_string(), Box::new(ClientInfoCommand));
-        sub_commands.insert("SETNAME".to_string(), Box::new(SetNameCommand));
-        sub_commands.insert("SETINFO".to_string(), Box::new(SetInfoCommand));
+        let mut sub_commands: FxHashMap<&'static str, Box<dyn SubCommand>> = FxHashMap::default();
+        sub_commands.insert("INFO", Box::new(ClientInfoCommand));
+        sub_commands.insert("SETNAME", Box::new(SetNameCommand));
+        sub_commands.insert("SETINFO", Box::new(SetInfoCommand));
         Self { sub_commands }
     }
 }
@@ -42,13 +44,12 @@ impl Command for ClientCommand {
             return Err(ProtocolError::WrongArgCount("CLIENT").into());
         }
 
-        let sub_command = match &items[1] {
-            Value::BulkString(Some(data)) => String::from_utf8_lossy(data).to_uppercase(),
-            Value::SimpleString(s) => s.to_uppercase(),
-            _ => return Err(ProtocolError::InvalidArgument("subcommand").into()),
-        };
+        let sub_command = items[1]
+            .as_str_lossy()
+            .ok_or(ProtocolError::InvalidArgument("subcommand"))?
+            .to_uppercase();
 
-        match self.sub_commands.get(&sub_command) {
+        match self.sub_commands.get(sub_command.as_str()) {
             Some(cmd) => cmd.execute(client, items, server).await,
             None => Err(ProtocolError::UnknownCommand(format!("CLIENT {}", sub_command)).into()),
         }

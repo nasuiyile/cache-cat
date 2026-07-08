@@ -78,7 +78,7 @@ use crate::utils::now_ms;
 use async_trait::async_trait;
 use futures::SinkExt;
 use futures::StreamExt;
-use std::collections::HashMap;
+use rustc_hash::FxHashMap;
 use std::fmt;
 use std::fmt::{Display, Formatter};
 use tokio::select;
@@ -213,26 +213,26 @@ pub struct ParsedCommand {
 
 /// Command factory for creating and executing commands
 pub struct CommandFactory {
-    commands: HashMap<String, Box<dyn Command>>,
-    block_commands: HashMap<String, Box<dyn BlockCommand>>,
+    commands: FxHashMap<&'static str, Box<dyn Command>>,
+    block_commands: FxHashMap<&'static str, Box<dyn BlockCommand>>,
 }
 
 impl CommandFactory {
     /// Create a new empty command factory
     fn new() -> Self {
         Self {
-            commands: HashMap::new(),
-            block_commands: HashMap::new(),
+            commands: FxHashMap::default(),
+            block_commands: FxHashMap::default(),
         }
     }
 
     /// Register a command with given name
-    fn register<C: Command + 'static>(&mut self, name: impl Into<String>, cmd: C) {
-        self.commands.insert(name.into(), Box::new(cmd));
+    fn register<C: Command + 'static>(&mut self, name: &'static str, cmd: C) {
+        self.commands.insert(name, Box::new(cmd));
     }
 
-    fn register_block<C: BlockCommand + 'static>(&mut self, name: impl Into<String>, cmd: C) {
-        self.block_commands.insert(name.into(), Box::new(cmd));
+    fn register_block<C: BlockCommand + 'static>(&mut self, name: &'static str, cmd: C) {
+        self.block_commands.insert(name, Box::new(cmd));
     }
 
     /// Initialize the command factory with all supported commands
@@ -471,7 +471,7 @@ impl CommandFactory {
             return Ok(());
         }
 
-        if let Some(cmd) = self.commands.get(&parsed.name) {
+        if let Some(cmd) = self.commands.get(parsed.name.as_str()) {
             let resp = match cmd.execute(client, &parsed.items, server).await {
                 Ok(v) => v,
                 Err(e) => {
@@ -484,7 +484,7 @@ impl CommandFactory {
         }
 
         // Try blocking command
-        if let Some(cmd) = self.block_commands.get(&parsed.name) {
+        if let Some(cmd) = self.block_commands.get(parsed.name.as_str()) {
             match cmd.execute(client, &parsed.items, server).await {
                 Ok((initial_resp, stream)) => {
                     client.flag.blocking = true;

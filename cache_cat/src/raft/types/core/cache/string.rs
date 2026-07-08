@@ -1,6 +1,7 @@
 use crate::protocol::NO_EXPIRATION;
 use crate::protocol::string::append::AppendReq;
 use crate::protocol::string::incr::IncrReq;
+use crate::protocol::string::incrby::IncrByReq;
 use crate::protocol::string::mset::MsetParams;
 use crate::protocol::string::set::{Expiration, SetMode, SetParams, SetReq};
 use crate::raft::types::core::mocha::mocha::{MyCache, Update};
@@ -140,6 +141,10 @@ impl MyCache {
     }
 
     pub fn incr(&self, param: IncrReq, update: &mut Update) -> Value {
+        self.execute_compute(param, update)
+    }
+
+    pub fn incr_by(&self, param: IncrByReq, update: &mut Update) -> Value {
         self.execute_compute(param, update)
     }
 

@@ -1,10 +1,7 @@
 use crate::error::{CacheCatError, ProtocolError};
 use crate::protocol::command::{Client, Command};
-use crate::protocol::lua::eval::EvalParams;
 use crate::raft::network::redis_server::RedisServer;
 use crate::raft::types::core::response_value::Value;
-use crate::raft::types::entry::request::Operation;
-use crate::raft::types::entry::request::RedisOperation::RedisEval;
 use async_trait::async_trait;
 use bytes::Bytes;
 use serde::{Deserialize, Serialize};
@@ -120,30 +117,46 @@ impl Command for EvalShaCommand {
     ) -> Result<Value, CacheCatError> {
         // MULTI transaction support
         let params = EvalShaParams::parse(items)?;
-        let script_result = match server
-            .app
-            .state_machine
-            .data
-            .kvs
-            .lua_env
-            .script_map
-            .lock()
-            .get(&params.sha1)
-        {
-            None => {
-                return Err(
-                    ProtocolError::Custom("NOSCRIPT No matching script. Please use EVAL.").into(),
-                );
+
+        cfg_select! {
+            feature = "lua" => {
+                use crate::protocol::lua::eval::EvalParams;
+                use crate::raft::types::entry::request::Operation;
+                use crate::raft::types::entry::request::RedisOperation::RedisEval;
+
+                let script_result = match server
+                    .app
+                    .state_machine
+                    .data
+                    .kvs
+                    .lua_env
+                    .script_map
+                    .lock()
+                    .get(&params.sha1)
+                {
+                    None => {
+                        return Err(
+                            ProtocolError::Custom("NOSCRIPT No matching script. Please use EVAL.").into(),
+                        );
+                    }
+                    Some(v) => v.clone(),
+                };
+                let operation = Operation::Redis(RedisEval(EvalParams {
+                    script: script_result.clone(),
+                    keys: params.keys,
+                    args: params.args,
+                    numkeys: params.numkeys,
+                }));
+                let result = server.app.write(operation, client.db_number).await?;
+                Ok(result)
             }
-            Some(v) => v.clone(),
-        };
-        let operation = Operation::Redis(RedisEval(EvalParams {
-            script: script_result.clone(),
-            keys: params.keys,
-            args: params.args,
-            numkeys: params.numkeys,
-        }));
-        let result = server.app.write(operation, client.db_number).await?;
-        Ok(result)
+
+            _ => {
+                let _ = (client, server, params);
+
+                // todo!("command handle while `lua` is not enabled")
+                Err(ProtocolError::Custom("Command cannot run because `lua` is not enabled").into())
+            }
+        }
     }
 }

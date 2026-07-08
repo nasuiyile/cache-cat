@@ -48,7 +48,7 @@ use crate::protocol::zset::zrangegetscore::ZRangeByScoreCommand;
 use crate::raft::types::core::response_value::Value;
 use crate::raft::types::entry::read_operation::ReadOperation;
 use crate::raft::types::entry::request::Operation;
-use std::collections::HashMap;
+use rustc_hash::FxHashMap;
 use std::fmt;
 use tracing::warn;
 
@@ -68,10 +68,12 @@ impl<T: ReadRaftCommand> RaftCommand for T {
 }
 
 /// Command factory for creating and executing commands
-///
+#[cfg_attr(not(feature = "lua"), allow(dead_code))]
+#[repr(transparent)]
 pub struct RaftCommandFactory {
-    commands: HashMap<String, Box<dyn RaftCommand>>,
+    commands: FxHashMap<&'static str, Box<dyn RaftCommand>>,
 }
+
 impl fmt::Debug for RaftCommandFactory {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("RaftCommandFactory")
@@ -80,17 +82,18 @@ impl fmt::Debug for RaftCommandFactory {
     }
 }
 
+#[cfg_attr(not(feature = "lua"), allow(dead_code))]
 impl RaftCommandFactory {
     /// Create a new empty command factory
     fn new() -> Self {
         Self {
-            commands: HashMap::new(),
+            commands: FxHashMap::default(),
         }
     }
 
     /// Register a command with given name
-    fn register<C: RaftCommand + 'static>(&mut self, name: impl Into<String>, cmd: C) {
-        self.commands.insert(name.into(), Box::new(cmd));
+    fn register<C: RaftCommand + 'static>(&mut self, name: &'static str, cmd: C) {
+        self.commands.insert(name, Box::new(cmd));
     }
 
     /// Initialize the command factory with all supported commands
@@ -147,12 +150,12 @@ impl RaftCommandFactory {
     }
 
     pub fn parse_request(&self, items: &[Value]) -> Result<Operation, ProtocolError> {
-        let cmd_name = match &items[0] {
-            Value::BulkString(Some(data)) => String::from_utf8_lossy(data).to_uppercase(),
-            Value::SimpleString(s) => s.to_uppercase(),
-            _ => return Err(ProtocolError::InvalidArgument("command")),
-        };
-        match self.commands.get(&cmd_name) {
+        let cmd_name = items[0]
+            .as_str_lossy()
+            .ok_or(ProtocolError::InvalidArgument("command"))?
+            .to_uppercase();
+
+        match self.commands.get(cmd_name.as_str()) {
             Some(cmd) => match cmd.raft_request(items) {
                 Ok(v) => Ok(v),
                 Err(e) => {

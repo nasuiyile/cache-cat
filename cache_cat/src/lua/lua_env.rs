@@ -17,6 +17,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 const SCRIPT_CACHE_CAPACITY: usize = 500;
 
 const MAX_MEM: usize = 10 * 1024 * 1024;
+
 #[derive(Debug)]
 pub struct LuaEnv {
     lua: Lua,

@@ -11,11 +11,10 @@ pub mod transaction;
 pub mod zset;
 
 pub mod bitmap;
-pub mod lua_env;
 pub mod pub_sub;
-mod raft_command;
-mod server;
+pub(crate) mod raft_command;
 pub mod sentinel;
+mod server;
 
 /// Current format version for all encoded types (stored in high 4 bits of flags)
 pub const CURRENT_VERSION: u8 = 1;

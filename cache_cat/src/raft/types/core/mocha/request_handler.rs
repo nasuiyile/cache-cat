@@ -50,6 +50,7 @@ pub fn base_request(
         BaseOperation::LPush(param) => my_cache.l_push(param, update),
         BaseOperation::Del(param) => my_cache.del(param, update),
         BaseOperation::Incr(param) => my_cache.incr(param, update),
+        BaseOperation::IncrBy(param) => my_cache.incr_by(param, update),
         BaseOperation::Append(param) => my_cache.append(param, update),
         BaseOperation::HSet(param) => my_cache.h_set(param, update),
         BaseOperation::HIncr(param) => my_cache.h_incr(param, update),
@@ -87,13 +88,25 @@ pub fn do_request(
                 my_cache.redis_rename_nx(param, update, external)
             }
             RedisOperation::RedisEval(param) => {
-                if external {
-                    let _exclusive_lock = my_cache.read_lock.write();
+                cfg_select! {
+                    feature = "lua" => {
+                        if external {
+                            let _exclusive_lock = my_cache.read_lock.write();
+                        }
+
+                        my_cache
+                            .lua_env
+                            .exec_lua(my_cache, &param.script, &param.keys, &param.args, update)
+                            .unwrap_or_else(|err| err.into())
+                    }
+
+                    _ => {
+                        let _ = param;
+
+                        // todo!("eval handle while `lua` is not enabled")
+                        Value::Error("Command cannot run because `lua` is not enabled".to_string())
+                    }
                 }
-                my_cache
-                    .lua_env
-                    .exec_lua(my_cache, &param.script, &param.keys, &param.args, update)
-                    .unwrap_or_else(|err| err.into())
             }
             RedisOperation::RedisExec(param) => {
                 if external {

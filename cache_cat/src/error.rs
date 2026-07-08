@@ -6,7 +6,6 @@
 use crate::error::ErrorKind::{Internal, InvalidConfig, Protocol, RPC, Retryable, Storage, Tls};
 use crate::raft::types::core::response_value::Value;
 use crate::raft::types::raft_types::TypeConfig;
-use mlua::prelude::LuaError;
 use openraft::error::RPCError;
 use std::error::Error as StdError;
 use std::fmt;
@@ -281,26 +280,6 @@ pub enum RpcError {
     /// Remote node returned an error
     #[error("remote error: {0}")]
     Remote(String),
-}
-
-impl From<LuaError> for ProtocolError {
-    fn from(err: LuaError) -> Self {
-        match err {
-            LuaError::SyntaxError { message, .. } => ProtocolError::ScriptCompileError(message),
-            LuaError::RuntimeError(message) => ProtocolError::ScriptError("f_script", message),
-            LuaError::MemoryError(message) => ProtocolError::ScriptError("unknown", message),
-            // ... 其他 Lua 错误类型
-            _ => ProtocolError::ScriptError("unknown", err.to_string().replace('\n', " ")),
-        }
-    }
-}
-
-// 这样 Error 的转换链就自动工作了
-impl From<LuaError> for Error {
-    fn from(err: LuaError) -> Self {
-        // LuaError -> ProtocolError -> ErrorKind -> Error
-        ProtocolError::from(err).into()
-    }
 }
 
 impl From<ProtocolError> for Error {
