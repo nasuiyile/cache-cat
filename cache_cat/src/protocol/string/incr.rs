@@ -43,7 +43,6 @@ impl RaftCommand for IncrCommand {
     fn raft_request(&self, items: &[Value]) -> Result<Operation, ProtocolError> {
         Ok(Operation::Base(Incr(IncrReq {
             key: IncrParams::parse(items)?.key,
-            value: 1,
         })))
     }
 }
@@ -66,10 +65,10 @@ impl Command for IncrCommand {
         Ok(value)
     }
 }
+
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct IncrReq {
     pub key: Bytes,
-    pub value: i64,
 }
 
 impl fmt::Display for IncrReq {
@@ -88,7 +87,7 @@ impl ComputeCommand for IncrReq {
     }
 
     fn into_base_op(self) -> BaseOperation {
-        BaseOperation::Incr(self.clone())
+        BaseOperation::Incr(self)
     }
 
     fn mutate(
@@ -98,20 +97,21 @@ impl ComputeCommand for IncrReq {
     ) -> (MochaOperation<MyValue>, Value) {
         let (result, value) = match &entry.value.data {
             ValueObject::Int(n) => {
-                let num = n + self.value;
+                let num = n + 1;
                 (ValueObject::Int(num), Value::Integer(num))
             }
+
             ValueObject::String(s) => {
-                if let Some(v) = parse_i64(s) {
-                    let new_val = v + self.value;
-                    (ValueObject::Int(new_val), Value::Integer(new_val))
-                } else {
+                let Some(mut value) = parse_i64(s) else {
                     return (
                         MochaOperation::Abort,
                         Value::Error("Value is not an integer".to_string()),
                     );
-                }
+                };
+                value += 1;
+                (ValueObject::Int(value), Value::Integer(value))
             }
+
             _ => {
                 return (
                     MochaOperation::Abort,
@@ -129,13 +129,12 @@ impl ComputeCommand for IncrReq {
     }
 
     fn init(self) -> (MochaOperation<MyValue>, Value) {
-        let v = self.value;
         (
             MochaOperation::Insert {
-                value: MyValue::new(ValueObject::Int(v)),
+                value: MyValue::new(ValueObject::Int(1)),
                 expire: ExpirePolicy::Persistent,
             },
-            Value::Integer(v),
+            Value::Integer(1),
         )
     }
 }

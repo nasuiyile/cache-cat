@@ -50,6 +50,7 @@ pub fn base_request(
         BaseOperation::LPush(param) => my_cache.l_push(param, update),
         BaseOperation::Del(param) => my_cache.del(param, update),
         BaseOperation::Incr(param) => my_cache.incr(param, update),
+        BaseOperation::IncrBy(param) => my_cache.incr_by(param, update),
         BaseOperation::Append(param) => my_cache.append(param, update),
         BaseOperation::HSet(param) => my_cache.h_set(param, update),
         BaseOperation::HIncr(param) => my_cache.h_incr(param, update),

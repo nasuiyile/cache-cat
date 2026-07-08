@@ -7,11 +7,15 @@ use crate::protocol::key::persist::PersistReq;
 use crate::protocol::key::pexpire::PExpireReq;
 use crate::protocol::list::lpop::LPopReq;
 use crate::protocol::list::lpush::LPushReq;
+use crate::protocol::list::lrem::LRemReq;
+use crate::protocol::list::lset::LSetReq;
+use crate::protocol::list::rpop::RPopReq;
 use crate::protocol::list::rpush::RPushReq;
 use crate::protocol::set::sadd::SAddReq;
 use crate::protocol::set::srem::SRemReq;
 use crate::protocol::string::append::AppendReq;
 use crate::protocol::string::incr::IncrReq;
+use crate::protocol::string::incrby::IncrByReq;
 use crate::protocol::string::set::SetReq;
 use crate::protocol::zset::zadd::ZAddReq;
 use crate::raft::types::core::value_object::ValueObject;
@@ -19,9 +23,6 @@ use bytes::Bytes;
 use serde::{Deserialize, Serialize};
 use std::fmt;
 use std::fmt::Display;
-use crate::protocol::list::lrem::LRemReq;
-use crate::protocol::list::lset::LSetReq;
-use crate::protocol::list::rpop::RPopReq;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum BaseOperation {
@@ -35,6 +36,7 @@ pub enum BaseOperation {
     //string
     Set(SetReq),
     Incr(IncrReq),
+    IncrBy(IncrByReq),
     Append(AppendReq),
     SetBit(SetBitReq),
     // list
