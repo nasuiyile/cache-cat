@@ -9,9 +9,9 @@ use cache_cat::raft::types::raft_types::CacheCatApp;
 use mimalloc::MiMalloc;
 use std::error::Error;
 use std::sync::Arc;
-use tokio::signal;
 use tokio::time::sleep;
-use tracing::{error, info};
+use tokio::{select, signal, spawn};
+use tracing::{error, info, warn};
 use tracing_subscriber::fmt::time::LocalTime;
 
 #[global_allocator]
@@ -26,7 +26,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
         .with_max_level(tracing::Level::INFO)
         .init();
 
-    let (raft_node, mut shutdown_rx) = RaftNodeBuilder::build(&config).await?;
+    let (raft_node, (shutdown_tx, mut shutdown_rx)) = RaftNodeBuilder::build(&config).await?;
     print_msg(&config);
     // if config.node_id == 1 {
     //     let app_clone = raft_node.app.clone();
@@ -36,21 +36,44 @@ async fn main() -> Result<(), Box<dyn Error>> {
     // }
     // Wait for Ctrl+C
 
-    info!("Press Ctrl+C to shutdown...");
+    if let Ok(listener) = listen_ctrl_c() {
+        spawn(async move {
+            let mut shutdown_rx = shutdown_tx.subscribe();
+            select! {
+                _ = shutdown_rx.recv() => {
+                    // do nothing and cancel the listen of ctrl-c
+                }
 
-    tokio::select! {
-         _ = signal::ctrl_c() => {
-            info!("Received Ctrl+C");
-        }
-         _ = shutdown_rx.recv()=>{
-            info!("Received shutdown signal");
-            _ = raft_node.app.cluster.shutdown().await;
-        }
+                _ = listener => {
+                    info!("Received Ctrl+C");
+                    let _ = shutdown_tx.send(());
+                }
+            }
+        });
+        info!("Press Ctrl+C to shutdown...");
+    } else {
+        warn!("Failed to register listener for Ctrl-C")
     }
 
+    let _ = shutdown_rx.recv().await;
+    info!("Received shutdown signal");
+
     info!("Shutting down Raft node...");
-    // raft_node.shutdown().await?;
-    info!("Raft node shutdown successfully");
+    if let Ok(listener) = listen_ctrl_c() {
+        info!("NOTE: You can press Ctrl-C to force shutdown");
+        select! {
+            _ = listener => {
+                warn!("Received Ctrl+C, force shutdown the node")
+            }
+
+            _ = raft_node.app.cluster.shutdown() => {
+                info!("Raft node shutdown successfully")
+            }
+        }
+    } else {
+        let _ = raft_node.app.cluster.shutdown().await;
+        info!("Raft node shutdown successfully")
+    }
 
     info!("Server shutdown complete");
     Ok(())
@@ -128,4 +151,18 @@ fn print_msg(config: &Config) {
     );
     println!("Raft Address: {}", config.raft.address);
     println!("Redis Port: {}", config.redis.redis_port);
+}
+
+fn listen_ctrl_c() -> std::io::Result<impl Future<Output = Option<()>>> {
+    let mut listener = cfg_select! {
+        windows => {
+            signal::windows::ctrl_c()
+        }
+
+        unix => {
+            signal::unix::ctrl_c()
+        }
+    }?;
+
+    Ok(async move { listener.recv().await })
 }

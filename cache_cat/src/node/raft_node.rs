@@ -18,23 +18,21 @@ use std::path::Path;
 use std::result::Result as StdResult;
 use std::sync::Arc;
 use std::time::Duration;
-use tokio::sync::broadcast::Receiver;
-use tokio::sync::{broadcast, oneshot};
+use tokio::sync::{broadcast::Sender, oneshot};
 use tokio::time::sleep;
 use tracing::{debug, error, info};
 
 pub struct RaftNode {
     pub app: Arc<CacheCatApp>,
-    shutdown_tx: broadcast::Sender<()>,
+    shutdown_tx: Sender<()>,
     service_handle: Mutex<Option<tokio::task::JoinHandle<()>>>,
 }
 
 impl RaftNode {
-    pub async fn create(config: ParsedConfig) -> Result<(RaftNode, Receiver<()>)> {
+    pub async fn create(config: ParsedConfig, shutdown_tx: Sender<()>) -> Result<Self> {
         let node_id = config.node_id as NodeId;
         let dir = Path::new(&config.log_path);
         let path = dir.join("");
-        let (shutdown_tx, shutdown_rx) = broadcast::channel(1);
         let raft_engine = dir.join("raft-engine");
         let engine = create_raft_engine(raft_engine.clone())?;
         let raft_config = Arc::new(openraft::Config {
@@ -79,12 +77,11 @@ impl RaftNode {
             tls_context,
         };
 
-        let node = Self {
+        Ok(Self {
             app: Arc::new(app),
             shutdown_tx,
             service_handle: Mutex::new(None),
-        };
-        Ok((node, shutdown_rx))
+        })
     }
 
     pub async fn start(raft_node: Arc<Self>) -> Result<()> {

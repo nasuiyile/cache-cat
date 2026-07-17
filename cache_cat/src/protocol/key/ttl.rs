@@ -69,11 +69,7 @@ impl ReadCommand for TtlParams {
                         // Convert milliseconds to seconds, rounding up
                         // If TTL is positive but less than 1 second, return 1
                         // to match Redis behavior
-                        let ttl_sec = if ttl_ms <= 0 {
-                            ttl_ms as i64 / 1000
-                        } else {
-                            ((ttl_ms + 999) / 1000) as i64
-                        };
+                        let ttl_sec = ttl_ms.div_ceil(1000) as i64;
 
                         Value::Integer(ttl_sec)
                     }

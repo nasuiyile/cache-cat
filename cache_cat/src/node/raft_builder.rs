@@ -8,25 +8,28 @@ use crate::raft::types::entry::request::{Operation, Request};
 use crate::utils::times::time_gap;
 use std::sync::Arc;
 use std::time::Duration;
-use tokio::sync::broadcast::Receiver;
+use tokio::sync::broadcast::{self, Receiver, Sender};
 use tokio::time;
 use tracing::info;
 
 pub struct RaftNodeBuilder;
 
 impl RaftNodeBuilder {
-    pub async fn build(config: &Config) -> Result<(Arc<RaftNode>, Receiver<()>)> {
+    pub async fn build(config: &Config) -> Result<(Arc<RaftNode>, (Sender<()>, Receiver<()>))> {
         config.validate()?;
         let config = ParsedConfig::from(config)?;
         let cleaning_interval = config.cleaning_interval;
-        let (raft_node, shutdown_rx) = RaftNode::create(config).await?;
+
+        let (tx, rx) = broadcast::channel(1);
+        let raft_node = RaftNode::create(config, tx.clone()).await?;
+
         let arc = Arc::new(raft_node);
         RaftNode::start(arc.clone()).await?;
         let handle = arc.clone();
         timed_expiration(handle.clone(), cleaning_interval);
         let state_synchronization_interval = 1;
         cluster_state_sync(handle, state_synchronization_interval);
-        Ok((arc, shutdown_rx))
+        Ok((arc, (tx, rx)))
     }
 }
 
