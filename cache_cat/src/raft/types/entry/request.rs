@@ -1,6 +1,7 @@
 use crate::protocol::key::rename::RenameParams;
 use crate::protocol::key::renamenx::RenameNxParams;
 use crate::protocol::lua::eval::EvalParams;
+use crate::protocol::string::getset::GetSetParams;
 use crate::protocol::string::mset::MsetParams;
 use crate::protocol::string::set::SetParams;
 use crate::protocol::string::setex::SetExParams;
@@ -60,6 +61,7 @@ pub enum RedisOperation {
     RedisSetNx(SetNxParams),
     RedisSetEx(SetExParams),
     RedisPSetEx(PSetExParams),
+    RedisGetSet(GetSetParams),
     RedisMset(MsetParams),
     RedisDel(DelParams),
     RedisRename(RenameParams),
@@ -134,6 +136,7 @@ impl fmt::Display for Request {
                 RedisOperation::RedisEval(req) => write!(f, "RedisEval: {}", req),
                 RedisOperation::RedisExec(req) => write!(f, "RedisExec: {}", req),
                 RedisOperation::RedisRenameNx(req) => write!(f, "RedisRenameNx: {}", req),
+                RedisOperation::RedisGetSet(req) => write!(f, "RedisGetSet: {}", req),
             },
         }
     }

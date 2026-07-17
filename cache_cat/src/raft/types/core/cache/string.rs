@@ -1,5 +1,10 @@
+use crate::error::ProtocolError;
+use crate::mocha::EntrySnapshot;
 use crate::protocol::NO_EXPIRATION;
 use crate::protocol::string::append::AppendReq;
+use crate::protocol::string::decr::DecrReq;
+use crate::protocol::string::decrby::DecrByReq;
+use crate::protocol::string::getset::GetSetParams;
 use crate::protocol::string::incr::IncrReq;
 use crate::protocol::string::incrby::IncrByReq;
 use crate::protocol::string::mset::MsetParams;
@@ -7,12 +12,10 @@ use crate::protocol::string::psetex::PSetExParams;
 use crate::protocol::string::set::{Expiration, SetMode, SetParams, SetReq};
 use crate::protocol::string::setex::SetExParams;
 use crate::protocol::string::setnx::SetNxParams;
-use crate::raft::types::core::mocha::mocha::{MyCache, Update};
+use crate::raft::types::core::mocha::mocha::{MyCache, MyValue, Update};
 use crate::raft::types::core::response_value::Value;
 use crate::raft::types::core::value_object::ValueObject;
 use bytes::Bytes;
-use crate::protocol::string::decr::DecrReq;
-use crate::protocol::string::decrby::DecrByReq;
 
 impl MyCache {
     pub fn redis_mset(&self, params: MsetParams, update: &mut Update<'_>, external: bool) -> Value {
@@ -214,6 +217,27 @@ impl MyCache {
         self.set(set, update);
 
         Value::ok()
+    }
+    pub fn redis_get_set(&self, params: GetSetParams, update: &mut Update<'_>) -> Value {
+        let cache = match self.get_cache(update.db_number) {
+            Err(err) => return err,
+            Ok(cache) => cache,
+        };
+        let res = match cache.mocha.get_entry(&params.key) {
+            None => Value::BulkString(None),
+            Some(v) => match v.value.data {
+                ValueObject::Int(v) => Value::BulkString(Some(v.to_string().into())),
+                ValueObject::String(v) => Value::BulkString(Some(v)),
+                _ => return ProtocolError::WrongType.into(),
+            },
+        };
+        let set = SetReq {
+            key: params.key,
+            value: params.value,
+            ex_time: 0,
+        };
+        self.set(set, update);
+        res
     }
 
     pub fn set(&self, param: SetReq, update: &mut Update) -> Value {

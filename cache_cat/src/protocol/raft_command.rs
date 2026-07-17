@@ -39,6 +39,7 @@ use crate::protocol::string::append::AppendCommand;
 use crate::protocol::string::decr::DecrCommand;
 use crate::protocol::string::decrby::DecrByCommand;
 use crate::protocol::string::get::GetCommand;
+use crate::protocol::string::getset::GetSetCommand;
 use crate::protocol::string::incr::IncrCommand;
 use crate::protocol::string::incrby::IncrByCommand;
 use crate::protocol::string::len::StrLenCommand;
@@ -155,6 +156,7 @@ impl RaftCommandFactory {
         factory.register("HLEN", HLenCommand);
         factory.register("HSETNX", HSetNxCommand);
         factory.register("DECR", DecrCommand);
+        factory.register("GETSET", GetSetCommand);
         factory
     }
 
