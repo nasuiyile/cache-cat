@@ -75,6 +75,7 @@ pub fn base_request(
         BaseOperation::Decr(param) => my_cache.decr(param, update),
         BaseOperation::ZRem(param) => my_cache.z_rem(param, update),
         BaseOperation::LTrim(param) => my_cache.l_trim(param, update),
+        BaseOperation::FlushDB(param) => my_cache.flush_db(param, update),
     }
 }
 
@@ -101,9 +102,11 @@ pub fn do_request(
                 my_cache.redis_rename_nx(param, update, external)
             }
             RedisOperation::RedisEval(param) => {
-                if external {
-                    let _exclusive_lock = my_cache.read_lock.write();
-                }
+                let _exclusive_lock = if external {
+                    Some(my_cache.read_lock.write())
+                } else {
+                    None
+                };
                 my_cache
                     .lua_env
                     .exec_lua(my_cache, &param.script, &param.keys, &param.args, update)

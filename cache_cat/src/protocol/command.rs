@@ -23,6 +23,7 @@ use crate::protocol::hash::hvals::HValsCommand;
 use crate::protocol::key::del::DelCommand;
 use crate::protocol::key::exists::ExistsCommand;
 use crate::protocol::key::expire::ExpireCommand;
+use crate::protocol::key::flushdb::FlushDBCommand;
 use crate::protocol::key::persist::PersistCommand;
 use crate::protocol::key::pexpire::PExpireCommand;
 use crate::protocol::key::pttl::PTtlCommand;
@@ -37,6 +38,7 @@ use crate::protocol::list::lpush::LPushCommand;
 use crate::protocol::list::lrange::LRangeCommand;
 use crate::protocol::list::lrem::LRemCommand;
 use crate::protocol::list::lset::LSetCommand;
+use crate::protocol::list::ltrim::LTrimCommand;
 use crate::protocol::list::rpop::RPopCommand;
 use crate::protocol::list::rpush::RPushCommand;
 use crate::protocol::lua::eval::EvalCommand;
@@ -81,6 +83,7 @@ use crate::protocol::zset::zrem::ZRemCommand;
 use crate::raft::network::connection::Connection;
 use crate::raft::network::redis_server::{RedisServer, RespCodec};
 use crate::raft::types::core::response_value::Value;
+use crate::raft::types::entry::bae_operation::BaseOperation::FlushDB;
 use crate::raft::types::entry::request::Operation;
 use crate::utils::now_ms;
 use async_trait::async_trait;
@@ -93,7 +96,6 @@ use tokio::select;
 use tokio::sync::watch;
 use tokio_util::codec::Framed;
 use tracing::{error, warn};
-use crate::protocol::list::ltrim::LTrimCommand;
 
 #[async_trait]
 pub trait Command: Send + Sync {
@@ -281,6 +283,7 @@ impl CommandFactory {
         factory.register("TTL", TtlCommand);
         factory.register("DECR", DecrCommand);
         factory.register("GETSET", GetSetCommand);
+        factory.register("FLUSHDB", FlushDBCommand);
         // List commands
         factory.register("LPUSH", LPushCommand);
         factory.register("RPUSH", RPushCommand);

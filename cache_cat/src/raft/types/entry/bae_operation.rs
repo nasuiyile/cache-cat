@@ -5,6 +5,7 @@ use crate::protocol::hash::hset::HSetReq;
 use crate::protocol::hash::hsetnx::HSetNxReq;
 use crate::protocol::key::del::DelReq;
 use crate::protocol::key::expire::ExpireReq;
+use crate::protocol::key::flushdb::FlushDBReq;
 use crate::protocol::key::persist::PersistReq;
 use crate::protocol::key::pexpire::PExpireReq;
 use crate::protocol::list::lpop::LPopReq;
@@ -40,6 +41,7 @@ pub enum BaseOperation {
     PExpire(PExpireReq),
     Persist(PersistReq),
     Insert(InsertReq),
+    FlushDB(FlushDBReq),
     //string
     Set(SetReq),
     Incr(IncrReq),

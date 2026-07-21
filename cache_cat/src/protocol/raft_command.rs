@@ -60,6 +60,7 @@ use crate::raft::types::entry::request::Operation;
 use std::collections::HashMap;
 use std::fmt;
 use tracing::warn;
+use crate::protocol::key::flushdb::FlushDBCommand;
 
 pub trait RaftCommand: Send + Sync {
     fn raft_request(&self, items: &[Value]) -> Result<Operation, ProtocolError>;
@@ -161,6 +162,7 @@ impl RaftCommandFactory {
         factory.register("GETSET", GetSetCommand);
         factory.register("ZREM", ZRemCommand);
         factory.register("LTRIM", LTrimCommand);
+        factory.register("FLUSHDB", FlushDBCommand);
         factory
     }
 

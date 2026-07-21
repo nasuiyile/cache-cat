@@ -19,9 +19,11 @@ use bytes::Bytes;
 
 impl MyCache {
     pub fn redis_mset(&self, params: MsetParams, update: &mut Update<'_>, external: bool) -> Value {
-        if external {
-            let _exclusive_lock = self.read_lock.write();
-        }
+        let _exclusive_lock = if external {
+            Some(self.read_lock.write())
+        } else {
+            None
+        };
         for pair in params.pairs {
             let set = SetReq {
                 key: pair.0,

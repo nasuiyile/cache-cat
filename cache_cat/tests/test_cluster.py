@@ -153,3 +153,6 @@ r.lpush("list test3", "test2")
 r.lpush("list test3", "test3")
 r.ltrim("list test3", 0, 1)
 print(r.lrange("list test3", 0, -1))
+
+r.flushdb()
+print(r.get("test24"))

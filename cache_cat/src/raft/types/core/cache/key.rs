@@ -1,6 +1,7 @@
 use crate::mocha::{EntrySnapshot, ExpirePolicy, MochaOperation};
 use crate::protocol::key::del::{DelParams, DelReq};
 use crate::protocol::key::expire::ExpireReq;
+use crate::protocol::key::flushdb::FlushDBReq;
 use crate::protocol::key::persist::PersistReq;
 use crate::protocol::key::pexpire::PExpireReq;
 use crate::protocol::key::rename::RenameParams;
@@ -66,9 +67,11 @@ impl MyCache {
         update: &mut Update<'_>,
         external: bool,
     ) -> Value {
-        if external {
-            let _exclusive_lock = self.read_lock.write();
-        }
+        let _exclusive_lock = if external {
+            Some(self.read_lock.write())
+        } else {
+            None
+        };
         let cached = match self.get_cache(update.db_number) {
             Err(err) => return err,
             Ok(cache) => cache,
@@ -94,9 +97,11 @@ impl MyCache {
         update: &mut Update<'_>,
         external: bool,
     ) -> Value {
-        if external {
-            let _exclusive_lock = self.read_lock.write();
-        }
+        let _exclusive_lock = if external {
+            Some(self.read_lock.write())
+        } else {
+            None
+        };
         let cached = match self.get_cache(update.db_number) {
             Err(err) => return err,
             Ok(cache) => &cache.mocha,
@@ -128,9 +133,12 @@ impl MyCache {
 
     pub fn redis_del(&self, params: DelParams, update: &mut Update<'_>, external: bool) -> Value {
         let mut count = 0;
-        if external {
-            let _exclusive_lock = self.read_lock.write();
-        }
+        let _exclusive_lock = if external {
+            Some(self.read_lock.write())
+        } else {
+            None
+        };
+
         for key in params.keys {
             let del = DelReq { key };
             match self.del(del, update) {
@@ -200,6 +208,30 @@ impl MyCache {
                 Value::Integer(0)
             }
         }
+    }
+
+    pub fn flush_db(&self, req: FlushDBReq, update: &mut Update) -> Value {
+        let cache = match self.get_cache(update.db_number) {
+            Err(err) => return err,
+            Ok(cache) => &cache.mocha,
+        };
+        //是否删除了元素
+        match update.update_type {
+            UpdateType::None => {
+                cache.clear();
+            }
+            UpdateType::Snapshot(queue) => {
+                queue.push(AtomicRequest {
+                    version: 1,
+                    request: BaseOperation::FlushDB(req.clone()),
+                    write_clock: update.write_clock,
+                });
+            }
+            UpdateType::CAS(_) => {
+                cache.clear();
+            }
+        }
+        Value::ok()
     }
 
     pub fn insert(&self, insert_req: InsertReq, update: &mut Update) -> Value {
