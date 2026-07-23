@@ -33,6 +33,7 @@ pub fn read_request(
         ReadOperation::PTtl(param) => my_cache.execute_read(param, db_number, read_clock),
         ReadOperation::Ttl(param) => my_cache.execute_read(param, db_number, read_clock),
         ReadOperation::HLen(param) => my_cache.execute_read(param, db_number, read_clock),
+        ReadOperation::BitCount(param) => my_cache.execute_read(param, db_number, read_clock),
     }
 }
 
@@ -114,9 +115,11 @@ pub fn do_request(
                     .unwrap_or_else(|err| err.into())
             }
             RedisOperation::RedisExec(param) => {
-                if external {
-                    let _exclusive_lock = my_cache.read_lock.write();
-                }
+                let _exclusive_lock = if external {
+                    Some(my_cache.read_lock.write())
+                } else {
+                    None
+                };
                 let mut vec = Vec::new();
                 for operation in param.operations {
                     vec.push(do_request(my_cache, operation, update, false));

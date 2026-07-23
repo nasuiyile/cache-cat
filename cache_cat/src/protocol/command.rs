@@ -97,6 +97,7 @@ use tokio::select;
 use tokio::sync::watch;
 use tokio_util::codec::Framed;
 use tracing::{error, warn};
+use crate::protocol::bitmap::bitcount::BitCountCommand;
 
 #[async_trait]
 pub trait Command: Send + Sync {
@@ -322,6 +323,7 @@ impl CommandFactory {
         // Bitmap commands
         factory.register("SETBIT", SetBitCommand);
         factory.register("GETBIT", GetBitCommand);
+        factory.register("BITCOUNT", BitCountCommand);
         // Lua scripting
         factory.register("EVAL", EvalCommand);
         factory.register("EVALSHA", EvalShaCommand);

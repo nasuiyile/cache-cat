@@ -1,3 +1,4 @@
+use crate::protocol::bitmap::bitcount::BitCountParams;
 use crate::protocol::bitmap::getbit::GetBitParams;
 use crate::protocol::hash::hexists::HExistsParams;
 use crate::protocol::hash::hget::HGetParams;
@@ -46,4 +47,5 @@ pub enum ReadOperation {
     PTtl(PTtlParams),
     Ttl(TtlParams),
     HLen(HLenParams),
+    BitCount(BitCountParams),
 }
