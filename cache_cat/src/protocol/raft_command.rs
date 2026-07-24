@@ -61,6 +61,7 @@ use std::collections::HashMap;
 use std::fmt;
 use tracing::warn;
 use crate::protocol::bitmap::bitcount::BitCountCommand;
+use crate::protocol::bitmap::bitpos::BitPosCommand;
 use crate::protocol::key::flushdb::FlushDBCommand;
 
 pub trait RaftCommand: Send + Sync {
@@ -165,6 +166,8 @@ impl RaftCommandFactory {
         factory.register("LTRIM", LTrimCommand);
         factory.register("FLUSHDB", FlushDBCommand);
         factory.register("BITCOUNT", BitCountCommand);
+        factory.register("BITPOS", BitPosCommand);
+
         factory
     }
 

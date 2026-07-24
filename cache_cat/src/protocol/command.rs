@@ -98,6 +98,7 @@ use tokio::sync::watch;
 use tokio_util::codec::Framed;
 use tracing::{error, warn};
 use crate::protocol::bitmap::bitcount::BitCountCommand;
+use crate::protocol::bitmap::bitpos::BitPosCommand;
 
 #[async_trait]
 pub trait Command: Send + Sync {
@@ -324,6 +325,7 @@ impl CommandFactory {
         factory.register("SETBIT", SetBitCommand);
         factory.register("GETBIT", GetBitCommand);
         factory.register("BITCOUNT", BitCountCommand);
+        factory.register("BITPOS", BitPosCommand);
         // Lua scripting
         factory.register("EVAL", EvalCommand);
         factory.register("EVALSHA", EvalShaCommand);

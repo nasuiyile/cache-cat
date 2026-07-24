@@ -22,6 +22,7 @@ use crate::protocol::string::mget::MgetParams;
 use crate::protocol::zset::zrange::ZRangeParams;
 use crate::protocol::zset::zrangegetscore::ZRangeByScoreParams;
 use serde::{Deserialize, Serialize};
+use crate::protocol::bitmap::bitpos::{BitPosCommand, BitPosParams};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum ReadOperation {
@@ -48,4 +49,5 @@ pub enum ReadOperation {
     Ttl(TtlParams),
     HLen(HLenParams),
     BitCount(BitCountParams),
+    BitPos(BitPosParams),
 }

@@ -161,3 +161,7 @@ r.flushall()
 print(r.get("test24"))
 r.setbit("test25", 0, 1)
 print(r.bitcount("test25", 0, -1))
+
+r.setbit("test26", 0, 0)   # 第0位设为0（默认就是0，这行可省略）
+r.setbit("test26", 1, 1)   # 第1位设为1
+print(r.bitpos("test26", 1))  # 返回 1

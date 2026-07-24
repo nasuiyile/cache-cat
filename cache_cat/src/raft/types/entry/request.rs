@@ -97,6 +97,7 @@ impl fmt::Display for Request {
                 ReadOperation::Ttl(req) => write!(f, "Ttl: {}", req),
                 ReadOperation::HLen(req) => write!(f, "HLen: {}", req),
                 ReadOperation::BitCount(req) => write!(f, "BitCount: {}", req),
+                ReadOperation::BitPos(req) => write!(f, "BitPos: {}", req),
             },
             Operation::Base(op) => match op {
                 BaseOperation::Empty => write!(f, "None"),

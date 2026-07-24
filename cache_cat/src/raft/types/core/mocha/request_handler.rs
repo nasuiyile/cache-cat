@@ -34,6 +34,7 @@ pub fn read_request(
         ReadOperation::Ttl(param) => my_cache.execute_read(param, db_number, read_clock),
         ReadOperation::HLen(param) => my_cache.execute_read(param, db_number, read_clock),
         ReadOperation::BitCount(param) => my_cache.execute_read(param, db_number, read_clock),
+        ReadOperation::BitPos(param) => my_cache.execute_read(param, db_number, read_clock),
     }
 }
 
