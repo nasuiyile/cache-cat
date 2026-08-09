@@ -3,12 +3,12 @@ use bytes::Bytes;
 use ordered_float::OrderedFloat;
 use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
-use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
+use std::collections::{BTreeSet, HashMap, HashSet, VecDeque};
 use std::sync::Arc;
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct SortedSet {
-    tree: BTreeMap<(OrderedFloat<f64>, Bytes), ()>,
+    tree: BTreeSet<(OrderedFloat<f64>, Bytes)>,
     hash: HashMap<Bytes, f64>,
 }
 
@@ -48,14 +48,14 @@ impl SortedSet {
                     // Remove the old sorting nodes from the tree first
                     self.tree.remove(&(OrderedFloat(old_s), member.clone()));
                     // Insert a new sorting node
-                    self.tree.insert((OrderedFloat(score), member.clone()), ());
+                    self.tree.insert((OrderedFloat(score), member.clone()));
                     // Update Hash Table
                     self.hash.insert(member.clone(), score);
                     changed += 1;
                 }
             } else {
                 // 4. Execute addition
-                self.tree.insert((OrderedFloat(score), member.clone()), ());
+                self.tree.insert((OrderedFloat(score), member.clone()));
                 self.hash.insert(member.clone(), score);
                 added += 1;
                 changed += 1;
@@ -91,7 +91,7 @@ impl SortedSet {
 
         // 3. Iterate BTreeMap to extract data
         // The order of the tree is already sorted by (Score, Member)
-        let range_iter = self.tree.keys().skip(start_idx as usize).take(count);
+        let range_iter = self.tree.iter().skip(start_idx as usize).take(count);
 
         for (score, member) in range_iter {
             // Insert member
@@ -155,7 +155,7 @@ impl SortedSet {
         let mut skipped = 0;
         let mut taken = 0;
 
-        for ((score, member), _) in self
+        for (score, member) in self
             .tree
             .range((min_score, Bytes::new())..=(max_score, Bytes::new()))
         {
@@ -201,7 +201,7 @@ impl SortedSet {
     pub fn zrank(&self, member: &Bytes) -> Option<i64> {
         let member_score = self.hash.get(member)?;
 
-        for (index, (score, current_member)) in self.tree.keys().enumerate() {
+        for (index, (score, current_member)) in self.tree.iter().enumerate() {
             if score.0 == *member_score && current_member == member {
                 return Some(index as i64);
             }
@@ -225,9 +225,8 @@ impl SortedSet {
         let mut values = Vec::with_capacity(count);
 
         for _ in 0..count {
-            let (score, value) = match self.tree.pop_first() {
-                Some((value, _)) => value,
-                None => break,
+            let Some((score, value)) = self.tree.pop_first() else {
+                break;
             };
 
             self.hash.remove(&value);
