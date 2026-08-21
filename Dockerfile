@@ -16,7 +16,7 @@ RUN --mount=type=bind,source=.,target=/host \
 FROM scratch
 
 COPY --chmod=0777 --from=build /install-bin/* /cache-cat/
-
+RUN chmod 777 /cache-cat/*
 # Port of Redis
 EXPOSE 6379 
 
