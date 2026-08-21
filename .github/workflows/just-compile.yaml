@@ -84,9 +84,6 @@ jobs:
         if: ${{ matrix.build == 'raw' }}
         run: cargo build --release --target ${{ matrix.toolchain }} --bin cache_cat --bin cache_cat_ping
 
-      #
-      # 仍然保留 Actions artifact，给 Docker 或调试使用
-      #
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
@@ -94,9 +91,14 @@ jobs:
           path: |
             target/${{ matrix.toolchain }}/release/cache_cat${{ matrix.ext }}
             target/${{ matrix.toolchain }}/release/cache_cat_ping${{ matrix.ext }}
-      #
-      # 谁先 build 完，谁先上传
-      #
+
+      - name: Rename release file
+        if: startsWith(github.ref, 'refs/tags/v')
+        shell: bash
+        run: |
+          cp "target/${{ matrix.toolchain }}/release/cache_cat${{ matrix.ext }}" \
+             "target/${{ matrix.toolchain }}/release/cache_cat-${{ matrix.target }}${{ matrix.ext }}"
+
       - name: Upload to GitHub Release
         if: startsWith(github.ref, 'refs/tags/v')
         uses: softprops/action-gh-release@v3
@@ -107,7 +109,7 @@ jobs:
           draft: false
           prerelease: false
           files: |
-            target/${{ matrix.toolchain }}/release/cache_cat${{ matrix.ext }}
+            target/${{ matrix.toolchain }}/release/cache_cat-${{ matrix.target }}${{ matrix.ext }}
 
   publish-docker:
     needs: build
