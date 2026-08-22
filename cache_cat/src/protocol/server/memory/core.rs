@@ -4,6 +4,7 @@ use crate::raft::network::redis_server::RedisServer;
 use crate::raft::types::core::response_value::Value;
 use async_trait::async_trait;
 use std::collections::HashMap;
+use crate::protocol::server::memory::malloc_stats::MemoryMallocStatsCommand;
 use crate::protocol::server::memory::purge::MemoryPurgeCommand;
 use crate::protocol::server::memory::stats::MemoryStatsCommand;
 use crate::protocol::server::memory::usage::MemoryUsageCommand;
@@ -19,6 +20,7 @@ impl MemoryCommand {
         sub_commands.insert("USAGE".to_string(), Box::new(MemoryUsageCommand));
         sub_commands.insert("STATS".to_string(), Box::new(MemoryStatsCommand));
         sub_commands.insert("PURGE".to_string(), Box::new(MemoryPurgeCommand));
+        sub_commands.insert("MALLOC-STATS".to_string(), Box::new(MemoryMallocStatsCommand));
         Self { sub_commands }
     }
 }
