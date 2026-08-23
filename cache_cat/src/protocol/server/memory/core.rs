@@ -4,6 +4,7 @@ use crate::raft::network::redis_server::RedisServer;
 use crate::raft::types::core::response_value::Value;
 use async_trait::async_trait;
 use std::collections::HashMap;
+use crate::protocol::server::memory::doctor::MemoryDoctorCommand;
 use crate::protocol::server::memory::malloc_stats::MemoryMallocStatsCommand;
 use crate::protocol::server::memory::purge::MemoryPurgeCommand;
 use crate::protocol::server::memory::stats::MemoryStatsCommand;
@@ -21,6 +22,7 @@ impl MemoryCommand {
         sub_commands.insert("STATS".to_string(), Box::new(MemoryStatsCommand));
         sub_commands.insert("PURGE".to_string(), Box::new(MemoryPurgeCommand));
         sub_commands.insert("MALLOC-STATS".to_string(), Box::new(MemoryMallocStatsCommand));
+        sub_commands.insert("DOCTOR".to_string(), Box::new(MemoryDoctorCommand));
         Self { sub_commands }
     }
 }
@@ -49,6 +51,7 @@ impl Command for MemoryCommand {
             Value::SimpleString(s) => s.to_uppercase(),
             _ => return Err(ProtocolError::InvalidArgument("subcommand").into()),
         };
+        println!("{}", sub_command);
 
         match self.sub_commands.get(&sub_command) {
             Some(cmd) => cmd.execute(client, items, server).await,
