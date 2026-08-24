@@ -1,14 +1,15 @@
 use crate::error::{CacheCatError, ProtocolError};
 use crate::protocol::command::{Client, Command, SubCommand};
-use crate::raft::network::redis_server::RedisServer;
-use crate::raft::types::core::response_value::Value;
-use async_trait::async_trait;
-use std::collections::HashMap;
 use crate::protocol::server::memory::doctor::MemoryDoctorCommand;
+use crate::protocol::server::memory::help::MemoryHelpCommand;
 use crate::protocol::server::memory::malloc_stats::MemoryMallocStatsCommand;
 use crate::protocol::server::memory::purge::MemoryPurgeCommand;
 use crate::protocol::server::memory::stats::MemoryStatsCommand;
 use crate::protocol::server::memory::usage::MemoryUsageCommand;
+use crate::raft::network::redis_server::RedisServer;
+use crate::raft::types::core::response_value::Value;
+use async_trait::async_trait;
+use std::collections::HashMap;
 
 /// MEMORY command handler
 pub struct MemoryCommand {
@@ -21,8 +22,12 @@ impl MemoryCommand {
         sub_commands.insert("USAGE".to_string(), Box::new(MemoryUsageCommand));
         sub_commands.insert("STATS".to_string(), Box::new(MemoryStatsCommand));
         sub_commands.insert("PURGE".to_string(), Box::new(MemoryPurgeCommand));
-        sub_commands.insert("MALLOC-STATS".to_string(), Box::new(MemoryMallocStatsCommand));
+        sub_commands.insert(
+            "MALLOC-STATS".to_string(),
+            Box::new(MemoryMallocStatsCommand),
+        );
         sub_commands.insert("DOCTOR".to_string(), Box::new(MemoryDoctorCommand));
+        sub_commands.insert("HELP".to_string(), Box::new(MemoryHelpCommand));
         Self { sub_commands }
     }
 }
@@ -51,8 +56,6 @@ impl Command for MemoryCommand {
             Value::SimpleString(s) => s.to_uppercase(),
             _ => return Err(ProtocolError::InvalidArgument("subcommand").into()),
         };
-        println!("{}", sub_command);
-
         match self.sub_commands.get(&sub_command) {
             Some(cmd) => cmd.execute(client, items, server).await,
             None => Err(ProtocolError::UnknownCommand(format!("MEMORY {}", sub_command)).into()),

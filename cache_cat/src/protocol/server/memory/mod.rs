@@ -4,3 +4,4 @@ mod stats;
 mod purge;
 mod malloc_stats;
 mod doctor;
+mod help;
