@@ -73,7 +73,6 @@ pub enum RedisOperation {
     RedisRenameNx(RenameNxParams),
     RedisEval(EvalParams),
     RedisExec(ExecParams),
-    RedisSInterStore(SInterStoreParams),
     RedisSUnionStore(SUnionStoreParams),
     RedisSDiffStore(SDiffStoreParams),
     RedisUnlink(UnlinkParams),
@@ -160,6 +159,7 @@ impl fmt::Display for Request {
                 BaseOperation::ZIncrBy(req) => write!(f, "ZIncrBy: {}", req),
                 BaseOperation::HMSet(req) => write!(f, "HMSet: {}", req),
                 BaseOperation::PfAdd(req) => write!(f, "PfAdd: {}", req),
+                BaseOperation::SInterStore(req) => write!(f, "SInterStore: {}", req),
             },
             Operation::Redis(op) => match op {
                 RedisOperation::RedisSet(req) => write!(f, "RedisSet: {}", req),
@@ -173,7 +173,6 @@ impl fmt::Display for Request {
                 RedisOperation::RedisExec(req) => write!(f, "RedisExec: {}", req),
                 RedisOperation::RedisRenameNx(req) => write!(f, "RedisRenameNx: {}", req),
                 RedisOperation::RedisGetSet(req) => write!(f, "RedisGetSet: {}", req),
-                RedisOperation::RedisSInterStore(req) => write!(f, "RedisSInterStore: {}", req),
                 RedisOperation::RedisSUnionStore(req) => write!(f, "RedisSUnionStore: {}", req),
                 RedisOperation::RedisSDiffStore(req) => write!(f, "RedisSDiffStore: {}", req),
                 RedisOperation::RedisUnlink(req) => write!(f, "RedisUnlink: {}", req),

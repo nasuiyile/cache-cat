@@ -100,6 +100,7 @@ pub fn base_request(
         BaseOperation::ZIncrBy(param) => my_cache.z_incr_by(param, update),
         BaseOperation::HMSet(param) => my_cache.h_mset(param, update),
         BaseOperation::PfAdd(param) => my_cache.p_f_add(param, update),
+        BaseOperation::SInterStore(param) => my_cache.s_inter_store(param, update),
     }
 }
 
@@ -154,9 +155,6 @@ pub fn do_request(
                     vec.push(do_request(my_cache, operation, update, false));
                 }
                 Value::Array(Some(vec))
-            }
-            RedisOperation::RedisSInterStore(param) => {
-                my_cache.redis_sinterstore(param, update, external)
             }
             RedisOperation::RedisSUnionStore(param) => {
                 my_cache.redis_sunionstore(param, update, external)

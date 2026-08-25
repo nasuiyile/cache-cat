@@ -20,6 +20,7 @@ use crate::protocol::list::ltrim::LTrimReq;
 use crate::protocol::list::rpop::RPopReq;
 use crate::protocol::list::rpush::RPushReq;
 use crate::protocol::set::sadd::SAddReq;
+use crate::protocol::set::sinterstore::SInterStoreReq;
 use crate::protocol::set::spop::SPopReq;
 use crate::protocol::set::srem::SRemReq;
 use crate::protocol::string::append::AppendReq;
@@ -85,6 +86,7 @@ pub enum BaseOperation {
     Unlink(UnlinkReq),
     ZIncrBy(ZIncrByReq),
     PfAdd(PfAddReq),
+    SInterStore(SInterStoreReq),
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
