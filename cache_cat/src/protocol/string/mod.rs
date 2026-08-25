@@ -1,6 +1,7 @@
 pub mod append;
 pub mod decr;
 pub mod decrby;
+pub mod fadd;
 pub mod get;
 pub mod getset;
 pub mod incr;
@@ -8,6 +9,7 @@ pub mod incrby;
 pub mod len;
 pub mod mget;
 pub mod mset;
+pub mod pfcount;
 pub mod psetex;
 pub mod set;
 pub mod setex;

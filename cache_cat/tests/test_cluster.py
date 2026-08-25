@@ -167,18 +167,17 @@ print(r.bitpos("test26", 1))  # 返回 1
 r.sadd("test27", "test")
 print(r.scard("test27"))
 
-result =(r.bitfield('player:1002:stats')
- .set('u32', 0, 100).incrby('u16', 32, 50)
- .get('u32', 0).get('u16', 32)
- .incrby('u16', 48, 1).get('u16', 48)).execute()
+result = (r.bitfield('player:1002:stats')
+          .set('u32', 0, 100).incrby('u16', 32, 50)
+          .get('u32', 0).get('u16', 32)
+          .incrby('u16', 48, 1).get('u16', 48)).execute()
 
-
-print(f"SET结果: {result[0]}")      # 0
+print(f"SET结果: {result[0]}")  # 0
 print(f"金币自增结果: {result[1]}")  # 50
-print(f"等级读取: {result[2]}")     # 100
-print(f"金币读取: {result[3]}")     # 50
+print(f"等级读取: {result[2]}")  # 100
+print(f"金币读取: {result[3]}")  # 50
 print(f"经验自增结果: {result[4]}")  # 1ZCARD
-print(f"经验读取: {result[5]}")     # 1
+print(f"经验读取: {result[5]}")  # 1
 
 r.sadd("test27", "test")
 r.spop("test27")
@@ -186,13 +185,11 @@ print(r.smembers("test27"))
 r.sadd("test27", "test")
 print(r.srandmember("test27"))
 
-
 print(r.keys('test*'))
 
 r.zadd("my_zset", {"a": 1, "b": 2, "c": 3})
 print(r.zscore("my_zset", "b"))
 print(r.zcard("my_zset"))
-
 
 r.set("test28", "test")
 print(r.unlink("test28"))
@@ -202,7 +199,6 @@ r.zadd("my_zset", {"a": 1, "b": 2, "c": 3})
 print(r.zrevrank("my_zset", "a"))
 print(r.dbsize())
 
-
 r.set("test30", "test")
 # print(r.memory_usage("test30"))
 # print(r.memory_stats())
@@ -210,4 +206,13 @@ r.set("test30", "test")
 # print(r.memory_purge())
 #
 # print(r.memory_malloc_stats())
-print(r.memory_doctor())
+
+
+r.pfadd(
+    "uv:2026-08-25",
+    "user_001",
+    "user_002",
+    "user_003",
+)
+# 近似值
+print(r.pfcount("uv:2026-08-25"))

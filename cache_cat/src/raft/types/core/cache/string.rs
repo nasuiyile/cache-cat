@@ -3,6 +3,7 @@ use crate::protocol::NO_EXPIRATION;
 use crate::protocol::string::append::AppendReq;
 use crate::protocol::string::decr::DecrReq;
 use crate::protocol::string::decrby::DecrByReq;
+use crate::protocol::string::fadd::PfAddReq;
 use crate::protocol::string::getset::GetSetParams;
 use crate::protocol::string::incr::IncrReq;
 use crate::protocol::string::incrby::IncrByReq;
@@ -263,6 +264,10 @@ impl MyCache {
     }
 
     pub fn decr_by(&self, param: DecrByReq, update: &mut Update) -> Value {
+        self.execute_compute(param, update)
+    }
+
+    pub fn p_f_add(&self, param: PfAddReq, update: &mut Update) -> Value {
         self.execute_compute(param, update)
     }
 }

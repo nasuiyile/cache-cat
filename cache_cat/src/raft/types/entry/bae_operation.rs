@@ -25,6 +25,7 @@ use crate::protocol::set::srem::SRemReq;
 use crate::protocol::string::append::AppendReq;
 use crate::protocol::string::decr::DecrReq;
 use crate::protocol::string::decrby::DecrByReq;
+use crate::protocol::string::fadd::PfAddReq;
 use crate::protocol::string::incr::IncrReq;
 use crate::protocol::string::incrby::IncrByReq;
 use crate::protocol::string::set::SetReq;
@@ -83,6 +84,7 @@ pub enum BaseOperation {
     SPop(SPopReq),
     Unlink(UnlinkReq),
     ZIncrBy(ZIncrByReq),
+    PfAdd(PfAddReq),
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]

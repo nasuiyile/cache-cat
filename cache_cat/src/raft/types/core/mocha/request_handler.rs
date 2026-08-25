@@ -48,6 +48,7 @@ pub fn read_request(
         ReadOperation::ZRevRank(param) => my_cache.execute_read(param, db_number, read_clock),
         ReadOperation::DbSize(_param) => my_cache.dbsize(db_number),
         ReadOperation::MemoryUsage(param) => my_cache.execute_read(param, db_number, read_clock),
+        ReadOperation::PFCount(param) => my_cache.execute_multi_read(param, db_number, read_clock),
     }
 }
 
@@ -98,6 +99,7 @@ pub fn base_request(
         BaseOperation::Unlink(param) => my_cache.unlink(param, update),
         BaseOperation::ZIncrBy(param) => my_cache.z_incr_by(param, update),
         BaseOperation::HMSet(param) => my_cache.h_mset(param, update),
+        BaseOperation::PfAdd(param) => my_cache.p_f_add(param, update),
     }
 }
 

@@ -28,6 +28,7 @@ use crate::protocol::set::sunion::SUnionParams;
 use crate::protocol::string::get::GetParams;
 use crate::protocol::string::len::StrLenParams;
 use crate::protocol::string::mget::MgetParams;
+use crate::protocol::string::pfcount::PfcountParams;
 use crate::protocol::zset::zcard::ZCardParams;
 use crate::protocol::zset::zcount::ZCountParams;
 use crate::protocol::zset::zrange::ZRangeParams;
@@ -76,4 +77,5 @@ pub enum ReadOperation {
     ZRevRank(ZRevRankParams),
     DbSize(DbsizeParams),
     MemoryUsage(MemoryUsageParams),
+    PFCount(PfcountParams),
 }
