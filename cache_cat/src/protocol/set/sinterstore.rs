@@ -19,12 +19,10 @@ use std::sync::Arc;
 
 /// Parameters for SINTERSTORE command
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct SInterStoreParams {
+struct SInterStoreParams {
     pub key: Bytes,
     pub keys: Vec<Bytes>,
 }
-
-
 
 /// SINTERSTORE command executor
 pub struct SInterStoreCommand;
@@ -78,10 +76,10 @@ impl Command for SInterStoreCommand {
             return Ok(Value::SimpleString(String::from("QUEUED")));
         }
         let operation = self.raft_request(items)?;
-        let value = server.app.write(operation, client.db_number).await?;
-        Ok(value)
+        server.app.write(operation, client.db_number).await
     }
 }
+
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct SInterStoreReq {
     pub key: Bytes,
@@ -124,12 +122,10 @@ impl MultiReadComputeCommand for SInterStoreReq {
                 // Redis: 不存在的 key 视为空 Set。
                 // intersection 必然为空。
                 intersection = Some(HashSet::new());
-                break;
+                continue;
             };
 
-            let value = &snapshot.value;
-
-            let ValueObject::Set(set) = &value.data else {
+            let ValueObject::Set(set) = &snapshot.value.data else {
                 return (
                     MochaOperation::Abort,
                     CacheCatError::from(ProtocolError::WrongType).into(),
@@ -139,38 +135,34 @@ impl MultiReadComputeCommand for SInterStoreReq {
             let set = set.lock();
 
             match intersection.as_mut() {
-                None => {
-                    // 第一组作为初始结果。
-                    intersection = Some(set.iter().cloned().collect());
-                }
+                // 第一组作为初始结果。
+                None => intersection = Some(set.iter().cloned().collect()),
 
-                Some(result) => {
-                    // retain 比 repeated intersection().collect() 少一些临时分配。
-                    result.retain(|member| set.contains(member));
+                // 已经为空，后面不用再计算交集。
+                // 不 break，继续遍历剩余 entries 做 WRONGTYPE 检查。
+                Some(result) if result.is_empty() => continue,
 
-                    // 已经为空，后面不用再计算交集。
-
-                    // 这里不能 break，见下面说明。
-                    if result.is_empty() {
-                        // 不 break，继续遍历剩余 entries 做 WRONGTYPE 检查。
-                    }
-                }
+                // retain 比 repeated intersection().collect() 少一些临时分配。
+                Some(result) => result.retain(|member| set.contains(member)),
             }
         }
 
-        let result = intersection.unwrap_or_default();
-        let cardinality = result.len() as i64;
-        if result.is_empty() {
+        if let Some(result) = intersection
+            && !result.is_empty()
+        {
+            let cardinality = result.len() as i64;
+            let value = MyValue::new(ValueObject::Set(Arc::new(Mutex::new(result))));
+
+            (
+                MochaOperation::Insert {
+                    value,
+                    expire: ExpirePolicy::Persistent,
+                },
+                Value::Integer(cardinality),
+            )
+        } else {
             // Redis 不保存 empty set；结果为空相当于删除 destination。
-            return (MochaOperation::Remove, Value::Integer(0));
+            (MochaOperation::Remove, Value::Integer(0))
         }
-        let value = MyValue::new(ValueObject::Set(Arc::new(Mutex::new(result))));
-        (
-            MochaOperation::Insert {
-                value,
-                expire: ExpirePolicy::Persistent,
-            },
-            Value::Integer(cardinality),
-        )
     }
 }
