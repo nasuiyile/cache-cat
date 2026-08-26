@@ -10,6 +10,7 @@ pub mod len;
 pub mod mget;
 pub mod mset;
 pub mod pfcount;
+pub mod pfmerge;
 pub mod psetex;
 pub mod set;
 pub mod setex;

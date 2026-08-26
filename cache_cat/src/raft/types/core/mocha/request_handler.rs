@@ -101,6 +101,7 @@ pub fn base_request(
         BaseOperation::HMSet(param) => my_cache.h_mset(param, update),
         BaseOperation::PfAdd(param) => my_cache.p_f_add(param, update),
         BaseOperation::SInterStore(param) => my_cache.s_inter_store(param, update),
+        BaseOperation::PFMerge(param) => my_cache.p_f_merge(param, update),
     }
 }
 

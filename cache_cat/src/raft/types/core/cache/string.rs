@@ -8,6 +8,7 @@ use crate::protocol::string::getset::GetSetParams;
 use crate::protocol::string::incr::IncrReq;
 use crate::protocol::string::incrby::IncrByReq;
 use crate::protocol::string::mset::MsetParams;
+use crate::protocol::string::pfmerge::PFMergeReq;
 use crate::protocol::string::psetex::PSetExParams;
 use crate::protocol::string::set::{Expiration, SetMode, SetParams, SetReq};
 use crate::protocol::string::setex::SetExParams;
@@ -269,5 +270,8 @@ impl MyCache {
 
     pub fn p_f_add(&self, param: PfAddReq, update: &mut Update) -> Value {
         self.execute_compute(param, update)
+    }
+    pub fn p_f_merge(&self, param: PFMergeReq, update: &mut Update) -> Value {
+        self.execute_multi_read_compute(param, update)
     }
 }

@@ -1,6 +1,14 @@
 from time import sleep
 
 import redis
+r = redis.Redis(
+    db=0,
+    host='192.168.100.135',
+    port=7888,
+    decode_responses=True
+)
+r.set('test', 'test')
+print(r.get('test'))
 
 r = redis.Redis(
     db=0,
@@ -208,11 +216,21 @@ r.set("test30", "test")
 # print(r.memory_malloc_stats())
 
 
-r.pfadd(
-    "uv:2026-08-25",
-    "user_001",
-    "user_002",
-    "user_003",
-)
-# 近似值
-print(r.pfcount("uv:2026-08-25"))
+r.pfadd("uv:page1", "user1", "user2", "user3")
+r.pfadd("uv:page1", "user2", "user4")
+
+# 2. PFCOUNT：估算去重后的数量
+print(r.pfcount("uv:page1"))
+# 大约是 4
+
+# 再创建一个 HyperLogLog
+r.pfadd("uv:page2", "user3", "user4", "user5")
+
+print(r.pfcount("uv:page2"))
+# 大约是 3
+
+# 3. PFMERGE：合并多个 HyperLogLog
+r.pfmerge("uv:all", "uv:page1", "uv:page2")
+
+print(r.pfcount("uv:all"))
+# 大约是 5

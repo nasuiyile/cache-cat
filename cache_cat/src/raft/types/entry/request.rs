@@ -160,6 +160,7 @@ impl fmt::Display for Request {
                 BaseOperation::HMSet(req) => write!(f, "HMSet: {}", req),
                 BaseOperation::PfAdd(req) => write!(f, "PfAdd: {}", req),
                 BaseOperation::SInterStore(req) => write!(f, "SInterStore: {}", req),
+                BaseOperation::PFMerge(req) => write!(f, "PFMerge: {}", req),
             },
             Operation::Redis(op) => match op {
                 RedisOperation::RedisSet(req) => write!(f, "RedisSet: {}", req),

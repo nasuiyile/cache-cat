@@ -120,6 +120,7 @@ use tokio_util::codec::Framed;
 use tracing::{error, warn};
 use crate::protocol::string::fadd::PfAddCommand;
 use crate::protocol::string::pfcount::PfcountCommand;
+use crate::protocol::string::pfmerge::{PFMergeCommand, PFMergeReq};
 
 #[async_trait]
 pub trait Command: Send + Sync {
@@ -315,6 +316,7 @@ impl CommandFactory {
         factory.register("DBSIZE", DbsizeCommand);
         factory.register("PFCOUNT",PfcountCommand);
         factory.register("PFADD",PfAddCommand);
+        factory.register("PFMERGE",PFMergeCommand);
         // List commands
         factory.register("LPUSH", LPushCommand);
         factory.register("RPUSH", RPushCommand);

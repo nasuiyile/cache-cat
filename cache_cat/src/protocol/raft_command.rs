@@ -84,6 +84,7 @@ use std::fmt;
 use tracing::warn;
 use crate::protocol::string::fadd::PfAddCommand;
 use crate::protocol::string::pfcount::PfcountCommand;
+use crate::protocol::string::pfmerge::PFMergeCommand;
 
 pub trait RaftCommand: Send + Sync {
     fn raft_request(&self, items: &[Value]) -> Result<Operation, ProtocolError>;
@@ -210,6 +211,7 @@ impl RaftCommandFactory {
         factory.register("DBSIZE", DbsizeCommand);
         factory.register("PFCOUNT",PfcountCommand);
         factory.register("PFADD",PfAddCommand);
+        factory.register("PFMERGE",PFMergeCommand);
         factory
     }
 

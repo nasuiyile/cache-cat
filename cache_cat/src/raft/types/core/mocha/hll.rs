@@ -392,23 +392,14 @@ impl RedisHll {
         Ok(Some(u64::from_le_bytes(bytes)))
     }
 
-    /// 将另一个 HLL merge 到当前 HLL。
-    ///
-    /// HLL union:
-    ///
-    ///     dst[i] = max(dst[i], src[i])
-    ///
-    /// 与 Redis PFCOUNT multi-key / PFMERGE 的核心操作一致。
     pub fn merge(&mut self, other: &RedisHll) {
-        debug_assert_eq!(
-            self.registers.len(),
-            HLL_REGISTERS
-        );
-
-        debug_assert_eq!(
-            other.registers.len(),
-            HLL_REGISTERS
-        );
+        // Redis PFMERGE:
+        //
+        // If at least one involved HLL is dense,
+        // use dense representation for destination.
+        if other.prefer_dense {
+            self.prefer_dense = true;
+        }
 
         for (dst, src) in self
             .registers

@@ -29,6 +29,7 @@ use crate::protocol::string::decrby::DecrByReq;
 use crate::protocol::string::fadd::PfAddReq;
 use crate::protocol::string::incr::IncrReq;
 use crate::protocol::string::incrby::IncrByReq;
+use crate::protocol::string::pfmerge::PFMergeReq;
 use crate::protocol::string::set::SetReq;
 use crate::protocol::zset::zadd::ZAddReq;
 use crate::protocol::zset::zincrby::ZIncrByReq;
@@ -61,6 +62,8 @@ pub enum BaseOperation {
     BitField(BitFieldReq),
     DecrBy(DecrByReq),
     Decr(DecrReq),
+    PFMerge(PFMergeReq),
+    PfAdd(PfAddReq),
     // list
     LPush(LPushReq),
     RPush(RPushReq),
@@ -79,13 +82,12 @@ pub enum BaseOperation {
     ZAdd(ZAddReq),
     ZRem(ZRemReq),
     ZPopMin(ZPopMinReq),
+    ZIncrBy(ZIncrByReq),
     // set
     SAdd(SAddReq),
     SRem(SRemReq),
     SPop(SPopReq),
     Unlink(UnlinkReq),
-    ZIncrBy(ZIncrByReq),
-    PfAdd(PfAddReq),
     SInterStore(SInterStoreReq),
 }
 
