@@ -20,9 +20,11 @@ use crate::protocol::list::ltrim::LTrimReq;
 use crate::protocol::list::rpop::RPopReq;
 use crate::protocol::list::rpush::RPushReq;
 use crate::protocol::set::sadd::SAddReq;
+use crate::protocol::set::sdiffstore::SDiffStoreReq;
 use crate::protocol::set::sinterstore::SInterStoreReq;
 use crate::protocol::set::spop::SPopReq;
 use crate::protocol::set::srem::SRemReq;
+use crate::protocol::set::sunionstore::SUnionStoreReq;
 use crate::protocol::string::append::AppendReq;
 use crate::protocol::string::decr::DecrReq;
 use crate::protocol::string::decrby::DecrByReq;
@@ -87,6 +89,8 @@ pub enum BaseOperation {
     ZIncrBy(ZIncrByReq),
     PfAdd(PfAddReq),
     SInterStore(SInterStoreReq),
+    SDiffStore(SDiffStoreReq),
+    SUnionStore(SUnionStoreReq),
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
