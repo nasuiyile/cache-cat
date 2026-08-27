@@ -82,6 +82,7 @@ use crate::raft::types::entry::request::Operation;
 use std::collections::HashMap;
 use std::fmt;
 use tracing::warn;
+use crate::protocol::bitmap::bitop::BitOpCommand;
 use crate::protocol::string::fadd::PfAddCommand;
 use crate::protocol::string::pfcount::PfcountCommand;
 use crate::protocol::string::pfmerge::PFMergeCommand;
@@ -212,6 +213,7 @@ impl RaftCommandFactory {
         factory.register("PFCOUNT",PfcountCommand);
         factory.register("PFADD",PfAddCommand);
         factory.register("PFMERGE",PFMergeCommand);
+        factory.register("BITOP", BitOpCommand);
         factory
     }
 

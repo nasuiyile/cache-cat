@@ -104,6 +104,7 @@ pub fn base_request(
         BaseOperation::SUnionStore(param) => my_cache.s_union_store(param, update),
         BaseOperation::SDiffStore(param) => my_cache.s_diff_store(param, update),
         BaseOperation::PFMerge(param) => my_cache.p_f_merge(param, update),
+        BaseOperation::BitOp(param) => my_cache.bit_op(param, update),
     }
 }
 

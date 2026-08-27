@@ -158,6 +158,7 @@ impl fmt::Display for Request {
                 BaseOperation::SUnionStore(req) => write!(f, "SUnionStore: {}", req),
                 BaseOperation::SDiffStore(req) => write!(f, "SDiffStore: {}", req),
                 BaseOperation::PFMerge(req) => write!(f, "PFMerge: {}", req),
+                BaseOperation::BitOp(req) => write!(f, "BitOp: {}", req),
             },
             Operation::Redis(op) => match op {
                 RedisOperation::RedisSet(req) => write!(f, "RedisSet: {}", req),

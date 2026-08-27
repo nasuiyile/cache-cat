@@ -1,4 +1,5 @@
 use crate::protocol::bitmap::bitfield::BitFieldReq;
+use crate::protocol::bitmap::bitop::BitOpReq;
 use crate::protocol::bitmap::setbit::SetBitReq;
 use crate::protocol::hash::hdel::HDelReq;
 use crate::protocol::hash::hincrby::HIncrReq;
@@ -66,6 +67,7 @@ pub enum BaseOperation {
     Decr(DecrReq),
     PFMerge(PFMergeReq),
     PfAdd(PfAddReq),
+    BitOp(BitOpReq),
     // list
     LPush(LPushReq),
     RPush(RPushReq),

@@ -1,14 +1,7 @@
 from time import sleep
 
 import redis
-r = redis.Redis(
-    db=0,
-    host='192.168.100.135',
-    port=7888,
-    decode_responses=True
-)
-r.set('test', 'test')
-print(r.get('test'))
+
 
 r = redis.Redis(
     db=0,
@@ -234,3 +227,21 @@ r.pfmerge("uv:all", "uv:page1", "uv:page2")
 
 print(r.pfcount("uv:all"))
 # 大约是 5
+
+r = redis.Redis(host='localhost', port=6379, decode_responses=False)
+# 设置字节值
+r.set("a", bytes([0b00001111]))  # 0x0F = 15
+r.set("b", bytes([0b00110011]))  # 0x33 = 51
+
+# 执行位运算
+r.bitop("AND", "result", "a", "b")
+
+# 获取结果
+value = r.get("result")
+print(value)  # b'\x03'
+print(bin(value[0]))  # 0b11
+
+# 位运算解释：
+# a = 00001111
+# b = 00110011
+# AND 结果 = 00000011 = 3
