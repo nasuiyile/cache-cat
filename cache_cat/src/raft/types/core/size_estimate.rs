@@ -1,7 +1,9 @@
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::Arc;
+use std::sync::atomic::AtomicUsize;
 use bytes::Bytes;
 use parking_lot::{Mutex, MutexGuard};
+use crate::raft::types::core::mocha::bloom_filter::BloomObject;
 use crate::raft::types::core::value_object::HashValue;
 use crate::raft::types::core::sorted_set::SortedSet;
 
@@ -310,5 +312,37 @@ pub fn estimate_zset_usage(
     arc_allocation
         .saturating_add(
             zset.estimated_heap_usage(samples)
+        )
+}
+
+pub fn estimate_bloom_usage(
+    value: &Arc<Mutex<BloomObject>>,
+) -> usize {
+    let bloom = value.lock();
+
+    /*
+     * ValueObject 中 Arc handle 自己属于 enum inline storage，
+     * 已经由 size_of::<ValueObject>() 统计。
+     *
+     * 这里统计 Arc 指向的 allocation。
+     *
+     * 一个 Arc allocation 逻辑上包括：
+     *
+     * strong count
+     * weak count
+     * Mutex<BloomObject>
+     *
+     * 不追求 allocator 精确值，只保持和你当前
+     * logical / approximate memory usage 的定义一致。
+     */
+    let arc_counters = size_of::<AtomicUsize>()
+        .saturating_mul(2);
+
+    arc_counters
+        .saturating_add(
+            size_of::<Mutex<BloomObject>>()
+        )
+        .saturating_add(
+            bloom.estimated_heap_usage()
         )
 }

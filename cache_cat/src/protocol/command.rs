@@ -1,5 +1,6 @@
 use crate::error::CacheCatError;
 use crate::error::ProtocolError;
+use crate::protocol::bf::bf_add::BfAddCommand;
 use crate::protocol::bitmap::bitcount::BitCountCommand;
 use crate::protocol::bitmap::bitfield::BitFieldCommand;
 use crate::protocol::bitmap::bitop::BitOpCommand;
@@ -395,6 +396,7 @@ impl CommandFactory {
         factory.register("PUBSUB", PubSubCommand);
         //Sentinel
         factory.register("SENTINEL", SentinelCommand::new());
+        factory.register("BF.ADD", BfAddCommand);
         factory
     }
 

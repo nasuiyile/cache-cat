@@ -1,6 +1,8 @@
 use crate::error::ProtocolError;
+use crate::protocol::bf::bf_add::BfAddCommand;
 use crate::protocol::bitmap::bitcount::BitCountCommand;
 use crate::protocol::bitmap::bitfield::BitFieldCommand;
+use crate::protocol::bitmap::bitop::BitOpCommand;
 use crate::protocol::bitmap::bitpos::BitPosCommand;
 use crate::protocol::bitmap::getbit::GetBitCommand;
 use crate::protocol::bitmap::setbit::SetBitCommand;
@@ -55,6 +57,7 @@ use crate::protocol::set::sunionstore::SUnionStoreCommand;
 use crate::protocol::string::append::AppendCommand;
 use crate::protocol::string::decr::DecrCommand;
 use crate::protocol::string::decrby::DecrByCommand;
+use crate::protocol::string::fadd::PfAddCommand;
 use crate::protocol::string::get::GetCommand;
 use crate::protocol::string::getset::GetSetCommand;
 use crate::protocol::string::incr::IncrCommand;
@@ -62,6 +65,8 @@ use crate::protocol::string::incrby::IncrByCommand;
 use crate::protocol::string::len::StrLenCommand;
 use crate::protocol::string::mget::MgetCommand;
 use crate::protocol::string::mset::MsetCommand;
+use crate::protocol::string::pfcount::PfcountCommand;
+use crate::protocol::string::pfmerge::PFMergeCommand;
 use crate::protocol::string::psetex::PSetExCommand;
 use crate::protocol::string::set::SetCommand;
 use crate::protocol::string::setex::SetExCommand;
@@ -82,10 +87,6 @@ use crate::raft::types::entry::request::Operation;
 use std::collections::HashMap;
 use std::fmt;
 use tracing::warn;
-use crate::protocol::bitmap::bitop::BitOpCommand;
-use crate::protocol::string::fadd::PfAddCommand;
-use crate::protocol::string::pfcount::PfcountCommand;
-use crate::protocol::string::pfmerge::PFMergeCommand;
 
 pub trait RaftCommand: Send + Sync {
     fn raft_request(&self, items: &[Value]) -> Result<Operation, ProtocolError>;
@@ -210,10 +211,11 @@ impl RaftCommandFactory {
         factory.register("ZREVRANK", ZRevRankCommand);
         factory.register("ZINCRBY", ZIncrByCommand);
         factory.register("DBSIZE", DbsizeCommand);
-        factory.register("PFCOUNT",PfcountCommand);
-        factory.register("PFADD",PfAddCommand);
-        factory.register("PFMERGE",PFMergeCommand);
+        factory.register("PFCOUNT", PfcountCommand);
+        factory.register("PFADD", PfAddCommand);
+        factory.register("PFMERGE", PFMergeCommand);
         factory.register("BITOP", BitOpCommand);
+        factory.register("BF.ADD", BfAddCommand);
         factory
     }
 

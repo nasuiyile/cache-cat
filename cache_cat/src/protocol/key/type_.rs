@@ -9,6 +9,7 @@
 //! - WRONGTYPE error is not applicable (TYPE always succeeds)
 
 use crate::error::{CacheCatError, ProtocolError};
+use crate::mocha::EntrySnapshot;
 use crate::protocol::command::{Client, Command};
 use crate::protocol::raft_command::ReadRaftCommand;
 use crate::raft::network::redis_server::RedisServer;
@@ -21,7 +22,6 @@ use async_trait::async_trait;
 use bytes::Bytes;
 use serde::{Deserialize, Serialize};
 use std::fmt::Display;
-use crate::mocha::EntrySnapshot;
 
 /// TYPE command handler
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -52,6 +52,7 @@ fn value_object_to_type_string(value_obj: &ValueObject) -> &'static str {
         ValueObject::Set(_) => "set",
         ValueObject::ZSet(_) => "zset",
         ValueObject::Hash(_) => "hash",
+        ValueObject::Bloom(_) => "MBbloom--",
     }
 }
 

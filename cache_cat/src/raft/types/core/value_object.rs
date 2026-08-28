@@ -3,7 +3,12 @@ use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::Arc;
-use crate::raft::types::core::size_estimate::{estimate_hash_usage, estimate_list_usage, estimate_set_usage, estimate_zset_usage, estimated_bytes_heap_usage};
+
+use crate::raft::types::core::mocha::bloom_filter::BloomObject;
+use crate::raft::types::core::size_estimate::{
+    estimate_bloom_usage, estimate_hash_usage, estimate_list_usage, estimate_set_usage,
+    estimate_zset_usage, estimated_bytes_heap_usage,
+};
 use crate::raft::types::core::sorted_set::SortedSet;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -38,73 +43,38 @@ pub enum ValueObject {
 
     #[serde(with = "mutex_hashset_serde")]
     Set(Arc<Mutex<HashSet<Bytes>>>),
+
+    /*
+     * 一定建议 append 到最后。
+     *
+     * 如果 Raft log / snapshot 使用 bincode 一类
+     * 基于 enum variant index 的格式，
+     * 不要插入到已有 variant 中间。
+     */
+    #[serde(with = "mutex_bloom_serde")]
+    Bloom(Arc<Mutex<BloomObject>>),
 }
+
 impl ValueObject {
-    /// 估算整个 ValueObject 占用的内存。
-    ///
-    /// 包括：
-    ///
-    /// - ValueObject enum 本身
-    /// - String Bytes payload
-    /// - Arc allocation
-    /// - Mutex
-    /// - List buffer
-    /// - Hash/Set bucket
-    /// - ZSet tree/hash
-    /// - collection 中 Bytes 的 payload
-    ///
-    /// 这是 logical / approximate memory usage，
-    /// 不是 jemalloc / system allocator 的精确 allocated size。
     pub fn estimated_memory_usage(&self, samples: usize) -> usize {
-        size_of::<Self>()
-            .saturating_add(self.estimated_heap_usage(samples))
+        size_of::<Self>().saturating_add(self.estimated_heap_usage(samples))
     }
 
-    /// 仅统计 ValueObject 自身之外的 heap allocation。
-    ///
-    /// 如果调用方已经：
-    ///
-    ///     size_of::<MyValue>()
-    ///
-    /// 那么应该调用这个方法，而不是 estimated_memory_usage，
-    /// 否则会重复计算 ValueObject inline size。
     pub fn estimated_heap_usage(&self, samples: usize) -> usize {
         match self {
-            ValueObject::Int(_) => {
-                /*
-                 * i64 inline 存储在 ValueObject 中。
-                 */
-                0
-            }
+            ValueObject::Int(_) => 0,
 
-            ValueObject::String(value) => {
-                /*
-                 * Bytes handle 本身在 ValueObject inline storage 里。
-                 *
-                 * 这里统计它指向的数据。
-                 *
-                 * Bytes 可以 slice / share backing allocation，
-                 * 所以 len() 是逻辑 payload 大小，并不是 allocator
-                 * 的精确 allocation size。
-                 */
-                estimated_bytes_heap_usage(value)
-            }
+            ValueObject::String(value) => estimated_bytes_heap_usage(value),
 
-            ValueObject::List(value) => {
-                estimate_list_usage(value, samples)
-            }
+            ValueObject::List(value) => estimate_list_usage(value, samples),
 
-            ValueObject::Hash(value) => {
-                estimate_hash_usage(value, samples)
-            }
+            ValueObject::Hash(value) => estimate_hash_usage(value, samples),
 
-            ValueObject::ZSet(value) => {
-                estimate_zset_usage(value, samples)
-            }
+            ValueObject::ZSet(value) => estimate_zset_usage(value, samples),
 
-            ValueObject::Set(value) => {
-                estimate_set_usage(value, samples)
-            }
+            ValueObject::Set(value) => estimate_set_usage(value, samples),
+
+            ValueObject::Bloom(value) => estimate_bloom_usage(value),
         }
     }
 }
@@ -125,38 +95,31 @@ macro_rules! impl_mutex_serde {
                 S: serde::Serializer,
             {
                 let guard = data.lock();
+
                 guard.serialize(serializer)
             }
 
-            pub fn deserialize<'de, D>(
-                deserializer: D,
-            ) -> Result<Arc<Mutex<$inner_type>>, D::Error>
+            pub fn deserialize<'de, D>(deserializer: D) -> Result<Arc<Mutex<$inner_type>>, D::Error>
             where
                 D: Deserializer<'de>,
             {
                 let value = <$inner_type>::deserialize(deserializer)?;
+
                 Ok(Arc::new(Mutex::new(value)))
             }
         }
     };
 }
 
-impl_mutex_serde!(
-    mutex_vecdeque_serde,
-    VecDeque<Bytes>
-);
+impl_mutex_serde!(mutex_vecdeque_serde, VecDeque<Bytes>);
 
 impl_mutex_serde!(
     mutex_hashmap_serde,
     HashMap<Bytes, HashValue>
 );
 
-impl_mutex_serde!(
-    mutex_zset_serde,
-    SortedSet
-);
+impl_mutex_serde!(mutex_zset_serde, SortedSet);
 
-impl_mutex_serde!(
-    mutex_hashset_serde,
-    HashSet<Bytes>
-);
+impl_mutex_serde!(mutex_hashset_serde, HashSet<Bytes>);
+
+impl_mutex_serde!(mutex_bloom_serde, BloomObject);

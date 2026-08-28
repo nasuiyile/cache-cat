@@ -245,3 +245,5 @@ print(bin(value[0]))  # 0b11
 # a = 00001111
 # b = 00110011
 # AND 结果 = 00000011 = 3
+
+print(r.bf().add("bf1", "user1"))

@@ -1,3 +1,4 @@
+use crate::protocol::bf::bf_add::BfAddReq;
 use crate::protocol::bitmap::bitfield::BitFieldReq;
 use crate::protocol::bitmap::bitop::BitOpReq;
 use crate::protocol::bitmap::setbit::SetBitReq;
@@ -12,6 +13,9 @@ impl MyCache {
         self.execute_multi_read_compute(param, update)
     }
     pub fn bit_field(&self, param: BitFieldReq, update: &mut Update) -> Value {
+        self.execute_compute(param, update)
+    }
+    pub fn bf_add(&self, param: BfAddReq, update: &mut Update) -> Value {
         self.execute_compute(param, update)
     }
 }

@@ -225,13 +225,8 @@ impl BitOpReq {
     fn value_to_bytes(value: &ValueObject) -> Result<Bytes, ProtocolError> {
         match value {
             ValueObject::String(value) => Ok(value.clone()),
-
             ValueObject::Int(value) => Ok(Bytes::from(value.to_string())),
-
-            ValueObject::List(_)
-            | ValueObject::Hash(_)
-            | ValueObject::ZSet(_)
-            | ValueObject::Set(_) => Err(ProtocolError::WrongType),
+            _ => Err(ProtocolError::WrongType),
         }
     }
 
@@ -492,10 +487,7 @@ impl MultiReadComputeCommand for BitOpReq {
                 Ok(value) => value,
 
                 Err(error) => {
-                    return (
-                        MochaOperation::Abort,
-                        CacheCatError::from(error).into(),
-                    );
+                    return (MochaOperation::Abort, CacheCatError::from(error).into());
                 }
             };
 
@@ -505,11 +497,7 @@ impl MultiReadComputeCommand for BitOpReq {
         //
         // Redis BITOP result size is the size of the longest input string.
         //
-        let max_len = sources
-            .iter()
-            .map(Bytes::len)
-            .max()
-            .unwrap_or(0);
+        let max_len = sources.iter().map(Bytes::len).max().unwrap_or(0);
 
         //
         // Redis doesn't retain an empty destination value for BITOP when all
@@ -518,10 +506,7 @@ impl MultiReadComputeCommand for BitOpReq {
         // It deletes the destination and returns 0.
         //
         if max_len == 0 {
-            return (
-                MochaOperation::Remove,
-                Value::Integer(0),
-            );
+            return (MochaOperation::Remove, Value::Integer(0));
         }
 
         let result = self.compute(&sources, max_len);
@@ -554,7 +539,6 @@ impl MultiReadComputeCommand for BitOpReq {
                 //
                 expire: ExpirePolicy::Persistent,
             },
-
             //
             // Redis returns the destination string length in BYTES.
             //

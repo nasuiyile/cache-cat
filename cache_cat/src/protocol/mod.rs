@@ -16,6 +16,7 @@ pub mod pub_sub;
 mod raft_command;
 pub mod sentinel;
 pub mod server;
+pub mod bf;
 
 /// Special value indicating no expiration (0 means never expire)
 pub const NO_EXPIRATION: u64 = 0;

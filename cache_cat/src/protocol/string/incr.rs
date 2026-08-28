@@ -97,31 +97,34 @@ impl ComputeCommand for IncrReq {
     ) -> (MochaOperation<MyValue>, Value) {
         let (result, value) = match &entry.value.data {
             ValueObject::Int(n) => {
-                let num = n + 1;
+                let Some(num) = n.checked_add(1) else {
+                    return (MochaOperation::Abort, ProtocolError::Overflow.into());
+                };
+
                 (ValueObject::Int(num), Value::Integer(num))
             }
 
             ValueObject::String(s) => {
-                let Some(mut value) = parse_i64(s) else {
-                    return (
-                        MochaOperation::Abort,
-                        Value::Error("Value is not an integer".to_string()),
-                    );
+                let Some(value) = parse_i64(s) else {
+                    return (MochaOperation::Abort, ProtocolError::NotAnInteger.into());
                 };
-                value += 1;
+
+                let Some(value) = value.checked_add(1) else {
+                    return (MochaOperation::Abort, ProtocolError::Overflow.into());
+                };
+
                 (ValueObject::Int(value), Value::Integer(value))
             }
 
             _ => {
-                return (
-                    MochaOperation::Abort,
-                    Value::Error("Key exists but is not an Integer".to_string()),
-                );
+                return (MochaOperation::Abort, ProtocolError::WrongType.into());
             }
         };
+
         (
             MochaOperation::Insert {
                 value: MyValue::new(result),
+
                 expire: entry.get_expire_policy(),
             },
             value,

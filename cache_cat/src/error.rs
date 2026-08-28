@@ -233,6 +233,22 @@ pub enum ProtocolError {
 
     #[error("ERR Client sent AUTH, but no password is set")]
     NotAuthenticated,
+
+    /// Bloom filter is full and cannot scale.
+    #[error("ERR non scaling filter is full")]
+    BloomFilterFull,
+
+    /// Failed to insert an item into a Bloom filter.
+    #[error("ERR problem inserting into filter")]
+    BloomInsertFailed,
+
+    /// Not enough memory to create a Bloom filter.
+    #[error("ERR Insufficient memory to create filter")]
+    BloomCreateOutOfMemory,
+
+    /// Failed to create a Bloom filter.
+    #[error("ERR could not create filter")]
+    BloomCreateFailed,
 }
 
 /// TLS-related errors
