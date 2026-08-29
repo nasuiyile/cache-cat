@@ -87,6 +87,7 @@ use crate::raft::types::entry::request::Operation;
 use std::collections::HashMap;
 use std::fmt;
 use tracing::warn;
+use crate::protocol::bf::bf_exits::BfExistsCommand;
 
 pub trait RaftCommand: Send + Sync {
     fn raft_request(&self, items: &[Value]) -> Result<Operation, ProtocolError>;
@@ -216,6 +217,7 @@ impl RaftCommandFactory {
         factory.register("PFMERGE", PFMergeCommand);
         factory.register("BITOP", BitOpCommand);
         factory.register("BF.ADD", BfAddCommand);
+        factory.register("BF.EXISTS", BfExistsCommand);
         factory
     }
 

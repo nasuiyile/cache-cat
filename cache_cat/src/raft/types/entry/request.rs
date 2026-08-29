@@ -115,6 +115,7 @@ impl fmt::Display for Request {
                 ReadOperation::DbSize(req) => write!(f, "DbSize: {}", req),
                 ReadOperation::MemoryUsage(req) => write!(f, "MemoryUsage: {}", req),
                 ReadOperation::PFCount(req) => write!(f, "PFCount: {}", req),
+                ReadOperation::BfExists(req) => write!(f, "BfExists: {}", req),
             },
             Operation::Base(op) => match op {
                 BaseOperation::Empty => write!(f, "None"),

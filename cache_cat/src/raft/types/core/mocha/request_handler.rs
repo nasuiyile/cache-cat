@@ -49,6 +49,7 @@ pub fn read_request(
         ReadOperation::DbSize(_param) => my_cache.dbsize(db_number),
         ReadOperation::MemoryUsage(param) => my_cache.execute_read(param, db_number, read_clock),
         ReadOperation::PFCount(param) => my_cache.execute_multi_read(param, db_number, read_clock),
+        ReadOperation::BfExists(param) => my_cache.execute_read(param, db_number, read_clock),
     }
 }
 

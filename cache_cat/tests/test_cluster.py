@@ -2,7 +2,6 @@ from time import sleep
 
 import redis
 
-
 r = redis.Redis(
     db=0,
     host='localhost',
@@ -247,3 +246,4 @@ print(bin(value[0]))  # 0b11
 # AND 结果 = 00000011 = 3
 
 print(r.bf().add("bf1", "user1"))
+print(r.bf().exists("bf1", "user1"))

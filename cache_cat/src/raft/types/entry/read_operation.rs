@@ -1,3 +1,4 @@
+use crate::protocol::bf::bf_exits::BfExistsParams;
 use crate::protocol::bitmap::bitcount::BitCountParams;
 use crate::protocol::bitmap::bitpos::BitPosParams;
 use crate::protocol::bitmap::getbit::GetBitParams;
@@ -78,4 +79,5 @@ pub enum ReadOperation {
     DbSize(DbsizeParams),
     MemoryUsage(MemoryUsageParams),
     PFCount(PfcountParams),
+    BfExists(BfExistsParams),
 }
