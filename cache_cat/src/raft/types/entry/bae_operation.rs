@@ -1,4 +1,5 @@
 use crate::protocol::bf::bf_add::BfAddReq;
+use crate::protocol::bf::bf_madd::BfMAddReq;
 use crate::protocol::bitmap::bitfield::BitFieldReq;
 use crate::protocol::bitmap::bitop::BitOpReq;
 use crate::protocol::bitmap::setbit::SetBitReq;
@@ -98,6 +99,7 @@ pub enum BaseOperation {
     SUnionStore(SUnionStoreReq),
     //bf
     BfAdd(BfAddReq),
+    BfMAdd(BfMAddReq),
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]

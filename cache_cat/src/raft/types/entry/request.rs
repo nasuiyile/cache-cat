@@ -161,6 +161,7 @@ impl fmt::Display for Request {
                 BaseOperation::PFMerge(req) => write!(f, "PFMerge: {}", req),
                 BaseOperation::BitOp(req) => write!(f, "BitOp: {}", req),
                 BaseOperation::BfAdd(req) => write!(f, "BfAdd: {}", req),
+                BaseOperation::BfMAdd(req) => write!(f, "BfMAdd: {}", req),
             },
             Operation::Redis(op) => match op {
                 RedisOperation::RedisSet(req) => write!(f, "RedisSet: {}", req),
