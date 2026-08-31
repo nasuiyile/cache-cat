@@ -3,6 +3,7 @@ use crate::error::ProtocolError;
 use crate::protocol::bf::bf_add::BfAddCommand;
 use crate::protocol::bf::bf_exits::BfExistsCommand;
 use crate::protocol::bf::bf_madd::BfMAddCommand;
+use crate::protocol::bf::bf_mexits::BfMExistsCommand;
 use crate::protocol::bitmap::bitcount::BitCountCommand;
 use crate::protocol::bitmap::bitfield::BitFieldCommand;
 use crate::protocol::bitmap::bitop::BitOpCommand;
@@ -401,6 +402,7 @@ impl CommandFactory {
         factory.register("BF.ADD", BfAddCommand);
         factory.register("BF.EXISTS", BfExistsCommand);
         factory.register("BF.MADD", BfMAddCommand);
+        factory.register("BF.MEXISTS", BfMExistsCommand);
         factory
     }
 

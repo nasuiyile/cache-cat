@@ -50,6 +50,7 @@ pub fn read_request(
         ReadOperation::MemoryUsage(param) => my_cache.execute_read(param, db_number, read_clock),
         ReadOperation::PFCount(param) => my_cache.execute_multi_read(param, db_number, read_clock),
         ReadOperation::BfExists(param) => my_cache.execute_read(param, db_number, read_clock),
+        ReadOperation::BfMExists(param) => my_cache.execute_read(param, db_number, read_clock),
     }
 }
 
