@@ -109,6 +109,7 @@ pub fn base_request(
         BaseOperation::BitOp(param) => my_cache.bit_op(param, update),
         BaseOperation::BfAdd(param) => my_cache.bf_add(param, update),
         BaseOperation::BfMAdd(param) => my_cache.bf_madd(param, update),
+        BaseOperation::BfReserve(param) => my_cache.bf_reserve(param, update),
     }
 }
 

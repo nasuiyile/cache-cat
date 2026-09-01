@@ -249,6 +249,42 @@ pub enum ProtocolError {
     /// Failed to create a Bloom filter.
     #[error("ERR could not create filter")]
     BloomCreateFailed,
+
+    /// BF.RESERVE: error rate cannot be parsed.
+    #[error("ERR bad error rate")]
+    BloomBadErrorRate,
+
+    /// BF.RESERVE: error rate is outside Redis supported range.
+    #[error("ERR error rate must be in the range (0.000000, 1.000000)")]
+    BloomErrorRateOutOfRange,
+
+    /// BF.RESERVE: capacity cannot be parsed.
+    #[error("ERR bad capacity")]
+    BloomBadCapacity,
+
+    /// BF.RESERVE: capacity outside Redis supported range.
+    #[error("ERR capacity must be in the range [1, 1048576]")]
+    BloomCapacityOutOfRange,
+
+    /// BF.RESERVE EXPANSION without a following value.
+    #[error("ERR no expansion")]
+    BloomNoExpansion,
+
+    /// BF.RESERVE: expansion cannot be parsed.
+    #[error("ERR bad expansion")]
+    BloomBadExpansion,
+
+    /// BF.RESERVE: expansion outside Redis supported range.
+    #[error("ERR expansion must be in the range [0, 32768]")]
+    BloomExpansionOutOfRange,
+
+    /// EXPANSION > 0 cannot be combined with NONSCALING.
+    #[error("Nonscaling filters cannot expand")]
+    BloomNonScalingCannotExpand,
+
+    /// BF.RESERVE on an already existing Bloom filter.
+    #[error("ERR item exists")]
+    BloomItemExists,
 }
 
 /// TLS-related errors

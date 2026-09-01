@@ -1,5 +1,6 @@
 use crate::protocol::bf::bf_add::BfAddReq;
 use crate::protocol::bf::bf_madd::BfMAddReq;
+use crate::protocol::bf::bf_reserve::BfReserveReq;
 use crate::protocol::bitmap::bitfield::BitFieldReq;
 use crate::protocol::bitmap::bitop::BitOpReq;
 use crate::protocol::bitmap::setbit::SetBitReq;
@@ -100,6 +101,7 @@ pub enum BaseOperation {
     //bf
     BfAdd(BfAddReq),
     BfMAdd(BfMAddReq),
+    BfReserve(BfReserveReq),
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]

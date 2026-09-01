@@ -25,6 +25,16 @@ const LN2: f64 = std::f64::consts::LN_2;
 /// RedisBloom FORCE64 使用的 MurmurHash64A seed。
 const BLOOM_HASH_SEED: u64 = 0xc6a4a7935bd1e995;
 
+
+/// Redis accepts an error rate < 1, but internally caps values > 0.25.
+pub const BLOOM_ERROR_RATE_CAP: f64 = 0.25;
+
+pub const BLOOM_CAPACITY_MIN: u64 = 1;
+pub const BLOOM_CAPACITY_MAX: u64 = 1_048_576;
+
+pub const BLOOM_EXPANSION_MIN: u32 = 0;
+pub const BLOOM_EXPANSION_MAX: u32 = 32_768;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BloomError {
     /// NONSCALING filter 满了。
@@ -120,11 +130,7 @@ impl BloomObject {
         expansion: u32,
         non_scaling: bool,
     ) -> Result<Self, BloomError> {
-        if capacity == 0
-            || !error_rate.is_finite()
-            || error_rate <= 0.0
-            || error_rate >= 1.0
-        {
+        if capacity == 0 || !error_rate.is_finite() || error_rate <= 0.0 || error_rate >= 1.0 {
             return Err(BloomError::Invalid);
         }
 
@@ -207,10 +213,7 @@ impl BloomObject {
         }
 
         let should_expand = {
-            let current = self
-                .filters
-                .last()
-                .ok_or(BloomError::Invalid)?;
+            let current = self.filters.last().ok_or(BloomError::Invalid)?;
 
             current.size >= current.entries
         };
@@ -221,23 +224,16 @@ impl BloomObject {
             }
 
             let (next_capacity, next_error) = {
-                let current = self
-                    .filters
-                    .last()
-                    .ok_or(BloomError::Invalid)?;
+                let current = self.filters.last().ok_or(BloomError::Invalid)?;
 
                 let next_capacity = current
                     .entries
                     .checked_mul(self.growth as u64)
                     .ok_or(BloomError::Overflow)?;
 
-                let next_error =
-                    current.error * ERROR_TIGHTENING_RATIO;
+                let next_error = current.error * ERROR_TIGHTENING_RATIO;
 
-                if next_capacity == 0
-                    || next_error <= 0.0
-                    || !next_error.is_finite()
-                {
+                if next_capacity == 0 || next_error <= 0.0 || !next_error.is_finite() {
                     return Err(BloomError::Overflow);
                 }
 
@@ -249,8 +245,7 @@ impl BloomObject {
              *
              * 如果 bitmap 内存分配失败，不修改当前 BloomObject。
              */
-            let next =
-                BloomSubFilter::new(next_capacity, next_error)?;
+            let next = BloomSubFilter::new(next_capacity, next_error)?;
 
             /*
              * 再保证 filters Vec 有空间。
@@ -264,10 +259,7 @@ impl BloomObject {
             self.filters.push(next);
         }
 
-        let current = self
-            .filters
-            .last_mut()
-            .ok_or(BloomError::Invalid)?;
+        let current = self.filters.last_mut().ok_or(BloomError::Invalid)?;
 
         /*
          * 到这里一定满足：
@@ -311,17 +303,13 @@ impl BloomObject {
     pub fn total_capacity(&self) -> u64 {
         self.filters
             .iter()
-            .fold(0u64, |acc, filter| {
-                acc.saturating_add(filter.entries)
-            })
+            .fold(0u64, |acc, filter| acc.saturating_add(filter.entries))
     }
 
     pub fn bitmap_bytes(&self) -> usize {
-        self.filters
-            .iter()
-            .fold(0usize, |acc, filter| {
-                acc.saturating_add(filter.bitmap.len())
-            })
+        self.filters.iter().fold(0usize, |acc, filter| {
+            acc.saturating_add(filter.bitmap.len())
+        })
     }
 
     /// 不包括 BloomObject 自己 inline 的大小，
@@ -341,25 +329,17 @@ impl BloomObject {
         /*
          * 各个 bitmap backing allocation。
          */
-        let bitmap_allocation =
-            self.filters.iter().fold(0usize, |acc, filter| {
-                acc.saturating_add(filter.bitmap.capacity())
-            });
+        let bitmap_allocation = self.filters.iter().fold(0usize, |acc, filter| {
+            acc.saturating_add(filter.bitmap.capacity())
+        });
 
         filters_allocation.saturating_add(bitmap_allocation)
     }
 }
 
 impl BloomSubFilter {
-    fn new(
-        entries: u64,
-        error: f64,
-    ) -> Result<Self, BloomError> {
-        if entries == 0
-            || !error.is_finite()
-            || error <= 0.0
-            || error >= 1.0
-        {
+    fn new(entries: u64, error: f64) -> Result<Self, BloomError> {
+        if entries == 0 || !error.is_finite() || error <= 0.0 || error >= 1.0 {
             return Err(BloomError::Invalid);
         }
 
@@ -381,9 +361,7 @@ impl BloomSubFilter {
          */
         let raw_bits_float = entries as f64 * bpe;
 
-        if !raw_bits_float.is_finite()
-            || raw_bits_float >= u64::MAX as f64
-        {
+        if !raw_bits_float.is_finite() || raw_bits_float >= u64::MAX as f64 {
             return Err(BloomError::Overflow);
         }
 
@@ -412,12 +390,9 @@ impl BloomSubFilter {
             raw_bits / 8
         };
 
-        let bits = bytes_u64
-            .checked_mul(8)
-            .ok_or(BloomError::Overflow)?;
+        let bits = bytes_u64.checked_mul(8).ok_or(BloomError::Overflow)?;
 
-        let bytes = usize::try_from(bytes_u64)
-            .map_err(|_| BloomError::Overflow)?;
+        let bytes = usize::try_from(bytes_u64).map_err(|_| BloomError::Overflow)?;
 
         /*
          * RedisBloom:
@@ -426,10 +401,7 @@ impl BloomSubFilter {
          */
         let hashes_float = (LN2 * bpe).ceil();
 
-        if !hashes_float.is_finite()
-            || hashes_float < 1.0
-            || hashes_float > u32::MAX as f64
-        {
+        if !hashes_float.is_finite() || hashes_float < 1.0 || hashes_float > u32::MAX as f64 {
             return Err(BloomError::Invalid);
         }
 
@@ -456,10 +428,7 @@ impl BloomSubFilter {
 
     fn contains_hash(&self, hash: BloomHash) -> bool {
         for i in 0..self.hashes as u64 {
-            let bit = hash
-                .a
-                .wrapping_add(i.wrapping_mul(hash.b))
-                % self.bits;
+            let bit = hash.a.wrapping_add(i.wrapping_mul(hash.b)) % self.bits;
 
             if !self.test_bit(bit) {
                 return false;
@@ -475,10 +444,7 @@ impl BloomSubFilter {
         let mut found_unset = false;
 
         for i in 0..self.hashes as u64 {
-            let bit = hash
-                .a
-                .wrapping_add(i.wrapping_mul(hash.b))
-                % self.bits;
+            let bit = hash.a.wrapping_add(i.wrapping_mul(hash.b)) % self.bits;
 
             if !self.test_and_set_bit(bit) {
                 found_unset = true;
@@ -548,20 +514,16 @@ fn murmur_hash64a(data: &[u8], seed: u64) -> u64 {
     const M: u64 = 0xc6a4a7935bd1e995;
     const R: u32 = 47;
 
-    let mut hash =
-        seed ^ (data.len() as u64).wrapping_mul(M);
+    let mut hash = seed ^ (data.len() as u64).wrapping_mul(M);
 
     let mut offset = 0usize;
 
     while offset + 8 <= data.len() {
         let mut bytes = [0u8; 8];
 
-        bytes.copy_from_slice(
-            &data[offset..offset + 8]
-        );
+        bytes.copy_from_slice(&data[offset..offset + 8]);
 
-        let mut value =
-            u64::from_le_bytes(bytes);
+        let mut value = u64::from_le_bytes(bytes);
 
         value = value.wrapping_mul(M);
         value ^= value >> R;
@@ -653,8 +615,7 @@ mod tests {
 
     #[test]
     fn redis_default_layout() {
-        let bloom =
-            BloomObject::redis_default().unwrap();
+        let bloom = BloomObject::redis_default().unwrap();
 
         assert_eq!(bloom.filters.len(), 1);
 
@@ -663,10 +624,7 @@ mod tests {
         assert_eq!(first.entries, 100);
 
         // scalable filter 第一层使用 0.01 * 0.5
-        assert!(
-            (first.error - 0.005).abs()
-                < f64::EPSILON
-        );
+        assert!((first.error - 0.005).abs() < f64::EPSILON);
 
         // RedisBloom FORCE64 + NOROUND
         assert_eq!(first.bits, 1152);
@@ -678,18 +636,11 @@ mod tests {
 
     #[test]
     fn add_same_item_twice() {
-        let mut bloom =
-            BloomObject::redis_default().unwrap();
+        let mut bloom = BloomObject::redis_default().unwrap();
 
-        assert_eq!(
-            bloom.add(b"hello").unwrap(),
-            true
-        );
+        assert_eq!(bloom.add(b"hello").unwrap(), true);
 
-        assert_eq!(
-            bloom.add(b"hello").unwrap(),
-            false
-        );
+        assert_eq!(bloom.add(b"hello").unwrap(), false);
 
         assert_eq!(bloom.len(), 1);
 
@@ -698,8 +649,7 @@ mod tests {
 
     #[test]
     fn binary_safe() {
-        let mut bloom =
-            BloomObject::redis_default().unwrap();
+        let mut bloom = BloomObject::redis_default().unwrap();
 
         let item = b"\x00\xff\x10hello\x00";
 
@@ -712,8 +662,7 @@ mod tests {
 
     #[test]
     fn scalable_filter_expands() {
-        let mut bloom =
-            BloomObject::redis_default().unwrap();
+        let mut bloom = BloomObject::redis_default().unwrap();
 
         let mut i = 0u64;
 
@@ -734,31 +683,18 @@ mod tests {
 
         assert_eq!(bloom.filter_count(), 2);
 
-        assert_eq!(
-            bloom.filters[0].entries,
-            100
-        );
+        assert_eq!(bloom.filters[0].entries, 100);
 
-        assert_eq!(
-            bloom.filters[1].entries,
-            200
-        );
+        assert_eq!(bloom.filters[1].entries, 200);
 
-        assert!(
-            (bloom.filters[0].error - 0.005).abs()
-                < f64::EPSILON
-        );
+        assert!((bloom.filters[0].error - 0.005).abs() < f64::EPSILON);
 
-        assert!(
-            (bloom.filters[1].error - 0.0025).abs()
-                < f64::EPSILON
-        );
+        assert!((bloom.filters[1].error - 0.0025).abs() < f64::EPSILON);
     }
 
     #[test]
     fn no_false_negative() {
-        let mut bloom =
-            BloomObject::redis_default().unwrap();
+        let mut bloom = BloomObject::redis_default().unwrap();
 
         let mut inserted = Vec::new();
 
@@ -771,17 +707,13 @@ mod tests {
         }
 
         for item in inserted {
-            assert!(
-                bloom.contains(item.as_bytes())
-            );
+            assert!(bloom.contains(item.as_bytes()));
         }
     }
 
     #[test]
     fn mutex_serializes_concurrent_add() {
-        let bloom = Arc::new(Mutex::new(
-            BloomObject::redis_default().unwrap(),
-        ));
+        let bloom = Arc::new(Mutex::new(BloomObject::redis_default().unwrap()));
 
         let mut handles = Vec::new();
 

@@ -244,9 +244,9 @@ print(bin(value[0]))  # 0b11
 # a = 00001111
 # b = 00110011
 # AND 结果 = 00000011 = 3
-
+r.bf().reserve("bf1", 0.01, 1000)
 print(r.bf().add("bf1", "user1"))
 r.bf().madd("bf1", "user1", "user2", "user3")
 print(r.bf().exists("bf1", "user2"))
 print(r.bf().exists("bf1", "user3"))
-r.bf().mexists("bf1","user2","user3")
+r.bf().mexists("bf1", "user2", "user3")
