@@ -331,9 +331,6 @@ pub fn estimate_bloom_usage(
      * strong count
      * weak count
      * Mutex<BloomObject>
-     *
-     * 不追求 allocator 精确值，只保持和你当前
-     * logical / approximate memory usage 的定义一致。
      */
     let arc_counters = size_of::<AtomicUsize>()
         .saturating_mul(2);

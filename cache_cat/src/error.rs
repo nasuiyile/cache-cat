@@ -285,6 +285,12 @@ pub enum ProtocolError {
     /// BF.RESERVE on an already existing Bloom filter.
     #[error("ERR item exists")]
     BloomItemExists,
+    /// BF.INFO key does not exist.
+    #[error("ERR not found")]
+    BloomNotFound,
+    /// BF.INFO received an unsupported information selector.
+    #[error("Invalid information value")]
+    BloomInvalidInformationValue,
 }
 
 /// TLS-related errors

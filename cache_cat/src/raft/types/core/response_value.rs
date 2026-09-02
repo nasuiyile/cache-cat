@@ -4,6 +4,13 @@ use mlua::{Lua, Value as LuaValue};
 use serde::{Deserialize, Serialize};
 use std::borrow::Cow;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum Resp2MapEncoding {
+    Flat,
+    Pairs,
+    Values,
+}
+
 /// A response from the KV store.
 ///
 /// The enum models the *semantic* reply type (RESP3-style). Encoding
@@ -58,6 +65,10 @@ pub enum Value {
     /// enclosing header. Used when a single command must emit several
     /// top-level frames (e.g. SUBSCRIBE to N channels sends N confirmations).
     Batch(Vec<Value>),
+    MapWithResp2 {
+        entries: Vec<(Value, Value)>,
+        resp2: Resp2MapEncoding,
+    },
 }
 
 /// Format a double the way Redis `d2string()` does:
@@ -82,12 +93,10 @@ pub fn format_double(d: f64) -> String {
 }
 
 impl Value {
-    /// Create a simple OK response
     pub fn ok() -> Self {
         Value::SimpleString("OK".to_string())
     }
 
-    /// Create an error response
     pub fn error(msg: impl Into<String>) -> Self {
         Value::Error(msg.into())
     }
@@ -249,6 +258,39 @@ impl Value {
                 // No enclosing header: each frame is an independent reply.
                 for frame in frames {
                     frame.encode_to(proto, buf);
+                }
+            }
+            Value::MapWithResp2 { entries, resp2 } => {
+                if proto == 3 {
+                    Self::put_line(buf, b'%', entries.len().to_string().as_bytes());
+                    for (k, v) in entries {
+                        k.encode_to(proto, buf);
+                        v.encode_to(proto, buf);
+                    }
+                } else {
+                    match resp2 {
+                        Resp2MapEncoding::Flat => {
+                            Self::put_line(buf, b'*', (entries.len() * 2).to_string().as_bytes());
+                            for (k, v) in entries {
+                                k.encode_to(proto, buf);
+                                v.encode_to(proto, buf);
+                            }
+                        }
+                        Resp2MapEncoding::Pairs => {
+                            Self::put_line(buf, b'*', entries.len().to_string().as_bytes());
+                            for (k, v) in entries {
+                                buf.put_slice(b"*2\r\n");
+                                k.encode_to(proto, buf);
+                                v.encode_to(proto, buf);
+                            }
+                        }
+                        Resp2MapEncoding::Values => {
+                            Self::put_line(buf, b'*', entries.len().to_string().as_bytes());
+                            for (_, v) in entries {
+                                v.encode_to(proto, buf);
+                            }
+                        }
+                    }
                 }
             }
         }
@@ -419,6 +461,48 @@ impl Value {
             Value::Batch(frames) => {
                 // Should not appear as a command result; expose as array.
                 Value::Array(Some(frames)).into_lua_value(lua, resp)
+            }
+            Value::MapWithResp2 { entries, resp2 } => {
+                if resp == 3 {
+                    let inner = lua.create_table()?;
+                    for (k, v) in entries {
+                        inner.set(k.into_lua_value(lua, resp)?, v.into_lua_value(lua, resp)?)?;
+                    }
+                    let outer = lua.create_table()?;
+                    outer.set("map", inner)?;
+                    Ok(mlua::Value::Table(outer))
+                } else {
+                    match resp2 {
+                        Resp2MapEncoding::Flat => {
+                            let table = lua.create_table_with_capacity(entries.len() * 2, 0)?;
+                            let mut idx = 0;
+                            for (k, v) in entries {
+                                idx += 1;
+                                table.set(idx, k.into_lua_value(lua, resp)?)?;
+                                idx += 1;
+                                table.set(idx, v.into_lua_value(lua, resp)?)?;
+                            }
+                            Ok(mlua::Value::Table(table))
+                        }
+                        Resp2MapEncoding::Pairs => {
+                            let table = lua.create_table_with_capacity(entries.len(), 0)?;
+                            for (i, (k, v)) in entries.into_iter().enumerate() {
+                                let pair = lua.create_table_with_capacity(2, 0)?;
+                                pair.set(1, k.into_lua_value(lua, resp)?)?;
+                                pair.set(2, v.into_lua_value(lua, resp)?)?;
+                                table.set(i + 1, pair)?;
+                            }
+                            Ok(mlua::Value::Table(table))
+                        }
+                        Resp2MapEncoding::Values => {
+                            let table = lua.create_table_with_capacity(entries.len(), 0)?;
+                            for (i, (_, v)) in entries.into_iter().enumerate() {
+                                table.set(i + 1, v.into_lua_value(lua, resp)?)?;
+                            }
+                            Ok(mlua::Value::Table(table))
+                        }
+                    }
+                }
             }
         }
     }
@@ -731,6 +815,44 @@ mod tests {
         )]);
         assert_eq!(enc(&v, 3), "%1\r\n$1\r\nk\r\n:1\r\n");
         assert_eq!(enc(&v, 2), "*2\r\n$1\r\nk\r\n:1\r\n");
+    }
+
+    #[test]
+    fn test_encode_map_resp2_values() {
+        let v = Value::MapWithResp2 {
+            entries: vec![(
+                Value::BulkString(Some(Bytes::from_static(b"Capacity"))),
+                Value::Integer(100),
+            )],
+            resp2: Resp2MapEncoding::Values,
+        };
+        assert_eq!(enc(&v, 3), "%1\r\n$8\r\nCapacity\r\n:100\r\n");
+        assert_eq!(enc(&v, 2), "*1\r\n:100\r\n");
+    }
+
+    #[test]
+    fn test_encode_map_resp2_pairs() {
+        let v = Value::MapWithResp2 {
+            entries: vec![
+                (
+                    Value::BulkString(Some(Bytes::from_static(b"a"))),
+                    Value::Integer(1),
+                ),
+                (
+                    Value::BulkString(Some(Bytes::from_static(b"b"))),
+                    Value::Integer(2),
+                ),
+            ],
+            resp2: Resp2MapEncoding::Pairs,
+        };
+        assert_eq!(
+            enc(&v, 3),
+            "%2\r\n$1\r\na\r\n:1\r\n$1\r\nb\r\n:2\r\n"
+        );
+        assert_eq!(
+            enc(&v, 2),
+            "*2\r\n*2\r\n$1\r\na\r\n:1\r\n*2\r\n$1\r\nb\r\n:2\r\n"
+        );
     }
 
     #[test]

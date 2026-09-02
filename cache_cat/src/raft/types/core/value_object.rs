@@ -44,13 +44,6 @@ pub enum ValueObject {
     #[serde(with = "mutex_hashset_serde")]
     Set(Arc<Mutex<HashSet<Bytes>>>),
 
-    /*
-     * 一定建议 append 到最后。
-     *
-     * 如果 Raft log / snapshot 使用 bincode 一类
-     * 基于 enum variant index 的格式，
-     * 不要插入到已有 variant 中间。
-     */
     #[serde(with = "mutex_bloom_serde")]
     Bloom(Arc<Mutex<BloomObject>>),
 }

@@ -117,6 +117,7 @@ impl fmt::Display for Request {
                 ReadOperation::PFCount(req) => write!(f, "PFCount: {}", req),
                 ReadOperation::BfExists(req) => write!(f, "BfExists: {}", req),
                 ReadOperation::BfMExists(req) => write!(f, "BfMExists: {}", req),
+                ReadOperation::BfInfo(req) => write!(f, "BfInfo: {}", req),
             },
             Operation::Base(op) => match op {
                 BaseOperation::Empty => write!(f, "None"),

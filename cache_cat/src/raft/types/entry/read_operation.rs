@@ -1,4 +1,5 @@
 use crate::protocol::bf::bf_exits::BfExistsParams;
+use crate::protocol::bf::bf_info::BfInfoParams;
 use crate::protocol::bf::bf_mexits::BfMExistsParams;
 use crate::protocol::bitmap::bitcount::BitCountParams;
 use crate::protocol::bitmap::bitpos::BitPosParams;
@@ -82,4 +83,5 @@ pub enum ReadOperation {
     PFCount(PfcountParams),
     BfExists(BfExistsParams),
     BfMExists(BfMExistsParams),
+    BfInfo(BfInfoParams),
 }

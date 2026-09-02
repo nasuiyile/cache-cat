@@ -25,7 +25,6 @@ const LN2: f64 = std::f64::consts::LN_2;
 /// RedisBloom FORCE64 使用的 MurmurHash64A seed。
 const BLOOM_HASH_SEED: u64 = 0xc6a4a7935bd1e995;
 
-
 /// Redis accepts an error rate < 1, but internally caps values > 0.25.
 pub const BLOOM_ERROR_RATE_CAP: f64 = 0.25;
 
@@ -167,6 +166,14 @@ impl BloomObject {
             growth: expansion,
             non_scaling,
         })
+    }
+
+    pub fn info_capacity(&self) -> u64 {
+        self.filters
+            .iter()
+            .fold(0u64, |total, filter| {
+                total.saturating_add(filter.entries)
+            })
     }
 
     /// Redis BF.ADD 的核心逻辑。
@@ -334,6 +341,48 @@ impl BloomObject {
         });
 
         filters_allocation.saturating_add(bitmap_allocation)
+    }
+    pub fn info_size(&self) -> usize {
+        let filters_size = self
+            .filters
+            .len()
+            .saturating_mul(size_of::<BloomSubFilter>());
+
+        let bitmap_size = self.filters.iter().fold(0usize, |total, filter| {
+            total.saturating_add(filter.bitmap.len())
+        });
+
+        size_of::<Self>()
+            .saturating_add(filters_size)
+            .saturating_add(bitmap_size)
+    }
+
+    /// BF.INFO FILTERS
+    pub fn info_filter_count(&self) -> usize {
+        self.filters.len()
+    }
+
+    /// BF.INFO ITEMS
+    ///
+    /// Redis 定义：
+    /// 成功被 Bloom 判断为新元素并造成至少一个 bit
+    /// 从 0 -> 1 的 item 数量。
+    pub fn info_items(&self) -> u64 {
+        self.size
+    }
+
+    /// BF.INFO EXPANSION
+    ///
+    /// Redis 当前行为：
+    ///
+    /// scalable    -> Integer(growth)
+    /// NONSCALING  -> Null
+    pub fn info_expansion(&self) -> Option<u32> {
+        if self.non_scaling {
+            None
+        } else {
+            Some(self.growth)
+        }
     }
 }
 
