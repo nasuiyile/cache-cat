@@ -291,6 +291,18 @@ pub enum ProtocolError {
     /// BF.INFO received an unsupported information selector.
     #[error("Invalid information value")]
     BloomInvalidInformationValue,
+
+    #[error("Bad error rate")]
+    BloomInsertBadErrorRate,
+
+    #[error("Bad capacity")]
+    BloomInsertBadCapacity,
+
+    #[error("Bad expansion")]
+    BloomInsertBadExpansion,
+
+    #[error("Unknown argument received")]
+    BloomInsertUnknownArgument,
 }
 
 /// TLS-related errors

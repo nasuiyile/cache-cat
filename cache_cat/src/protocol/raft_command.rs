@@ -2,6 +2,7 @@ use crate::error::ProtocolError;
 use crate::protocol::bf::bf_add::BfAddCommand;
 use crate::protocol::bf::bf_exits::BfExistsCommand;
 use crate::protocol::bf::bf_info::BfInfoCommand;
+use crate::protocol::bf::bf_insert::BfInsertCommand;
 use crate::protocol::bf::bf_madd::BfMAddCommand;
 use crate::protocol::bf::bf_mexits::BfMExistsCommand;
 use crate::protocol::bf::bf_reserve::BfReserveCommand;
@@ -226,6 +227,7 @@ impl RaftCommandFactory {
         factory.register("BF.MEXISTS", BfMExistsCommand);
         factory.register("BF.RESERVE", BfReserveCommand);
         factory.register("BF.INFO", BfInfoCommand);
+        factory.register("BF.INSERT", BfInsertCommand);
         factory
     }
 
