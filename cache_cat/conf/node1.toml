@@ -15,9 +15,9 @@ advertise-host = "127.0.0.1"
 single = true
 join = []
 # 选举超时时间，节点之间的时钟偏移不能超过该值，需要大于 500
-election-timeout = 799
+election-timeout = 899
 # 超过这个值将会直接进行快照，为 0 代表不用快照 需大于500000
-snapshot-policy = 5000000
+snapshot-policy = 50000000
 # 超过这个阈值表示严重落后，主节点会将快照发给从节点，而不是增量同步。需要大于 snapshot-policy，防止快照还没生成。
 replication-lag-threshold = 500000000
 #[tls]
