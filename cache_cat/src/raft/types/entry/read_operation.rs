@@ -1,3 +1,4 @@
+use crate::protocol::bf::bf_card::BfCardParams;
 use crate::protocol::bf::bf_exits::BfExistsParams;
 use crate::protocol::bf::bf_info::BfInfoParams;
 use crate::protocol::bf::bf_mexits::BfMExistsParams;
@@ -84,4 +85,5 @@ pub enum ReadOperation {
     BfExists(BfExistsParams),
     BfMExists(BfMExistsParams),
     BfInfo(BfInfoParams),
+    BfCard(BfCardParams),
 }

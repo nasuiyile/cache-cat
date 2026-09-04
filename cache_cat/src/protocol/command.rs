@@ -1,6 +1,7 @@
 use crate::error::CacheCatError;
 use crate::error::ProtocolError;
 use crate::protocol::bf::bf_add::BfAddCommand;
+use crate::protocol::bf::bf_card::BfCardCommand;
 use crate::protocol::bf::bf_exits::BfExistsCommand;
 use crate::protocol::bf::bf_info::BfInfoCommand;
 use crate::protocol::bf::bf_insert::BfInsertCommand;
@@ -410,6 +411,7 @@ impl CommandFactory {
         factory.register("BF.RESERVE", BfReserveCommand);
         factory.register("BF.INFO", BfInfoCommand);
         factory.register("BF.INSERT", BfInsertCommand);
+        factory.register("BF.CARD", BfCardCommand);
         factory
     }
 
