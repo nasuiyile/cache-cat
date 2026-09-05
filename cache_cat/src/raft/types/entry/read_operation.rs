@@ -41,6 +41,7 @@ use crate::protocol::zset::zrank::ZRankParams;
 use crate::protocol::zset::zrevrank::ZRevRankParams;
 use crate::protocol::zset::zscore::ZScoreParams;
 use serde::{Deserialize, Serialize};
+use crate::protocol::bf::bf_scandump::BfScanDumpParams;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum ReadOperation {
@@ -86,4 +87,5 @@ pub enum ReadOperation {
     BfMExists(BfMExistsParams),
     BfInfo(BfInfoParams),
     BfCard(BfCardParams),
+    BfScanDump(BfScanDumpParams)
 }

@@ -119,6 +119,7 @@ impl fmt::Display for Request {
                 ReadOperation::BfMExists(req) => write!(f, "BfMExists: {}", req),
                 ReadOperation::BfInfo(req) => write!(f, "BfInfo: {}", req),
                 ReadOperation::BfCard(req) => write!(f, "BfCard: {}", req),
+                ReadOperation::BfScanDump(req) => write!(f, "BfScanDump: {}", req),
             },
             Operation::Base(op) => match op {
                 BaseOperation::Empty => write!(f, "None"),

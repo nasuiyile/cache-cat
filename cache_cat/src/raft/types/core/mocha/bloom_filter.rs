@@ -1,6 +1,6 @@
+use bytes::Bytes;
 use serde::{Deserialize, Serialize};
 use std::mem::size_of;
-
 /// Redis 默认 Bloom Filter 配置。
 ///
 /// Redis 8 中这些值实际上可以通过配置修改：
@@ -33,6 +33,14 @@ pub const BLOOM_CAPACITY_MAX: u64 = 1_048_576;
 
 pub const BLOOM_EXPANSION_MIN: u32 = 0;
 pub const BLOOM_EXPANSION_MAX: u32 = 32_768;
+
+const BLOOM_OPT_NOROUND: u32 = 1;
+const BLOOM_OPT_FORCE64: u32 = 4;
+const BLOOM_OPT_NO_SCALING: u32 = 8;
+
+const MAX_SCANDUMP_SIZE: usize = 16 * 1024 * 1024;
+const DUMP_HEADER_SIZE: usize = 20;
+const DUMP_LINK_SIZE: usize = 53;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BloomError {
@@ -171,9 +179,92 @@ impl BloomObject {
     pub fn info_capacity(&self) -> u64 {
         self.filters
             .iter()
-            .fold(0u64, |total, filter| {
-                total.saturating_add(filter.entries)
-            })
+            .fold(0u64, |total, filter| total.saturating_add(filter.entries))
+    }
+    pub fn scan_dump(&self, iterator: i64) -> (i64, Bytes) {
+        if iterator == 0 {
+            return (1, self.encode_dump_header());
+        }
+
+        self.scan_dump_chunk(iterator)
+    }
+
+    fn encode_dump_header(&self) -> Bytes {
+        let mut buf = Vec::with_capacity(DUMP_HEADER_SIZE + self.filters.len() * DUMP_LINK_SIZE);
+
+        let options = BLOOM_OPT_NOROUND
+            | BLOOM_OPT_FORCE64
+            | if self.non_scaling {
+                BLOOM_OPT_NO_SCALING
+            } else {
+                0
+            };
+
+        buf.extend_from_slice(&self.size.to_ne_bytes());
+        buf.extend_from_slice(&(self.filters.len() as u32).to_ne_bytes());
+        buf.extend_from_slice(&options.to_ne_bytes());
+        buf.extend_from_slice(&self.growth.to_ne_bytes());
+
+        for filter in &self.filters {
+            let bytes = filter.bitmap.len() as u64;
+
+            buf.extend_from_slice(&bytes.to_ne_bytes());
+            buf.extend_from_slice(&filter.bits.to_ne_bytes());
+            buf.extend_from_slice(&filter.size.to_ne_bytes());
+            buf.extend_from_slice(&filter.error.to_ne_bytes());
+            buf.extend_from_slice(&filter.bpe.to_ne_bytes());
+            buf.extend_from_slice(&filter.hashes.to_ne_bytes());
+            buf.extend_from_slice(&filter.entries.to_ne_bytes());
+            buf.push(0);
+        }
+
+        Bytes::from(buf)
+    }
+
+    fn scan_dump_chunk(&self, iterator: i64) -> (i64, Bytes) {
+        let Some(position) = iterator.checked_sub(1) else {
+            return (0, Bytes::new());
+        };
+
+        if position < 0 {
+            return (0, Bytes::new());
+        }
+
+        let Ok(position) = usize::try_from(position) else {
+            return (0, Bytes::new());
+        };
+
+        let mut seek = 0usize;
+
+        for filter in &self.filters {
+            let filter_len = filter.bitmap.len();
+
+            let Some(end) = seek.checked_add(filter_len) else {
+                return (0, Bytes::new());
+            };
+
+            if end > position {
+                let offset = position - seek;
+                let remaining = filter_len - offset;
+                let len = remaining.min(MAX_SCANDUMP_SIZE);
+
+                let Some(next) = i64::try_from(len)
+                    .ok()
+                    .and_then(|len| iterator.checked_add(len))
+                else {
+                    return (0, Bytes::new());
+                };
+
+                return (
+                    next,
+                    Bytes::copy_from_slice(&filter.bitmap[offset..offset + len]),
+                );
+            }
+
+            seek = end;
+        }
+
+        (0, Bytes::new())
     }
 
     /// Redis BF.ADD 的核心逻辑。

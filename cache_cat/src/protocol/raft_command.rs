@@ -6,6 +6,7 @@ use crate::protocol::bf::bf_insert::BfInsertCommand;
 use crate::protocol::bf::bf_madd::BfMAddCommand;
 use crate::protocol::bf::bf_mexits::BfMExistsCommand;
 use crate::protocol::bf::bf_reserve::BfReserveCommand;
+use crate::protocol::bf::bf_scandump::BfScanDumpCommand;
 use crate::protocol::bitmap::bitcount::BitCountCommand;
 use crate::protocol::bitmap::bitfield::BitFieldCommand;
 use crate::protocol::bitmap::bitop::BitOpCommand;
@@ -46,7 +47,6 @@ use crate::protocol::list::lset::LSetCommand;
 use crate::protocol::list::ltrim::LTrimCommand;
 use crate::protocol::list::rpop::RPopCommand;
 use crate::protocol::list::rpush::RPushCommand;
-use crate::protocol::lua::eval::EvalCommand;
 use crate::protocol::set::sadd::SAddCommand;
 use crate::protocol::set::scard::SCardCommand;
 use crate::protocol::set::sdiff::SDiffCommand;
@@ -228,6 +228,7 @@ impl RaftCommandFactory {
         factory.register("BF.RESERVE", BfReserveCommand);
         factory.register("BF.INFO", BfInfoCommand);
         factory.register("BF.INSERT", BfInsertCommand);
+        factory.register("BF.SCANDUMP", BfScanDumpCommand);
         factory
     }
 

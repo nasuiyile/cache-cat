@@ -53,6 +53,7 @@ pub fn read_request(
         ReadOperation::BfMExists(param) => my_cache.execute_read(param, db_number, read_clock),
         ReadOperation::BfInfo(param) => my_cache.execute_read(param, db_number, read_clock),
         ReadOperation::BfCard(param) => my_cache.execute_read(param, db_number, read_clock),
+        ReadOperation::BfScanDump(param) => my_cache.execute_read(param, db_number, read_clock),
     }
 }
 

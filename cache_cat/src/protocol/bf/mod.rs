@@ -7,3 +7,4 @@ pub mod bf_insert;
 pub mod bf_madd;
 pub mod bf_mexits;
 pub mod bf_reserve;
+pub mod bf_scandump;

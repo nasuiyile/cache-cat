@@ -254,3 +254,17 @@ info = r.bf().info("bf1")
 print(info.__dict__)
 r.bf().insert("my_filter", ["apple", "banana", "orange"])
 print(r.bf().exists("my_filter", "appl1e"))
+iterator = 0
+
+while True:
+    iterator, data = r.bf().scandump("bf1", iterator)
+
+    print(
+        "iterator:",
+        iterator,
+        "data size:",
+        len(data) if data else None
+    )
+
+    if iterator == 0:
+        break

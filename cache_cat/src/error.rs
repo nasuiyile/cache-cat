@@ -3,7 +3,7 @@
 //! This module provides a unified error type that hides internal complexity
 //! behind a simple, user-facing interface.
 
-use crate::error::ErrorKind::{Internal, InvalidConfig, Protocol, RPC, Retryable, Storage, Tls};
+use crate::error::ErrorKind::{Internal, InvalidConfig, Protocol, Retryable, Storage, Tls, RPC};
 use crate::raft::types::core::response_value::Value;
 use crate::raft::types::raft_types::TypeConfig;
 use mlua::prelude::LuaError;
@@ -303,6 +303,9 @@ pub enum ProtocolError {
 
     #[error("Unknown argument received")]
     BloomInsertUnknownArgument,
+
+    #[error("Second argument must be numeric")]
+    BloomScanDumpIteratorNotNumeric,
 }
 
 /// TLS-related errors

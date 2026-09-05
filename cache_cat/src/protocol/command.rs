@@ -130,6 +130,7 @@ use tokio::select;
 use tokio::sync::watch;
 use tokio_util::codec::Framed;
 use tracing::{error, warn};
+use crate::protocol::bf::bf_scandump::BfScanDumpCommand;
 
 #[async_trait]
 pub trait Command: Send + Sync {
@@ -412,6 +413,7 @@ impl CommandFactory {
         factory.register("BF.INFO", BfInfoCommand);
         factory.register("BF.INSERT", BfInsertCommand);
         factory.register("BF.CARD", BfCardCommand);
+        factory.register("BF.SCANDUMP", BfScanDumpCommand);
         factory
     }
 
