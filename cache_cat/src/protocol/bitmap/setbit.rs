@@ -74,13 +74,7 @@ impl ComputeCommand for SetBitReq {
                 int_value.to_string().into()
             }
             _ => {
-                return (
-                    MochaOperation::Abort,
-                    Value::Error(
-                        "WRONGTYPE Operation against a key holding the wrong kind of value"
-                            .to_string(),
-                    ),
-                );
+                return (MochaOperation::Abort, ProtocolError::WrongType.into());
             }
         };
 
@@ -158,11 +152,11 @@ impl SetBitCommand {
             .string_bytes_clone()
             .ok_or(ProtocolError::InvalidArgument("setbit"))?;
 
-        let offset = items[2].parse_u64().ok_or(ProtocolError::Custom(
+        let offset = items[2].parse_u64().ok_or(ProtocolError::response(
             "ERR bit offset is not an integer or out of range",
         ))?;
 
-        let value = items[3].parse_bool_u8().ok_or(ProtocolError::Custom(
+        let value = items[3].parse_bool_u8().ok_or(ProtocolError::response(
             "ERR bit is not an integer or out of range",
         ))?;
 
@@ -191,7 +185,7 @@ impl Command for SetBitCommand {
     ) -> Result<Value, CacheCatError> {
         if let Some(vec) = client.transaction_queue.as_mut() {
             vec.push(self.raft_request(items)?);
-            return Ok(Value::SimpleString(String::from("SETBIT")));
+            return Ok(Value::queued());
         }
         // Build raft operation
         let operation = self.raft_request(items)?; // Execute write

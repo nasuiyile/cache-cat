@@ -37,11 +37,9 @@ impl LPopCommand {
         if items.len() < 2 || items.len() > 3 {
             return Err(ProtocolError::WrongArgCount("lpop"));
         }
-
         let key = items[1]
             .string_bytes_clone()
             .ok_or(ProtocolError::InvalidArgument("key"))?;
-
         let count = if items.len() == 3 {
             Some(
                 items[2]
@@ -83,7 +81,7 @@ impl Command for LPopCommand {
     ) -> Result<Value, CacheCatError> {
         if let Some(vec) = client.transaction_queue.as_mut() {
             vec.push(self.raft_request(items)?);
-            return Ok(Value::SimpleString(String::from("QUEUED")));
+            return Ok(Value::queued());
         }
 
         let operation = self.raft_request(items)?;
@@ -147,10 +145,7 @@ impl ComputeCommand for LPopReq {
                     ),
                 }
             }
-            _ => (
-                Abort,
-                Value::Error("Key exists but is not a List".to_string()),
-            ),
+            _ => (Abort, ProtocolError::WrongType.into()),
         }
     }
 

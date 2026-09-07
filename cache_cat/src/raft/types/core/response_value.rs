@@ -53,7 +53,10 @@ pub enum Value {
     BigNumber(String),
     /// Verbatim string (RESP3: =<len>\r\ntxt:..., RESP2: bulk string)
     /// `format` is the 3-character hint, e.g. "txt" or "mkd".
-    VerbatimString { format: String, data: Bytes },
+    VerbatimString {
+        format: String,
+        data: Bytes,
+    },
     /// Bulk error (RESP3: !<len>, RESP2: simple error)
     BulkError(String),
     /// Sorted-set member/score pairs (ZRANGE ... WITHSCORES, ZPOPMIN with
@@ -95,6 +98,9 @@ pub fn format_double(d: f64) -> String {
 impl Value {
     pub fn ok() -> Self {
         Value::SimpleString("OK".to_string())
+    }
+    pub fn queued() -> Self {
+        Value::SimpleString("QUEUED".to_string())
     }
 
     pub fn error(msg: impl Into<String>) -> Self {
@@ -355,9 +361,7 @@ impl Value {
                     Ok(mlua::Value::Boolean(false))
                 }
             }
-            Value::Push(arr) => {
-                Value::Array(Some(arr)).into_lua_value(lua, resp)
-            }
+            Value::Push(arr) => Value::Array(Some(arr)).into_lua_value(lua, resp),
             Value::Map(map) => {
                 if resp == 3 {
                     // { map = { [k] = v, ... } }
@@ -845,10 +849,7 @@ mod tests {
             ],
             resp2: Resp2MapEncoding::Pairs,
         };
-        assert_eq!(
-            enc(&v, 3),
-            "%2\r\n$1\r\na\r\n:1\r\n$1\r\nb\r\n:2\r\n"
-        );
+        assert_eq!(enc(&v, 3), "%2\r\n$1\r\na\r\n:1\r\n$1\r\nb\r\n:2\r\n");
         assert_eq!(
             enc(&v, 2),
             "*2\r\n*2\r\n$1\r\na\r\n:1\r\n*2\r\n$1\r\nb\r\n:2\r\n"
@@ -884,10 +885,7 @@ mod tests {
 
     #[test]
     fn test_encode_batch() {
-        let v = Value::Batch(vec![
-            Value::SimpleString("A".into()),
-            Value::Integer(2),
-        ]);
+        let v = Value::Batch(vec![Value::SimpleString("A".into()), Value::Integer(2)]);
         assert_eq!(enc(&v, 2), "+A\r\n:2\r\n");
         assert_eq!(enc(&v, 3), "+A\r\n:2\r\n");
     }

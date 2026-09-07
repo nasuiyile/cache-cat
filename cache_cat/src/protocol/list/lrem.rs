@@ -13,7 +13,6 @@
 //! - 0 if key does not exist
 //! - Error if key exists but is not a list
 
-use std::collections::VecDeque;
 use crate::error::{CacheCatError, ProtocolError};
 use crate::mocha::MochaOperation::Abort;
 use crate::mocha::{EntrySnapshot, MochaOperation};
@@ -30,6 +29,7 @@ use crate::raft::types::entry::request::Operation;
 use async_trait::async_trait;
 use bytes::Bytes;
 use serde::{Deserialize, Serialize};
+use std::collections::VecDeque;
 use std::fmt;
 use std::fmt::Display;
 
@@ -43,20 +43,20 @@ impl LRemCommand {
         if items.len() != 4 {
             return Err(ProtocolError::WrongArgCount("lrem"));
         }
-
         let key = items[1]
             .string_bytes_clone()
             .ok_or(ProtocolError::InvalidArgument("key"))?;
-
         let count = items[2]
             .parse_i64()
             .ok_or(ProtocolError::InvalidArgument("count"))?;
-
         let element = items[3]
             .string_bytes_clone()
             .ok_or(ProtocolError::InvalidArgument("element"))?;
-
-        Ok(LRemArgs { key, count, element })
+        Ok(LRemArgs {
+            key,
+            count,
+            element,
+        })
     }
 }
 
@@ -89,12 +89,10 @@ impl Command for LRemCommand {
     ) -> Result<Value, CacheCatError> {
         if let Some(vec) = client.transaction_queue.as_mut() {
             vec.push(self.raft_request(items)?);
-            return Ok(Value::SimpleString(String::from("QUEUED")));
+            return Ok(Value::queued());
         }
-
         let operation = self.raft_request(items)?;
         let value = server.app.write(operation, client.db_number).await?;
-
         Ok(value)
     }
 }
@@ -136,8 +134,6 @@ impl ComputeCommand for LRemReq {
             ValueObject::List(data_arc) => {
                 let mut list = data_arc.lock();
                 let removed_count = self.remove_elements(&mut list);
-
-                // 如果列表变为空，可以选择删除键，这里保持与Redis一致，保留空列表
                 (
                     MochaOperation::Insert {
                         value: entry.value.clone(),
@@ -146,10 +142,7 @@ impl ComputeCommand for LRemReq {
                     Value::Integer(removed_count),
                 )
             }
-            _ => (
-                Abort,
-                Value::Error("WRONGTYPE Operation against a key holding the wrong kind of value".to_string()),
-            ),
+            _ => (Abort, ProtocolError::WrongType.into()),
         }
     }
 

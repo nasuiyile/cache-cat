@@ -35,9 +35,7 @@ impl Command for ExecCommand {
             .transaction_queue
             .take()
             .map(|queue| RedisOperation::RedisExec(ExecParams { operations: queue }))
-            .ok_or(ProtocolError::Custom(
-                "EXECABORT Transaction discarded because of previous errors.",
-            ))?;
+            .ok_or(ProtocolError::response("ERR EXEC without MULTI"))?;
 
         let value = server
             .app

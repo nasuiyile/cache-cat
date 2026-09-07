@@ -30,7 +30,7 @@ impl Command for TimeCommand {
         // Get current system time
         let now = SystemTime::now()
             .duration_since(UNIX_EPOCH)
-            .map_err(|_e| ProtocolError::Custom("Failed to get system time"))?;
+            .map_err(|_e| ProtocolError::response("ERR Failed to get system time"))?;
 
         let seconds = now.as_secs();
         let microseconds = now.subsec_micros();

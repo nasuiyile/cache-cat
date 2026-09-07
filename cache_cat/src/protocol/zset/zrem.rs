@@ -133,7 +133,7 @@ impl ComputeCommand for ZRemReq {
             }
             _ => (
                 MochaOperation::Abort,
-                Value::Error("zrem: key is not a zset".to_string()),
+                ProtocolError::WrongType.into(),
             ),
         }
     }

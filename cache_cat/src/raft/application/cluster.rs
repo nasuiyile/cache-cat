@@ -175,7 +175,7 @@ impl Cluster {
     pub async fn trigger_snapshot(&self) -> Result<(), CacheCatError> {
         self.raft.trigger().snapshot().await.map_err(|e| {
             error!("snapshot error: {}", e);
-            ProtocolError::Custom("snapshot error")
+            ProtocolError::response("ERR snapshot error")
         })?;
         Ok(())
     }

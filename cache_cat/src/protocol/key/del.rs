@@ -82,7 +82,7 @@ impl Command for DelCommand {
     ) -> Result<Value, CacheCatError> {
         if let Some(vec) = client.transaction_queue.as_mut() {
             vec.push(self.raft_request(items)?);
-            return Ok(Value::SimpleString(String::from("QUEUED")));
+            return Ok(Value::queued());
         }
         // Parse arguments
         let operation = self.raft_request(items)?;

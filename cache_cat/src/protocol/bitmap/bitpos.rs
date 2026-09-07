@@ -22,16 +22,12 @@ pub enum BitPosUnit {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BitPosParams {
     pub key: Bytes,
-
     /// Redis 只允许 0 或 1。
     pub bit: u8,
-
     /// BYTE 模式下是字节下标，BIT 模式下是位下标。
     pub start: Option<i64>,
-
     /// 是否为 Some 同时决定了是否启用 Redis 的“右侧补零”语义。
     pub end: Option<i64>,
-
     pub unit: BitPosUnit,
 }
 
@@ -64,17 +60,13 @@ impl BitPosParams {
             BitPosUnit::Bit => match bytes.len().checked_mul(8) {
                 Some(len) => len,
                 None => {
-                    return ProtocolError::Custom(
-                        "ERR string exceeds maximum allowed size",
-                    )
+                    return ProtocolError::response("ERR string exceeds maximum allowed size")
                         .into();
                 }
             },
         };
 
-        let Some((start_unit, end_unit)) =
-            normalize_range(unit_len, self.start, self.end)
-        else {
+        let Some((start_unit, end_unit)) = normalize_range(unit_len, self.start, self.end) else {
             return Value::Integer(-1);
         };
 
@@ -83,10 +75,7 @@ impl BitPosParams {
                 let start_bit = match start_unit.checked_mul(8) {
                     Some(value) => value,
                     None => {
-                        return ProtocolError::Custom(
-                            "ERR bit position is out of range",
-                        )
-                            .into();
+                        return ProtocolError::response("ERR bit position is out of range").into();
                     }
                 };
 
@@ -96,10 +85,7 @@ impl BitPosParams {
                 {
                     Some(value) => value,
                     None => {
-                        return ProtocolError::Custom(
-                            "ERR bit position is out of range",
-                        )
-                            .into();
+                        return ProtocolError::response("ERR bit position is out of range").into();
                     }
                 };
 
@@ -127,7 +113,7 @@ impl BitPosParams {
         if self.bit == 0 && self.end.is_none() {
             return match bytes.len().checked_mul(8) {
                 Some(position) => usize_to_integer_value(position),
-                None => ProtocolError::Custom("ERR bit position is out of range").into(),
+                None => ProtocolError::response("ERR bit position is out of range").into(),
             };
         }
 
@@ -165,11 +151,7 @@ impl ReadCommand for BitPosParams {
 /// - start = -2 -> 1
 /// - end = 100  -> 2
 /// - start 超过结尾或 start > end -> 空范围
-fn normalize_range(
-    len: usize,
-    start: Option<i64>,
-    end: Option<i64>,
-) -> Option<(usize, usize)> {
+fn normalize_range(len: usize, start: Option<i64>, end: Option<i64>) -> Option<(usize, usize)> {
     if len == 0 {
         return None;
     }
@@ -210,12 +192,7 @@ fn normalize_range(
 /// - 第一个字节依次对应 offset 0..7。
 ///
 /// 对完整字节使用 leading_zeros 快速定位；范围边缘按位处理。
-fn find_first_bit(
-    bytes: &[u8],
-    target_bit: u8,
-    start_bit: usize,
-    end_bit: usize,
-) -> Option<usize> {
+fn find_first_bit(bytes: &[u8], target_bit: u8, start_bit: usize, end_bit: usize) -> Option<usize> {
     debug_assert!(target_bit <= 1);
     debug_assert!(start_bit <= end_bit);
     debug_assert!(end_bit < bytes.len() * 8);
@@ -232,7 +209,6 @@ fn find_first_bit(
          */
         if bit_offset == 0 && end_bit - position >= 7 {
             let byte = bytes[byte_index];
-
             /*
              * 查找 1：candidate = byte
              * 查找 0：candidate = !byte
@@ -240,33 +216,27 @@ fn find_first_bit(
              * candidate 中的 1 表示匹配目标位的位置。
              */
             let candidate = if target_bit == 1 { byte } else { !byte };
-
             if candidate != 0 {
                 let offset = candidate.leading_zeros() as usize;
                 return Some(position + offset);
             }
-
             position += 8;
             continue;
         }
-
         let byte = bytes[byte_index];
         let current_bit = (byte >> (7 - bit_offset)) & 1;
-
         if current_bit == target_bit {
             return Some(position);
         }
-
         position += 1;
     }
-
     None
 }
 
 fn usize_to_integer_value(value: usize) -> Value {
     match i64::try_from(value) {
         Ok(value) => Value::Integer(value),
-        Err(_) => ProtocolError::Custom("ERR bit position is out of range").into(),
+        Err(_) => ProtocolError::response("ERR bit position is out of range").into(),
     }
 }
 
@@ -295,18 +265,18 @@ impl BitPosCommand {
             .string_bytes_clone()
             .ok_or(ProtocolError::InvalidArgument("bitpos"))?;
 
-        let bit = parse_redis_i64(&items[2]).ok_or(ProtocolError::Custom(
+        let bit = parse_redis_i64(&items[2]).ok_or(ProtocolError::response(
             "ERR value is not an integer or out of range",
         ))?;
 
         if bit != 0 && bit != 1 {
-            return Err(ProtocolError::Custom(
+            return Err(ProtocolError::response(
                 "ERR The bit argument must be 1 or 0",
             ));
         }
 
         let start = if items.len() >= 4 {
-            Some(parse_redis_i64(&items[3]).ok_or(ProtocolError::Custom(
+            Some(parse_redis_i64(&items[3]).ok_or(ProtocolError::response(
                 "ERR value is not an integer or out of range",
             ))?)
         } else {
@@ -314,7 +284,7 @@ impl BitPosCommand {
         };
 
         let end = if items.len() >= 5 {
-            Some(parse_redis_i64(&items[4]).ok_or(ProtocolError::Custom(
+            Some(parse_redis_i64(&items[4]).ok_or(ProtocolError::response(
                 "ERR value is not an integer or out of range",
             ))?)
         } else {
@@ -333,14 +303,14 @@ impl BitPosCommand {
     fn parse_unit(value: &Value) -> Result<BitPosUnit, ProtocolError> {
         let bytes = value
             .string_bytes_clone()
-            .ok_or(ProtocolError::Custom("ERR syntax error"))?;
+            .ok_or(ProtocolError::response("ERR syntax error"))?;
 
         if bytes.as_ref().eq_ignore_ascii_case(b"BYTE") {
             Ok(BitPosUnit::Byte)
         } else if bytes.as_ref().eq_ignore_ascii_case(b"BIT") {
             Ok(BitPosUnit::Bit)
         } else {
-            Err(ProtocolError::Custom("ERR syntax error"))
+            Err(ProtocolError::response("ERR syntax error"))
         }
     }
 }
@@ -426,7 +396,7 @@ impl Command for BitPosCommand {
     ) -> Result<Value, CacheCatError> {
         if let Some(queue) = client.transaction_queue.as_mut() {
             queue.push(self.raft_request(items)?);
-            return Ok(Value::SimpleString(String::from("BITPOS")));
+            return Ok(Value::queued());
         }
 
         let operation = self.read_operation(items)?;

@@ -57,7 +57,7 @@ impl Command for DecrCommand {
     ) -> Result<Value, CacheCatError> {
         if let Some(vec) = client.transaction_queue.as_mut() {
             vec.push(self.raft_request(items)?);
-            return Ok(Value::SimpleString(String::from("QUEUED")));
+            return Ok(Value::queued());
         }
         // Parse arguments
         let operation = self.raft_request(items)?;
@@ -97,26 +97,24 @@ impl ComputeCommand for DecrReq {
     ) -> (MochaOperation<MyValue>, Value) {
         let (result, value) = match &entry.value.data {
             ValueObject::Int(n) => {
-                let num = n - 1;  // 减1操作，符合DECR语义
+                let Some(num) = n.checked_sub(1) else {
+                    return (MochaOperation::Abort, ProtocolError::Overflow.into());
+                };
                 (ValueObject::Int(num), Value::Integer(num))
             }
 
             ValueObject::String(s) => {
-                let Some(mut value) = parse_i64(s) else {
-                    return (
-                        MochaOperation::Abort,
-                        Value::Error("Value is not an integer".to_string()),
-                    );
+                let Some(value) = parse_i64(s) else {
+                    return (MochaOperation::Abort, ProtocolError::NotAnInteger.into());
                 };
-                value -= 1;  // 减1操作
-                (ValueObject::Int(value), Value::Integer(value))
+                let Some(result) = value.checked_sub(1) else {
+                    return (MochaOperation::Abort, ProtocolError::Overflow.into());
+                };
+                (ValueObject::Int(result), Value::Integer(result))
             }
 
             _ => {
-                return (
-                    MochaOperation::Abort,
-                    Value::Error("Key exists but is not an Integer".to_string()),
-                );
+                return (MochaOperation::Abort, ProtocolError::WrongType.into());
             }
         };
         (
@@ -131,10 +129,10 @@ impl ComputeCommand for DecrReq {
     fn init(self) -> (MochaOperation<MyValue>, Value) {
         (
             MochaOperation::Insert {
-                value: MyValue::new(ValueObject::Int(-1)),  // 初始值为-1，符合DECR语义
+                value: MyValue::new(ValueObject::Int(-1)), // 初始值为-1，符合DECR语义
                 expire: ExpirePolicy::Persistent,
             },
-            Value::Integer(-1),  // 返回-1
+            Value::Integer(-1), // 返回-1
         )
     }
 }

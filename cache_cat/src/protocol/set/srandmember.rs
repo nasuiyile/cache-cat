@@ -124,10 +124,10 @@ impl ReadCommand for SRandMemberParams {
                                 // i64::MIN 无法使用有符号 i64 表示其绝对值。
                                 // 正常情况下也不应允许客户端要求如此巨大的响应。
                                 None => {
-                                    return Value::Error(
-                                        "ERR value is out of range, must be positive"
-                                            .to_string(),
-                                    );
+                                    return ProtocolError::response(
+                                        "ERR value is out of range, must be positive",
+                                    )
+                                    .into();
                                 }
                             };
 
@@ -138,9 +138,7 @@ impl ReadCommand for SRandMemberParams {
 
                             // 避免一次 reserve 巨大内存时直接 panic。
                             if result.try_reserve(requested).is_err() {
-                                return Value::Error(
-                                    "ERR count is too large".to_string(),
-                                );
+                                return ProtocolError::response("ERR count is too large").into();
                             }
 
                             for _ in 0..requested {
@@ -231,7 +229,7 @@ impl Command for SRandMemberCommand {
         if let Some(queue) = client.transaction_queue.as_mut() {
             queue.push(self.raft_request(items)?);
 
-            return Ok(Value::SimpleString(String::from("QUEUED")));
+            return Ok(Value::queued());
         }
 
         let operation = self.read_operation(items)?;

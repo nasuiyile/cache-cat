@@ -124,9 +124,11 @@ impl BlockCommand for PsubscribeCommand {
             client.closed = true;
             return Ok(Value::ok());
         } else {
-            let resp = Value::error(
-                "ERR only (P)SUBSCRIBE / (P)UNSUBSCRIBE / PING / QUIT allowed in this context",
-            );
+            let resp = ProtocolError::response(format!(
+                "ERR Can't execute '{}': only (P|S)SUBSCRIBE / (P|S)UNSUBSCRIBE / PING / QUIT / RESET are allowed in this context",
+                cmd.name.to_lowercase(),
+            ))
+            .into();
             return Ok(resp);
         }
     }

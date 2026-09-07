@@ -43,23 +43,17 @@ impl RPushCommand {
         if items.len() < 3 {
             return Err(ProtocolError::WrongArgCount("rpush"));
         }
-
-        // Parse key
         let key = items[1]
             .string_bytes_clone()
             .ok_or(ProtocolError::InvalidArgument("key"))?;
-
-        // Parse elements
         let elements = items
             .iter()
             .skip(2)
             .map_while(Value::string_bytes_clone)
             .collect::<Vec<_>>();
-
         if elements.len() < items.len() - 2 {
             return Err(ProtocolError::InvalidArgument("element"));
         }
-
         Ok(RPushArgs { key, elements })
     }
 }
@@ -92,13 +86,10 @@ impl Command for RPushCommand {
         // MULTI transaction support
         if let Some(vec) = client.transaction_queue.as_mut() {
             vec.push(self.raft_request(items)?);
-            return Ok(Value::SimpleString(String::from("QUEUED")));
+            return Ok(Value::queued());
         }
-
-        // Execute through Raft
         let operation = self.raft_request(items)?;
         let value = server.app.write(operation, client.db_number).await?;
-
         Ok(value)
     }
 }
@@ -152,7 +143,7 @@ impl ComputeCommand for RPushReq {
             }
             _ => (
                 MochaOperation::Abort,
-                Value::Error("Key exists but is not a List".to_string()),
+                ProtocolError::WrongType.into(),
             ),
         }
     }

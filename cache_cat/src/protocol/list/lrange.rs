@@ -21,7 +21,6 @@ pub struct LRangeParams {
     pub start: i64,
     pub stop: i64,
 }
-
 impl Display for LRangeParams {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(
@@ -49,7 +48,6 @@ impl ReadCommand for LRangeParams {
                         .into_iter()
                         .map(|v| Value::BulkString(Some(v)))
                         .collect::<Vec<_>>();
-
                     Value::Array(Some(array))
                 }
                 _ => ProtocolError::WrongType.into(),
@@ -63,14 +61,11 @@ impl LRangeCommand {
         if items.len() != 4 {
             return Err(ProtocolError::WrongArgCount("lrange"));
         }
-
         let key = items[1]
             .string_bytes_clone()
             .ok_or(ProtocolError::InvalidArgument("key"))?;
-
         let start = items[2].try_parse_i64()?;
         let stop = items[3].try_parse_i64()?;
-
         Ok(LRangeParams { key, start, stop })
     }
 }
@@ -91,7 +86,7 @@ impl Command for LRangeCommand {
     ) -> Result<Value, CacheCatError> {
         if let Some(vec) = client.transaction_queue.as_mut() {
             vec.push(self.raft_request(items)?);
-            return Ok(Value::SimpleString(String::from("QUEUED")));
+            return Ok(Value::queued());
         }
         let params = self.read_operation(items)?;
         server.app.read(params, client.db_number).await

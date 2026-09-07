@@ -141,7 +141,7 @@ impl ComputeCommand for ZPopMinReq {
 
             _ => (
                 MochaOperation::Abort,
-                Value::Error("zadd: key is not a zset".to_string()),
+                ProtocolError::WrongType.into(),
             ),
         }
     }

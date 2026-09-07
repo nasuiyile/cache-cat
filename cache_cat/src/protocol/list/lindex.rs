@@ -103,7 +103,7 @@ impl Command for LIndexCommand {
         // 如果在事务中，将命令加入队列
         if let Some(vec) = client.transaction_queue.as_mut() {
             vec.push(self.raft_request(items)?);
-            return Ok(Value::SimpleString(String::from("QUEUED")));
+            return Ok(Value::queued());
         }
         // 正常执行读取操作
         let params = self.read_operation(items)?;

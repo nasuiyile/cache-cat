@@ -138,7 +138,7 @@ impl Command for EvalCommand {
     ) -> Result<Value, CacheCatError> {
         if let Some(vec) = client.transaction_queue.as_mut() {
             vec.push(self.raft_request(items)?);
-            return Ok(Value::SimpleString(String::from("QUEUED")));
+            return Ok(Value::queued());
         }
         let mut operation = self.raft_request(items)?;
         if let Operation::Redis(RedisEval(ref mut params)) = operation {

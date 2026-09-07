@@ -30,7 +30,9 @@ impl Command for SaveCommand {
             .snapshot_state();
         if snapshot_state {
             // If it is already in the snapshot
-            return Err(ProtocolError::Custom("Background save already in progress").into());
+            return Err(
+                ProtocolError::response("ERR Background save already in progress").into(),
+            );
         }
         // Take a snapshot
         let mut receiver = server.app.state_machine.data.snapshot_message.subscribe();

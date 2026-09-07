@@ -24,35 +24,28 @@ pub enum Parser {
         /// full size with `mode`, `line`, `eof`.
         len: usize,
     },
-
     Error {
         /// full size with `mode`, `line`, `eof`.
         len: usize,
     },
-
     Integer {
         /// full size with `mode`, `line`, `eof`.
         len: usize,
-
         // the value of integer
         value: i64,
     },
-
     Bytes {
         /// full size with `length-line`, `bytes`, `eof`.
         len: usize,
-
         /// `Some((pos, length))`
         bytes: Option<(usize, usize)>,
     },
-
     /// `!` bulk error (RESP3). Same layout as `Bytes`.
     BulkError {
         len: usize,
         /// `(pos, length)`
         bytes: (usize, usize),
     },
-
     /// `=` verbatim string (RESP3). Same layout as `Bytes`; the payload
     /// starts with a 3-character format and a `:` separator.
     Verbatim {
@@ -60,36 +53,19 @@ pub enum Parser {
         /// `(pos, length)` of the *full* payload (format prefix included)
         bytes: (usize, usize),
     },
-
     /// `_` null (RESP3)
-    Null {
-        len: usize,
-    },
-
+    Null { len: usize },
     /// `#` boolean (RESP3)
-    Boolean {
-        len: usize,
-        value: bool,
-    },
-
+    Boolean { len: usize, value: bool },
     /// `,` double (RESP3)
-    Double {
-        len: usize,
-        value: f64,
-    },
-
+    Double { len: usize, value: f64 },
     /// `(` big number (RESP3); the digits are re-read from the buffer.
-    BigNumber {
-        len: usize,
-    },
-
+    BigNumber { len: usize },
     /// `*` / `%` / `~` / `>` / `|` aggregates.
     Aggregate {
         kind: AggregateKind,
-
         /// full size with `mode`, `data`, `eof`.
         len: usize,
-
         /// `Some((pos, elements))`; `None` is the RESP2 null array `*-1`.
         value: Option<(usize, Vec<Parser>)>,
     },
@@ -140,28 +116,20 @@ impl Parser {
             Parser::String { len } => {
                 Value::SimpleString(String::from_utf8_lossy(&buffer[1..len - 2]).into_owned())
             }
-
             Parser::Error { len } => {
                 Value::Error(String::from_utf8_lossy(&buffer[1..len - 2]).into_owned())
             }
-
             Parser::Integer { value, .. } => Value::Integer(value),
-
             Parser::Bytes { bytes: None, .. } => Value::BulkString(None),
-
             Parser::Bytes {
                 bytes: Some((pos, len)),
                 ..
             } => {
                 buffer.advance(pos);
-
                 let data = buffer.split_to(len);
-
                 buffer.advance(2);
-
                 Value::BulkString(Some(data))
             }
-
             Parser::BulkError {
                 bytes: (pos, len), ..
             } => {
@@ -169,13 +137,11 @@ impl Parser {
                 let data = buffer.split_to(len);
                 Value::BulkError(String::from_utf8_lossy(&data).into_owned())
             }
-
             Parser::Verbatim {
                 bytes: (pos, len), ..
             } => {
                 buffer.advance(pos);
                 let payload = buffer.split_to(len);
-
                 // The payload is `xxx:<data>` where `xxx` is the format.
                 if len >= 4 && payload[3] == b':' {
                     let format = String::from_utf8_lossy(&payload[..3]).into_owned();
@@ -189,19 +155,13 @@ impl Parser {
                     }
                 }
             }
-
             Parser::Null { .. } => Value::Null,
-
             Parser::Boolean { value, .. } => Value::Boolean(value),
-
             Parser::Double { value, .. } => Value::Double(value),
-
             Parser::BigNumber { len } => {
                 Value::BigNumber(String::from_utf8_lossy(&buffer[1..len - 2]).into_owned())
             }
-
             Parser::Aggregate { value: None, .. } => Value::Array(None),
-
             Parser::Aggregate {
                 kind,
                 value: Some((pos, elements)),
@@ -209,7 +169,6 @@ impl Parser {
             } => {
                 // split `count` line
                 buffer.advance(pos);
-
                 // take values
                 let mut values = elements
                     .into_iter()
@@ -219,7 +178,6 @@ impl Parser {
                         element.take(chunk)
                     })
                     .collect::<Vec<_>>();
-
                 match kind {
                     AggregateKind::Array => Value::Array(Some(values)),
                     AggregateKind::Set => Value::Set(values),
@@ -248,9 +206,7 @@ impl Parser {
         if buffer.len() < 3 {
             return None;
         }
-
         let mode = buffer[0];
-
         match mode {
             b'+' => Self::parse_simple_string(buffer),
             b'-' => Self::parse_error(buffer),
@@ -285,7 +241,6 @@ impl Parser {
     #[inline]
     fn read_line(buffer: &[u8]) -> Option<(&[u8], usize)> {
         let index = Self::find_line(&buffer[1..])?;
-
         Some((&buffer[1..index + 1], index + 3))
     }
 
@@ -298,21 +253,18 @@ impl Parser {
                 return Some(index);
             }
         }
-
         None
     }
 
     /// Parse simple string from buffer using `line`.
     fn parse_simple_string(buffer: &[u8]) -> Option<Parser> {
         let (_, len) = Self::read_line(buffer)?;
-
         Some(Parser::String { len })
     }
 
     /// Parse error string from buffer using `line`.
     fn parse_error(buffer: &[u8]) -> Option<Parser> {
         let (_, len) = Self::read_line(buffer)?;
-
         Some(Parser::Error { len })
     }
 
@@ -327,7 +279,6 @@ impl Parser {
 
     fn parse_integer(buffer: &[u8]) -> Option<Parser> {
         let (value, len) = Self::read_i64(buffer)?;
-
         Some(Parser::Integer { len, value })
     }
 
@@ -367,7 +318,6 @@ impl Parser {
     /// Parse `(3492890328409238509324850943850943825024385\r\n` (big number).
     fn parse_big_number(buffer: &[u8]) -> Option<Parser> {
         let (line, len) = Self::read_line(buffer)?;
-
         // Validate: optional sign followed by at least one digit.
         let digits = match line.first() {
             Some(b'+') | Some(b'-') => &line[1..],
@@ -376,7 +326,6 @@ impl Parser {
         if digits.is_empty() || !digits.iter().all(u8::is_ascii_digit) {
             return None;
         }
-
         Some(Parser::BigNumber { len })
     }
 
@@ -393,43 +342,35 @@ impl Parser {
     /// `Some((full_len, None))` for the RESP2 null bulk string `$-1`.
     fn read_blob(buffer: &[u8], allow_null: bool) -> Option<(usize, Option<(usize, usize)>)> {
         let (len, pos) = Self::read_i64(buffer)?;
-
         let len = match len {
             -1 if allow_null => return Some((pos, None)),
-
             // TODO: Handle the Error
             ..0 => return None,
-
             len => len as usize,
         };
-
         let full = pos + len + 2;
         if full > buffer.len() {
             // the data is not completed
             return None;
         }
-
         Some((full, Some((pos, len))))
     }
 
     /// Parse `bytes` from buffer.
     fn parse_bulk_string(buffer: &[u8]) -> Option<Parser> {
         let (len, bytes) = Self::read_blob(buffer, true)?;
-
         Some(Parser::Bytes { len, bytes })
     }
 
     /// Parse `!<len>\r\n<error>\r\n` (RESP3 bulk error).
     fn parse_bulk_error(buffer: &[u8]) -> Option<Parser> {
         let (len, bytes) = Self::read_blob(buffer, false)?;
-
         Some(Parser::BulkError { len, bytes: bytes? })
     }
 
     /// Parse `=<len>\r\ntxt:...\r\n` (RESP3 verbatim string).
     fn parse_verbatim(buffer: &[u8]) -> Option<Parser> {
         let (len, bytes) = Self::read_blob(buffer, false)?;
-
         Some(Parser::Verbatim { len, bytes: bytes? })
     }
 
@@ -446,7 +387,6 @@ impl Parser {
     /// so 2 * count child elements follow.
     fn parse_aggregate(buffer: &[u8], kind: AggregateKind) -> Option<Parser> {
         let (count, pos) = Self::read_i64(buffer)?;
-
         let count = match count {
             // Only the RESP2 array supports the null form `*-1`.
             -1 if kind == AggregateKind::Array => {
@@ -456,20 +396,15 @@ impl Parser {
                     value: None,
                 });
             }
-
             // TODO: Handle the Error
             ..0 => return None,
-
             count => count as usize,
         };
-
         let element_count = match kind {
             AggregateKind::Map | AggregateKind::Attribute => count.checked_mul(2)?,
             _ => count,
         };
-
         let mut elements = Vec::with_capacity(element_count.min(4096));
-
         let mut full = pos;
         for _ in 0..element_count {
             let meta = Self::parse_meta(&buffer[full..])?;
@@ -477,7 +412,6 @@ impl Parser {
             full += len;
             elements.push(meta);
         }
-
         Some(Parser::Aggregate {
             kind,
             len: full,
@@ -490,7 +424,6 @@ impl Parser {
     /// stored as the last child so `take()` can return it directly.
     fn parse_attribute(buffer: &[u8]) -> Option<Parser> {
         let attrs = Self::parse_aggregate(buffer, AggregateKind::Attribute)?;
-
         let (attr_len, pos, mut elements) = match attrs {
             Parser::Aggregate {
                 len,
@@ -499,12 +432,10 @@ impl Parser {
             } => (len, pos, elements),
             _ => return None,
         };
-
         // Parse the element that follows the attribute map.
         let inner = Self::parse_meta(&buffer[attr_len..])?;
         let full = attr_len + inner.len();
         elements.push(inner);
-
         Some(Parser::Aggregate {
             kind: AggregateKind::Attribute,
             len: full,
@@ -550,8 +481,12 @@ mod tests {
     fn test_decode_double() {
         assert!(matches!(decode(b",1.23\r\n"), Some(Value::Double(d)) if d == 1.23));
         assert!(matches!(decode(b",10\r\n"), Some(Value::Double(d)) if d == 10.0));
-        assert!(matches!(decode(b",inf\r\n"), Some(Value::Double(d)) if d.is_infinite() && d > 0.0));
-        assert!(matches!(decode(b",-inf\r\n"), Some(Value::Double(d)) if d.is_infinite() && d < 0.0));
+        assert!(
+            matches!(decode(b",inf\r\n"), Some(Value::Double(d)) if d.is_infinite() && d > 0.0)
+        );
+        assert!(
+            matches!(decode(b",-inf\r\n"), Some(Value::Double(d)) if d.is_infinite() && d < 0.0)
+        );
         assert!(matches!(decode(b",nan\r\n"), Some(Value::Double(d)) if d.is_nan()));
     }
 

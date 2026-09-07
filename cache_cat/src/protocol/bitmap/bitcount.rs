@@ -1,4 +1,5 @@
 use crate::error::{CacheCatError, ProtocolError};
+use crate::mocha::EntrySnapshot;
 use crate::protocol::command::{Client, Command};
 use crate::protocol::raft_command::{RaftCommand, ReadRaftCommand};
 use crate::raft::network::redis_server::RedisServer;
@@ -11,7 +12,6 @@ use async_trait::async_trait;
 use bytes::Bytes;
 use serde::{Deserialize, Serialize};
 use std::fmt::Display;
-use crate::mocha::EntrySnapshot;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BitCountParams {
@@ -98,13 +98,13 @@ impl BitCountCommand {
         let mut end = None;
 
         if items.len() >= 3 {
-            start = Some(items[2].parse_i64().ok_or(ProtocolError::Custom(
+            start = Some(items[2].parse_i64().ok_or(ProtocolError::response(
                 "ERR value is not an integer or out of range",
             ))?);
         }
 
         if items.len() == 4 {
-            end = Some(items[3].parse_i64().ok_or(ProtocolError::Custom(
+            end = Some(items[3].parse_i64().ok_or(ProtocolError::response(
                 "ERR value is not an integer or out of range",
             ))?);
         }
@@ -129,7 +129,7 @@ impl Command for BitCountCommand {
     ) -> Result<Value, CacheCatError> {
         if let Some(vec) = client.transaction_queue.as_mut() {
             vec.push(self.raft_request(items)?);
-            return Ok(Value::SimpleString(String::from("BITCOUNT")));
+            return Ok(Value::queued());
         }
         let params = self.read_operation(items)?;
         server.app.read(params, client.db_number).await

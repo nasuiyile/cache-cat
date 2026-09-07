@@ -87,7 +87,7 @@ impl Command for HIncrByCommand {
     ) -> Result<Value, CacheCatError> {
         if let Some(vec) = client.transaction_queue.as_mut() {
             vec.push(self.raft_request(items)?);
-            return Ok(Value::SimpleString(String::from("QUEUED")));
+            return Ok(Value::queued());
         }
         // Parse arguments
         let operation = self.raft_request(items)?;
@@ -141,7 +141,7 @@ impl ComputeCommand for HIncrReq {
                     Some(HashValue::Str(_)) => {
                         return (
                             MochaOperation::Abort,
-                            Value::Error("ERR hash value is not an integer".into()),
+                            ProtocolError::response("ERR hash value is not an integer").into(),
                         );
                     }
                     None => {
@@ -160,9 +160,7 @@ impl ComputeCommand for HIncrReq {
             }
             _ => (
                 MochaOperation::Abort,
-                Value::Error(
-                    "WRONGTYPE Operation against a key holding the wrong kind of value".into(),
-                ),
+                ProtocolError::WrongType.into(),
             ),
         }
     }

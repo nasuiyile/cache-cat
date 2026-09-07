@@ -492,14 +492,10 @@ impl MultiReadComputeCommand for PFMergeReq {
 
 #[inline]
 fn invalid_hll() -> Value {
-    Value::Error(
-        WRONG_HLL_TYPE.to_string()
-    )
+    ProtocolError::response(WRONG_HLL_TYPE).into()
 }
 
 #[inline]
 fn corrupted_hll() -> Value {
-    Value::Error(
-        CORRUPTED_HLL.to_string()
-    )
+    ProtocolError::response(CORRUPTED_HLL).into()
 }

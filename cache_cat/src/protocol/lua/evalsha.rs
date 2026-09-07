@@ -131,9 +131,10 @@ impl Command for EvalShaCommand {
             .get(&params.sha1)
         {
             None => {
-                return Err(
-                    ProtocolError::Custom("NOSCRIPT No matching script. Please use EVAL.").into(),
-                );
+                return Err(ProtocolError::response(
+                    "NOSCRIPT No matching script. Please use EVAL.",
+                )
+                .into());
             }
             Some(v) => v.clone(),
         };

@@ -29,7 +29,7 @@ const BLOOM_HASH_SEED: u64 = 0xc6a4a7935bd1e995;
 pub const BLOOM_ERROR_RATE_CAP: f64 = 0.25;
 
 pub const BLOOM_CAPACITY_MIN: u64 = 1;
-pub const BLOOM_CAPACITY_MAX: u64 = 1_048_576;
+pub const BLOOM_CAPACITY_MAX: u64 = 1 << 30;
 
 pub const BLOOM_EXPANSION_MIN: u32 = 0;
 pub const BLOOM_EXPANSION_MAX: u32 = 32_768;

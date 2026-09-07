@@ -44,19 +44,15 @@ impl LTrimCommand {
         if items.len() != 4 {
             return Err(ProtocolError::WrongArgCount("ltrim"));
         }
-
         let key = items[1]
             .string_bytes_clone()
             .ok_or(ProtocolError::InvalidArgument("key"))?;
-
         let start = items[2]
             .parse_i64()
             .ok_or(ProtocolError::InvalidArgument("start"))?;
-
         let stop = items[3]
             .parse_i64()
             .ok_or(ProtocolError::InvalidArgument("stop"))?;
-
         Ok(LTrimArgs { key, start, stop })
     }
 }
@@ -90,12 +86,10 @@ impl Command for LTrimCommand {
     ) -> Result<Value, CacheCatError> {
         if let Some(vec) = client.transaction_queue.as_mut() {
             vec.push(self.raft_request(items)?);
-            return Ok(Value::SimpleString(String::from("QUEUED")));
+            return Ok(Value::queued());
         }
-
         let operation = self.raft_request(items)?;
         let value = server.app.write(operation, client.db_number).await?;
-
         Ok(value)
     }
 }
@@ -137,7 +131,6 @@ impl ComputeCommand for LTrimReq {
             ValueObject::List(data_arc) => {
                 let mut list = data_arc.lock();
                 let len = list.len() as i64;
-
                 if len == 0 {
                     return (
                         MochaOperation::Insert {
@@ -147,7 +140,6 @@ impl ComputeCommand for LTrimReq {
                         Value::SimpleString(String::from("OK")),
                     );
                 }
-
                 // Convert negative indexes to positive
                 let mut start = self.start;
                 let mut stop = self.stop;
@@ -158,7 +150,6 @@ impl ComputeCommand for LTrimReq {
                 if stop < 0 {
                     stop = len + stop;
                 }
-
                 // Clamp start to [0, len)
                 if start < 0 {
                     start = 0;
@@ -167,7 +158,6 @@ impl ComputeCommand for LTrimReq {
                 if stop >= len {
                     stop = len - 1;
                 }
-
                 // If start > stop, the list becomes empty
                 if start > stop {
                     list.clear();
@@ -175,7 +165,6 @@ impl ComputeCommand for LTrimReq {
                     // Keep only elements in range [start, stop]
                     let start = start as usize;
                     let stop = stop as usize;
-
                     // Remove elements from the end first to avoid index shifting issues
                     let _new_len = stop - start + 1;
                     list.truncate(stop + 1); // Remove elements after stop
@@ -186,7 +175,6 @@ impl ComputeCommand for LTrimReq {
                         list.drain(0..start);
                     }
                 }
-
                 (
                     MochaOperation::Insert {
                         value: entry.value.clone(),
@@ -197,15 +185,12 @@ impl ComputeCommand for LTrimReq {
             }
             _ => (
                 Abort,
-                Value::Error(
-                    "WRONGTYPE Operation against a key holding the wrong kind of value".to_string(),
-                ),
+                ProtocolError::WrongType.into(),
             ),
         }
     }
 
     fn init(self) -> (MochaOperation<MyValue>, Value) {
-        // If key doesn't exist, LTRIM does nothing and returns OK
         (Abort, Value::SimpleString(String::from("OK")))
     }
 }

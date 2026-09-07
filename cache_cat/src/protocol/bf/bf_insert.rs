@@ -1,5 +1,6 @@
 use crate::error::{CacheCatError, ProtocolError};
 use crate::mocha::{EntrySnapshot, ExpirePolicy, MochaOperation};
+use crate::protocol::bf::error::{BloomOperation, NOT_FOUND, from_engine};
 use crate::protocol::command::{Client, Command};
 use crate::protocol::raft_command::RaftCommand;
 use crate::raft::network::redis_server::RedisServer;
@@ -21,6 +22,11 @@ use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
 use std::fmt;
 use std::sync::Arc;
+
+const BAD_ERROR_RATE: &str = "Bad error rate";
+const BAD_CAPACITY: &str = "Bad capacity";
+const BAD_EXPANSION: &str = "Bad expansion";
+const UNKNOWN_ARGUMENT: &str = "Unknown argument received";
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct BfInsertParams {
@@ -51,7 +57,7 @@ impl BfInsertParams {
         while index < values.len() {
             let option = values[index]
                 .string_bytes_clone()
-                .ok_or(ProtocolError::BloomInsertUnknownArgument)?;
+                .ok_or(ProtocolError::response(UNKNOWN_ARGUMENT))?;
 
             if option.as_ref().eq_ignore_ascii_case(b"ITEMS") {
                 items_index = Some(index + 1);
@@ -66,14 +72,14 @@ impl BfInsertParams {
 
                 let value = values[index]
                     .string_bytes_clone()
-                    .ok_or(ProtocolError::BloomInsertBadErrorRate)?;
+                    .ok_or(ProtocolError::response(BAD_ERROR_RATE))?;
 
                 error_rate = parse_f64(&value)
                     .filter(|v| v.is_finite())
-                    .ok_or(ProtocolError::BloomInsertBadErrorRate)?;
+                    .ok_or(ProtocolError::response(BAD_ERROR_RATE))?;
 
                 if error_rate <= 0.0 || error_rate >= 1.0 {
-                    return Err(ProtocolError::BloomInsertBadErrorRate);
+                    return Err(ProtocolError::response(BAD_ERROR_RATE));
                 }
 
                 if error_rate > BLOOM_ERROR_RATE_CAP {
@@ -90,10 +96,10 @@ impl BfInsertParams {
                 }
                 let value = values[index]
                     .string_bytes_clone()
-                    .ok_or(ProtocolError::BloomInsertBadCapacity)?;
-                let parsed = parse_i64(&value).ok_or(ProtocolError::BloomInsertBadCapacity)?;
+                    .ok_or(ProtocolError::response(BAD_CAPACITY))?;
+                let parsed = parse_i64(&value).ok_or(ProtocolError::response(BAD_CAPACITY))?;
                 if parsed < BLOOM_CAPACITY_MIN as i64 || parsed > BLOOM_CAPACITY_MAX as i64 {
-                    return Err(ProtocolError::BloomInsertBadCapacity);
+                    return Err(ProtocolError::response(BAD_CAPACITY));
                 }
                 capacity = parsed as u64;
                 index += 1;
@@ -106,10 +112,10 @@ impl BfInsertParams {
                 }
                 let value = values[index]
                     .string_bytes_clone()
-                    .ok_or(ProtocolError::BloomInsertBadExpansion)?;
-                let parsed = parse_i64(&value).ok_or(ProtocolError::BloomInsertBadExpansion)?;
+                    .ok_or(ProtocolError::response(BAD_EXPANSION))?;
+                let parsed = parse_i64(&value).ok_or(ProtocolError::response(BAD_EXPANSION))?;
                 if parsed < BLOOM_EXPANSION_MIN as i64 || parsed > BLOOM_EXPANSION_MAX as i64 {
-                    return Err(ProtocolError::BloomInsertBadExpansion);
+                    return Err(ProtocolError::response(BAD_EXPANSION));
                 }
                 expansion = parsed as u32;
                 index += 1;
@@ -125,7 +131,7 @@ impl BfInsertParams {
                 index += 1;
                 continue;
             }
-            return Err(ProtocolError::BloomInsertUnknownArgument);
+            return Err(ProtocolError::response(UNKNOWN_ARGUMENT));
         }
         let items_index = items_index.ok_or(ProtocolError::WrongArgCount("BF.INSERT"))?;
         if items_index >= values.len() {
@@ -253,7 +259,10 @@ impl ComputeCommand for BfInsertReq {
 
     fn init(self) -> (MochaOperation<MyValue>, Value) {
         if !self.autocreate {
-            return (MochaOperation::Abort, ProtocolError::BloomNotFound.into());
+            return (
+                MochaOperation::Abort,
+                ProtocolError::response(NOT_FOUND).into(),
+            );
         }
         let mut bloom = match BloomObject::new(
             self.capacity,
@@ -263,7 +272,10 @@ impl ComputeCommand for BfInsertReq {
         ) {
             Ok(bloom) => bloom,
             Err(error) => {
-                return (MochaOperation::Abort, bloom_create_error(error).into());
+                return (
+                    MochaOperation::Abort,
+                    from_engine(error, BloomOperation::Create).into(),
+                );
             }
         };
         let (results, _) = add_items(&mut bloom, &self.items);
@@ -289,12 +301,12 @@ fn add_items(bloom: &mut BloomObject, items: &[Bytes]) -> (Vec<Value>, bool) {
             Ok(false) => {
                 results.push(Value::Boolean(false));
             }
-            Err(BloomError::Full) => {
-                results.push(ProtocolError::BloomFilterFull.into());
-                break;
-            }
-            Err(_) => {
-                results.push(ProtocolError::BloomInsertFailed.into());
+            Err(error) => {
+                let is_full = matches!(error, BloomError::Full);
+                results.push(from_engine(error, BloomOperation::Insert).into());
+                if is_full {
+                    break;
+                }
             }
         }
     }
@@ -302,12 +314,39 @@ fn add_items(bloom: &mut BloomObject, items: &[Bytes]) -> (Vec<Value>, bool) {
     (results, mutated)
 }
 
-fn bloom_create_error(error: BloomError) -> ProtocolError {
-    match error {
-        BloomError::OutOfMemory => ProtocolError::BloomCreateOutOfMemory,
-        _ => ProtocolError::BloomCreateFailed,
-    }
-}
 fn parse_f64(bytes: &[u8]) -> Option<f64> {
     std::str::from_utf8(bytes).ok()?.parse().ok()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn command(args: &[&str]) -> Vec<Value> {
+        args.iter()
+            .map(|arg| Value::BulkString(Some(Bytes::copy_from_slice(arg.as_bytes()))))
+            .collect()
+    }
+
+    fn parse_error(args: &[&str]) -> String {
+        BfInsertParams::parse(&command(args))
+            .unwrap_err()
+            .to_string()
+    }
+
+    #[test]
+    fn validation_errors_match_redisbloom() {
+        assert_eq!(
+            parse_error(&["BF.INSERT", "key", "ERROR", "invalid", "ITEMS", "x"]),
+            "Bad error rate"
+        );
+        assert_eq!(
+            parse_error(&["BF.INSERT", "key", "CAPACITY", "1073741825", "ITEMS", "x",]),
+            "Bad capacity"
+        );
+        assert_eq!(
+            parse_error(&["BF.INSERT", "key", "UNKNOWN", "ITEMS", "x"]),
+            "Unknown argument received"
+        );
+    }
 }

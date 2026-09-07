@@ -25,7 +25,6 @@ pub struct HMGetParams {
     pub key: Bytes,
     pub fields: Vec<Bytes>,
 }
-
 impl Display for HMGetParams {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         let fields_str: Vec<String> = self
@@ -45,7 +44,6 @@ impl ReadCommand for HMGetParams {
     fn key(&self) -> &Bytes {
         &self.key
     }
-
     fn execute(&self, value: Option<EntrySnapshot<MyValue>>) -> Value {
         match value {
             None => Value::BulkString(None),
@@ -84,23 +82,17 @@ impl HMGetCommand {
         if items.len() < 3 {
             return Err(ProtocolError::WrongArgCount("hmget"));
         }
-
-        // Parse key
         let key = items[1]
             .string_bytes_clone()
             .ok_or(ProtocolError::InvalidArgument("key"))?;
-
-        // Parse all fields (starting from index 2)
         let fields = items
             .iter()
             .skip(2)
             .map_while(Value::string_bytes_clone)
             .collect::<Vec<_>>();
-
         if fields.len() < items.len() - 2 {
             return Err(ProtocolError::InvalidArgument("field"));
         }
-
         Ok(HMGetParams { key, fields })
     }
 }
@@ -122,7 +114,7 @@ impl Command for HMGetCommand {
     ) -> Result<Value, CacheCatError> {
         if let Some(vec) = client.transaction_queue.as_mut() {
             vec.push(self.raft_request(items)?);
-            return Ok(Value::SimpleString(String::from("QUEUED")));
+            return Ok(Value::queued());
         }
 
         // Parse arguments

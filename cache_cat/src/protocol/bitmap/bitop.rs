@@ -103,23 +103,18 @@ impl BitOpCommand {
         if items.len() < 4 {
             return Err(ProtocolError::WrongArgCount("BITOP"));
         }
-
         let operation_bytes = items[1]
             .string_bytes_clone()
             .ok_or(ProtocolError::InvalidArgument("operation"))?;
-
         let operation = BitOp::parse(operation_bytes.as_ref())?;
-
         let key = items[2]
             .string_bytes_clone()
             .ok_or(ProtocolError::InvalidArgument("key"))?;
-
         let keys = items
             .iter()
             .skip(3)
             .map_while(Value::string_bytes_clone)
             .collect::<Vec<_>>();
-
         if keys.len() != items.len() - 3 {
             return Err(ProtocolError::InvalidArgument("key"));
         }
@@ -165,12 +160,9 @@ impl Command for BitOpCommand {
     ) -> Result<Value, CacheCatError> {
         if let Some(vec) = client.transaction_queue.as_mut() {
             vec.push(self.raft_request(items)?);
-
-            return Ok(Value::SimpleString(String::from("QUEUED")));
+            return Ok(Value::queued());
         }
-
         let operation = self.raft_request(items)?;
-
         server.app.write(operation, client.db_number).await
     }
 }
@@ -179,10 +171,8 @@ impl Command for BitOpCommand {
 pub struct BitOpReq {
     /// Destination key.
     pub key: Bytes,
-
     /// Source keys.
     pub keys: Vec<Bytes>,
-
     pub operation: BitOp,
 }
 
@@ -362,20 +352,14 @@ impl BitOpReq {
     /// A bit is set when it exists in one of the Y inputs but not X.
     fn compute_diff1(sources: &[Bytes], max_len: usize) -> Vec<u8> {
         debug_assert!(!sources.is_empty());
-
         let x = &sources[0];
-
         let mut result = vec![0; max_len];
-
         for index in 0..max_len {
             let x_byte = Self::byte_at(x, index);
-
             let mut y_union = 0u8;
-
             for source in sources.iter().skip(1) {
                 y_union |= Self::byte_at(source, index);
             }
-
             result[index] = y_union & !x_byte;
         }
 

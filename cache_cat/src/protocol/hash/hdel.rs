@@ -47,12 +47,10 @@ impl HDelCommand {
         if items.len() < 3 {
             return Err(ProtocolError::WrongArgCount("hdel"));
         }
-
         // Parse key
         let key = items[1]
             .string_bytes_clone()
             .ok_or(ProtocolError::InvalidArgument("key"))?;
-
         // Parse fields from items[2..]
         let fields = items
             .iter()
@@ -63,7 +61,6 @@ impl HDelCommand {
         if fields.len() < items.len() - 2 {
             return Err(ProtocolError::InvalidArgument("field"));
         }
-
         Ok(HDelParam { key, fields })
     }
 }
@@ -89,7 +86,7 @@ impl Command for HDelCommand {
     ) -> Result<Value, CacheCatError> {
         if let Some(vec) = client.transaction_queue.as_mut() {
             vec.push(self.raft_request(items)?);
-            return Ok(Value::SimpleString(String::from("QUEUED")));
+            return Ok(Value::queued());
         }
         let operation = self.raft_request(items)?;
         let value = server.app.write(operation, client.db_number).await?;
@@ -118,11 +115,9 @@ impl ComputeCommand for HDelReq {
     fn key(&self) -> &Bytes {
         &self.key
     }
-
     fn into_base_op(self) -> BaseOperation {
         BaseOperation::HDel(self.clone())
     }
-
     fn mutate(
         self,
         entry: EntrySnapshot<MyValue>,
@@ -149,12 +144,7 @@ impl ComputeCommand for HDelReq {
                     Value::Integer(deleted_count),
                 )
             }
-            _ => (
-                MochaOperation::Abort,
-                Value::Error(
-                    "WRONGTYPE Operation against a key holding the wrong kind of value".into(),
-                ),
-            ),
+            _ => (MochaOperation::Abort, ProtocolError::WrongType.into()),
         }
     }
 

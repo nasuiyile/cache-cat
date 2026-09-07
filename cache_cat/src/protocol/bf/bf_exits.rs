@@ -21,10 +21,7 @@ pub struct BfExistsParams {
 }
 
 impl Display for BfExistsParams {
-    fn fmt(
-        &self,
-        f: &mut std::fmt::Formatter<'_>,
-    ) -> std::fmt::Result {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(
             f,
             "BF.EXISTS {} {}",
@@ -35,38 +32,21 @@ impl Display for BfExistsParams {
 }
 
 impl BfExistsParams {
-    fn parse(
-        items: &[Value],
-    ) -> Result<Self, ProtocolError> {
+    fn parse(items: &[Value]) -> Result<Self, ProtocolError> {
         // BF.EXISTS key item
         if items.len() != 3 {
-            return Err(
-                ProtocolError::WrongArgCount(
-                    "BF.EXISTS"
-                )
-            );
+            return Err(ProtocolError::WrongArgCount("BF.EXISTS"));
         }
 
         let key = items[1]
             .string_bytes_clone()
-            .ok_or(
-                ProtocolError::InvalidArgument(
-                    "key"
-                )
-            )?;
+            .ok_or(ProtocolError::InvalidArgument("key"))?;
 
         let item = items[2]
             .string_bytes_clone()
-            .ok_or(
-                ProtocolError::InvalidArgument(
-                    "item"
-                )
-            )?;
+            .ok_or(ProtocolError::InvalidArgument("item"))?;
 
-        Ok(Self {
-            key,
-            item,
-        })
+        Ok(Self { key, item })
     }
 }
 
@@ -78,10 +58,7 @@ impl ReadCommand for BfExistsParams {
         &self.key
     }
 
-    fn execute(
-        &self,
-        value: Option<EntrySnapshot<MyValue>>,
-    ) -> Value {
+    fn execute(&self, value: Option<EntrySnapshot<MyValue>>) -> Value {
         let exists = match value {
             /*
              * Redis:
@@ -105,9 +82,7 @@ impl ReadCommand for BfExistsParams {
                          */
                         let bloom = bloom.lock();
 
-                        bloom.contains(
-                            &self.item
-                        )
+                        bloom.contains(&self.item)
                     }
 
                     /*
@@ -127,15 +102,8 @@ impl ReadCommand for BfExistsParams {
 }
 
 impl ReadRaftCommand for BfExistsCommand {
-    fn read_operation(
-        &self,
-        items: &[Value],
-    ) -> Result<ReadOperation, ProtocolError> {
-        Ok(
-            ReadOperation::BfExists(
-                BfExistsParams::parse(items)?
-            )
-        )
+    fn read_operation(&self, items: &[Value]) -> Result<ReadOperation, ProtocolError> {
+        Ok(ReadOperation::BfExists(BfExistsParams::parse(items)?))
     }
 }
 
@@ -152,29 +120,13 @@ impl Command for BfExistsCommand {
          *
          * 和 STRLEN 保持完全一致。
          */
-        if let Some(queue) =
-            client.transaction_queue.as_mut()
-        {
-            queue.push(
-                self.raft_request(items)?
-            );
-
-            return Ok(
-                Value::SimpleString(
-                    "QUEUED".to_string()
-                )
-            );
+        if let Some(queue) = client.transaction_queue.as_mut() {
+            queue.push(self.raft_request(items)?);
+            return Ok(Value::queued());
         }
 
-        let operation =
-            self.read_operation(items)?;
+        let operation = self.read_operation(items)?;
 
-        server
-            .app
-            .read(
-                operation,
-                client.db_number,
-            )
-            .await
+        server.app.read(operation, client.db_number).await
     }
 }

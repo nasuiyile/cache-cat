@@ -1,5 +1,6 @@
 use crate::error::{CacheCatError, ProtocolError};
 use crate::mocha::{EntrySnapshot, ExpirePolicy, MochaOperation};
+use crate::protocol::bf::error::{BloomOperation, from_engine};
 use crate::protocol::command::{Client, Command};
 use crate::protocol::raft_command::RaftCommand;
 use crate::raft::network::redis_server::RedisServer;
@@ -11,7 +12,7 @@ use crate::raft::types::core::value_object::ValueObject;
 use crate::raft::types::entry::bae_operation::BaseOperation;
 use crate::raft::types::entry::request::Operation;
 
-use crate::raft::types::core::mocha::bloom_filter::{BloomError, BloomObject};
+use crate::raft::types::core::mocha::bloom_filter::BloomObject;
 use async_trait::async_trait;
 use bytes::Bytes;
 use parking_lot::Mutex;
@@ -66,8 +67,7 @@ impl Command for BfAddCommand {
     ) -> Result<Value, CacheCatError> {
         if let Some(queue) = client.transaction_queue.as_mut() {
             queue.push(self.raft_request(items)?);
-
-            return Ok(Value::SimpleString("QUEUED".to_string()));
+            return Ok(Value::queued());
         }
 
         let operation = self.raft_request(items)?;
@@ -136,7 +136,10 @@ impl ComputeCommand for BfAddReq {
              * 没有发生任何 mutation。
              */
             Ok(false) => (MochaOperation::Abort, Value::Boolean(false)),
-            Err(error) => (MochaOperation::Abort, bloom_insert_error(error).into()),
+            Err(error) => (
+                MochaOperation::Abort,
+                from_engine(error, BloomOperation::Insert).into(),
+            ),
         }
     }
 
@@ -144,13 +147,19 @@ impl ComputeCommand for BfAddReq {
         let mut bloom = match BloomObject::redis_default() {
             Ok(bloom) => bloom,
             Err(error) => {
-                return (MochaOperation::Abort, bloom_create_error(error).into());
+                return (
+                    MochaOperation::Abort,
+                    from_engine(error, BloomOperation::Create).into(),
+                );
             }
         };
         let added = match bloom.add(&self.item) {
             Ok(added) => added,
             Err(error) => {
-                return (MochaOperation::Abort, bloom_insert_error(error).into());
+                return (
+                    MochaOperation::Abort,
+                    from_engine(error, BloomOperation::Insert).into(),
+                );
             }
         };
         (
@@ -160,21 +169,5 @@ impl ComputeCommand for BfAddReq {
             },
             Value::Boolean(added),
         )
-    }
-}
-
-#[inline]
-fn bloom_insert_error(error: BloomError) -> ProtocolError {
-    match error {
-        BloomError::Full => ProtocolError::BloomFilterFull,
-        _ => ProtocolError::BloomInsertFailed,
-    }
-}
-
-#[inline]
-fn bloom_create_error(error: BloomError) -> ProtocolError {
-    match error {
-        BloomError::OutOfMemory => ProtocolError::BloomCreateOutOfMemory,
-        _ => ProtocolError::BloomCreateFailed,
     }
 }

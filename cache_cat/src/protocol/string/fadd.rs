@@ -216,9 +216,7 @@ impl ComputeCommand for PfAddReq {
                 {
                     return (
                         MochaOperation::Abort,
-                        Value::Error(
-                            WRONG_HLL_TYPE.to_string()
-                        ),
+                        ProtocolError::response(WRONG_HLL_TYPE).into(),
                     );
                 }
 
@@ -243,18 +241,14 @@ impl ComputeCommand for PfAddReq {
                         Err(HllDecodeError::NotHll) => {
                             return (
                                 MochaOperation::Abort,
-                                Value::Error(
-                                    WRONG_HLL_TYPE.to_string()
-                                ),
+                                ProtocolError::response(WRONG_HLL_TYPE).into(),
                             );
                         }
 
                         Err(HllDecodeError::Corrupted) => {
                             return (
                                 MochaOperation::Abort,
-                                Value::Error(
-                                    CORRUPTED_HLL.to_string()
-                                ),
+                                ProtocolError::response(CORRUPTED_HLL).into(),
                             );
                         }
                     };
@@ -319,9 +313,7 @@ impl ComputeCommand for PfAddReq {
             ValueObject::Int(_) => (
                 MochaOperation::Abort,
 
-                Value::Error(
-                    WRONG_HLL_TYPE.to_string()
-                ),
+                ProtocolError::response(WRONG_HLL_TYPE).into(),
             ),
 
             /*
@@ -330,9 +322,7 @@ impl ComputeCommand for PfAddReq {
             _ => (
                 MochaOperation::Abort,
 
-                Value::Error(
-                    WRONG_VALUE_TYPE.to_string()
-                ),
+                ProtocolError::response(WRONG_VALUE_TYPE).into(),
             ),
         }
     }

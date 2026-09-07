@@ -1,5 +1,6 @@
 use crate::error::{CacheCatError, ProtocolError};
 use crate::mocha::EntrySnapshot;
+use crate::protocol::bf::error::NOT_FOUND;
 use crate::protocol::command::{Client, Command};
 use crate::protocol::raft_command::{RaftCommand, ReadRaftCommand};
 use crate::raft::network::redis_server::RedisServer;
@@ -40,7 +41,7 @@ impl BfScanDumpParams {
             .ok_or(ProtocolError::InvalidArgument("key"))?;
         let iterator = items[2]
             .parse_i64()
-            .ok_or(ProtocolError::BloomScanDumpIteratorNotNumeric)?;
+            .ok_or(ProtocolError::response("Second argument must be numeric"))?;
         Ok(Self { key, iterator })
     }
 }
@@ -55,7 +56,7 @@ impl ReadCommand for BfScanDumpParams {
     fn execute(&self, value: Option<EntrySnapshot<MyValue>>) -> Value {
         let entry = match value {
             Some(entry) => entry,
-            None => return ProtocolError::BloomNotFound.into(),
+            None => return ProtocolError::response(NOT_FOUND).into(),
         };
 
         let bloom = match &entry.value.data {
@@ -74,13 +75,8 @@ impl ReadCommand for BfScanDumpParams {
 }
 
 impl ReadRaftCommand for BfScanDumpCommand {
-    fn read_operation(
-        &self,
-        items: &[Value],
-    ) -> Result<ReadOperation, ProtocolError> {
-        Ok(ReadOperation::BfScanDump(
-            BfScanDumpParams::parse(items)?
-        ))
+    fn read_operation(&self, items: &[Value]) -> Result<ReadOperation, ProtocolError> {
+        Ok(ReadOperation::BfScanDump(BfScanDumpParams::parse(items)?))
     }
 }
 
@@ -94,7 +90,7 @@ impl Command for BfScanDumpCommand {
     ) -> Result<Value, CacheCatError> {
         if let Some(queue) = client.transaction_queue.as_mut() {
             queue.push(self.raft_request(items)?);
-            return Ok(Value::SimpleString("QUEUED".to_string()));
+            return Ok(Value::queued());
         }
         let operation = self.read_operation(items)?;
         server.app.read(operation, client.db_number).await

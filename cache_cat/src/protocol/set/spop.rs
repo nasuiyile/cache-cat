@@ -17,9 +17,6 @@ use serde::{Deserialize, Serialize};
 use std::fmt;
 use std::fmt::Display;
 
-const WRONG_TYPE_ERROR: &str =
-    "WRONGTYPE Operation against a key holding the wrong kind of value";
-
 /// SPOP 命令的解析结果。
 ///
 /// count:
@@ -107,7 +104,7 @@ impl Command for SPopCommand {
         if let Some(queue) = client.transaction_queue.as_mut() {
             queue.push(self.raft_request(items)?);
 
-            return Ok(Value::SimpleString(String::from("QUEUED")));
+            return Ok(Value::queued());
         }
 
         let operation = self.raft_request(items)?;
@@ -377,7 +374,7 @@ impl ComputeCommand for SPopReq {
 
             _ => (
                 MochaOperation::Abort,
-                Value::Error(WRONG_TYPE_ERROR.into()),
+                ProtocolError::WrongType.into(),
             ),
         }
     }

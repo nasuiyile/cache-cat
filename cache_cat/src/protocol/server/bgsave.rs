@@ -19,7 +19,7 @@ impl Command for BgsaveCommand {
         server: &RedisServer,
     ) -> Result<Value, CacheCatError> {
         if items.len() > 2 {
-            return Err(ProtocolError::WrongArgCount("save").into());
+            return Err(ProtocolError::WrongArgCount("bgsave").into());
         }
         let mut schedule = false;
         if items.len() == 2 {
@@ -42,7 +42,9 @@ impl Command for BgsaveCommand {
             .snapshot_state();
         if snapshot_state && (!schedule) {
             // If it is already in the snapshot
-            return Err(ProtocolError::Custom("Background save already in progress").into());
+            return Err(
+                ProtocolError::response("ERR Background save already in progress").into(),
+            );
         }
         let mut receiver = server.app.state_machine.data.snapshot_message.subscribe();
         server.app.cluster.trigger_snapshot().await?;

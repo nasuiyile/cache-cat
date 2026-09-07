@@ -28,7 +28,7 @@ impl DecrByParams {
             return Err(ProtocolError::WrongArgCount("DECRBY"));
         }
 
-        let key = items[1]          
+        let key = items[1]
             .string_bytes_clone()
             .ok_or(ProtocolError::InvalidArgument("key"))?;
 
@@ -63,7 +63,7 @@ impl Command for DecrByCommand {
     ) -> Result<Value, CacheCatError> {
         if let Some(vec) = client.transaction_queue.as_mut() {
             vec.push(self.raft_request(items)?);
-            return Ok(Value::SimpleString(String::from("QUEUED")));
+            return Ok(Value::queued());
         }
         // Parse arguments
         let operation = self.raft_request(items)?;
@@ -105,26 +105,24 @@ impl ComputeCommand for DecrByReq {
     ) -> (MochaOperation<MyValue>, Value) {
         let (result, value) = match &entry.value.data {
             ValueObject::Int(n) => {
-                let num = n - self.decrement;
+                let Some(num) = n.checked_sub(self.decrement) else {
+                    return (MochaOperation::Abort, ProtocolError::Overflow.into());
+                };
                 (ValueObject::Int(num), Value::Integer(num))
             }
 
             ValueObject::String(s) => {
-                let Some(mut value) = parse_i64(s) else {
-                    return (
-                        MochaOperation::Abort,
-                        Value::Error("Value is not an integer".to_string()),
-                    );
+                let Some(value) = parse_i64(s) else {
+                    return (MochaOperation::Abort, ProtocolError::NotAnInteger.into());
                 };
-                value -= self.decrement;
-                (ValueObject::Int(value), Value::Integer(value))
+                let Some(result) = value.checked_sub(self.decrement) else {
+                    return (MochaOperation::Abort, ProtocolError::Overflow.into());
+                };
+                (ValueObject::Int(result), Value::Integer(result))
             }
 
             _ => {
-                return (
-                    MochaOperation::Abort,
-                    Value::Error("Key exists but is not an Integer".to_string()),
-                );
+                return (MochaOperation::Abort, ProtocolError::WrongType.into());
             }
         };
         (
@@ -137,7 +135,9 @@ impl ComputeCommand for DecrByReq {
     }
 
     fn init(self) -> (MochaOperation<MyValue>, Value) {
-        let v = -self.decrement;
+        let Some(v) = 0_i64.checked_sub(self.decrement) else {
+            return (MochaOperation::Abort, ProtocolError::Overflow.into());
+        };
         (
             MochaOperation::Insert {
                 value: MyValue::new(ValueObject::Int(v)),

@@ -52,22 +52,15 @@ impl HSetNxCommand {
         if items.len() != 4 {
             return Err(ProtocolError::WrongArgCount("hsetnx"));
         }
-
-        // Parse key
         let key = items[1]
             .string_bytes_clone()
             .ok_or(ProtocolError::InvalidArgument("key"))?;
-
-        // Parse field
         let field = items[2]
             .string_bytes_clone()
             .ok_or(ProtocolError::InvalidArgument("field"))?;
-
-        // Parse value
         let value = items[3]
             .string_bytes_clone()
             .ok_or(ProtocolError::InvalidArgument("value"))?;
-
         Ok(HSetNxParam { key, field, value })
     }
 }
@@ -94,7 +87,7 @@ impl Command for HSetNxCommand {
     ) -> Result<Value, CacheCatError> {
         if let Some(vec) = client.transaction_queue.as_mut() {
             vec.push(self.raft_request(items)?);
-            return Ok(Value::SimpleString(String::from("QUEUED")));
+            return Ok(Value::queued());
         }
         let operation = self.raft_request(items)?;
         let value = server.app.write(operation, client.db_number).await?;
@@ -138,8 +131,6 @@ impl ComputeCommand for HSetNxReq {
         match &entry.value.data {
             ValueObject::Hash(hash) => {
                 let mut map = hash.lock();
-
-                // Check if field already exists
                 if map.contains_key(&self.field) {
                     // Field exists, no operation performed
                     drop(map);
@@ -155,7 +146,6 @@ impl ComputeCommand for HSetNxReq {
 
                     map.insert(self.field, value);
                     drop(map);
-
                     (
                         MochaOperation::Insert {
                             value: entry.value.clone(),
@@ -167,9 +157,7 @@ impl ComputeCommand for HSetNxReq {
             }
             _ => (
                 MochaOperation::Abort,
-                Value::Error(
-                    "WRONGTYPE Operation against a key holding the wrong kind of value".into(),
-                ),
+                ProtocolError::WrongType.into(),
             ),
         }
     }
@@ -181,9 +169,7 @@ impl ComputeCommand for HSetNxReq {
         } else {
             HashValue::Str(self.value)
         };
-
         map.insert(self.field, value);
-
         (
             MochaOperation::Insert {
                 value: MyValue::new(ValueObject::Hash(Arc::new(Mutex::new(map)))),

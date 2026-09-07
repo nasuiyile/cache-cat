@@ -1,9 +1,10 @@
 use crate::error::{CacheCatError, ProtocolError};
 use crate::mocha::{EntrySnapshot, ExpirePolicy, MochaOperation};
+use crate::protocol::bf::error::{BloomOperation, NOT_FOUND, from_engine};
 use crate::protocol::command::{Client, Command};
 use crate::protocol::raft_command::RaftCommand;
 use crate::raft::network::redis_server::RedisServer;
-use crate::raft::types::core::mocha::bloom_filter::{BloomError, BloomObject};
+use crate::raft::types::core::mocha::bloom_filter::BloomObject;
 use crate::raft::types::core::mocha::cas::ComputeCommand;
 use crate::raft::types::core::mocha::core::MyValue;
 use crate::raft::types::core::response_value::Value;
@@ -30,9 +31,9 @@ impl BfLoadChunkParams {
         let key = items[1]
             .string_bytes_clone()
             .ok_or(ProtocolError::InvalidArgument("key"))?;
-        let iterator = items[2]
-            .parse_i64()
-            .ok_or(ProtocolError::BloomLoadChunkIteratorNotNumeric)?;
+        let iterator = items[2].parse_i64().ok_or(ProtocolError::response(
+            "ERR Second argument must be numeric",
+        ))?;
         let data = items[3]
             .string_bytes_clone()
             .ok_or(ProtocolError::InvalidArgument("data"))?;
@@ -71,7 +72,7 @@ impl Command for BfLoadChunkCommand {
     ) -> Result<Value, CacheCatError> {
         if let Some(queue) = client.transaction_queue.as_mut() {
             queue.push(self.raft_request(items)?);
-            return Ok(Value::SimpleString("QUEUED".to_string()));
+            return Ok(Value::queued());
         }
         let operation = self.raft_request(items)?;
         server.app.write(operation, client.db_number).await
@@ -128,18 +129,27 @@ impl ComputeCommand for BfLoadChunkReq {
                 },
                 Value::ok(),
             ),
-            Err(error) => (MochaOperation::Abort, bloom_load_error(error).into()),
+            Err(error) => (
+                MochaOperation::Abort,
+                from_engine(error, BloomOperation::LoadChunk).into(),
+            ),
         }
     }
 
     fn init(self) -> (MochaOperation<MyValue>, Value) {
         if self.iterator != 1 {
-            return (MochaOperation::Abort, ProtocolError::BloomNotFound.into());
+            return (
+                MochaOperation::Abort,
+                ProtocolError::response(NOT_FOUND).into(),
+            );
         }
         let bloom = match BloomObject::from_dump_header(&self.data) {
             Ok(bloom) => bloom,
             Err(error) => {
-                return (MochaOperation::Abort, bloom_load_error(error).into());
+                return (
+                    MochaOperation::Abort,
+                    from_engine(error, BloomOperation::LoadChunk).into(),
+                );
             }
         };
         (
@@ -149,16 +159,5 @@ impl ComputeCommand for BfLoadChunkReq {
             },
             Value::ok(),
         )
-    }
-}
-
-fn bloom_load_error(error: BloomError) -> ProtocolError {
-    match error {
-        BloomError::BadDumpData => ProtocolError::BloomLoadChunkBadData,
-        BloomError::InvalidDumpOffset => ProtocolError::BloomLoadChunkInvalidOffset,
-        BloomError::DumpChunkTooBig => ProtocolError::BloomLoadChunkTooBig,
-        BloomError::OutOfMemory => ProtocolError::BloomCreateOutOfMemory,
-        BloomError::Overflow | BloomError::Invalid => ProtocolError::BloomLoadChunkBadData,
-        BloomError::Full => ProtocolError::BloomLoadChunkBadData,
     }
 }

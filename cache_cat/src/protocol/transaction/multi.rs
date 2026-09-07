@@ -19,7 +19,7 @@ impl Command for MultiCommand {
         }
         // If it has already been opened
         if client.transaction_queue.is_some() {
-            return Err(ProtocolError::Custom("MULTI calls can not be nested").into());
+            return Err(ProtocolError::response("ERR MULTI calls can not be nested").into());
         }
         client.transaction_queue = Some(vec![]);
         client.flag.multi = true;

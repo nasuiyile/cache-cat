@@ -234,10 +234,10 @@ impl Command for ScriptCommand {
                 if executor {
                     Value::ok()
                 } else {
-                    Value::Error(String::from("ERR No scripts in execution right now."))
+                    ProtocolError::response("NOTBUSY No scripts in execution right now.").into()
                 }
             }
-            ScriptParam::Debug(_) => Value::Error("Not implemented".to_string()),
+            ScriptParam::Debug(_) => ProtocolError::response("Not implemented").into(),
         };
         Ok(value)
     }

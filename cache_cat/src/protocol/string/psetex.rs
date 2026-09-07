@@ -76,7 +76,7 @@ impl Command for PSetExCommand {
     ) -> Result<Value, CacheCatError> {
         if let Some(vec) = client.transaction_queue.as_mut() {
             vec.push(self.raft_request(items)?);
-            return Ok(Value::SimpleString("QUEUED".to_string()));
+            return Ok(Value::queued());
         }
         let params = Self::parse(items)?;
         server

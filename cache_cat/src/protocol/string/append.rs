@@ -72,7 +72,7 @@ impl Command for AppendCommand {
     ) -> Result<Value, CacheCatError> {
         if let Some(vec) = client.transaction_queue.as_mut() {
             vec.push(self.raft_request(items)?);
-            return Ok(Value::SimpleString(String::from("QUEUED")));
+            return Ok(Value::queued());
         }
         // Parse arguments
         let operation = self.raft_request(items)?;
@@ -129,7 +129,7 @@ impl ComputeCommand for AppendReq {
             }
             _ => (
                 MochaOperation::Abort,
-                Value::Error("Key exists but is not a String".to_string()),
+                ProtocolError::WrongType.into(),
             ),
         }
     }

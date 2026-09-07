@@ -25,7 +25,7 @@ pub struct IncrByParams {
 impl IncrByParams {
     fn parse(items: &[Value]) -> Result<Self, ProtocolError> {
         if items.len() != 3 {
-            return Err(ProtocolError::WrongArgCount("INCR"));
+            return Err(ProtocolError::WrongArgCount("INCRBY"));
         }
 
         let key = items[1]
@@ -63,7 +63,7 @@ impl Command for IncrByCommand {
     ) -> Result<Value, CacheCatError> {
         if let Some(vec) = client.transaction_queue.as_mut() {
             vec.push(self.raft_request(items)?);
-            return Ok(Value::SimpleString(String::from("QUEUED")));
+            return Ok(Value::queued());
         }
         // Parse arguments
         let operation = self.raft_request(items)?;
@@ -105,26 +105,24 @@ impl ComputeCommand for IncrByReq {
     ) -> (MochaOperation<MyValue>, Value) {
         let (result, value) = match &entry.value.data {
             ValueObject::Int(n) => {
-                let num = n + self.increment;
+                let Some(num) = n.checked_add(self.increment) else {
+                    return (MochaOperation::Abort, ProtocolError::Overflow.into());
+                };
                 (ValueObject::Int(num), Value::Integer(num))
             }
 
             ValueObject::String(s) => {
-                let Some(mut value) = parse_i64(s) else {
-                    return (
-                        MochaOperation::Abort,
-                        Value::Error("Value is not an integer".to_string()),
-                    );
+                let Some(value) = parse_i64(s) else {
+                    return (MochaOperation::Abort, ProtocolError::NotAnInteger.into());
                 };
-                value += self.increment;
-                (ValueObject::Int(value), Value::Integer(value))
+                let Some(result) = value.checked_add(self.increment) else {
+                    return (MochaOperation::Abort, ProtocolError::Overflow.into());
+                };
+                (ValueObject::Int(result), Value::Integer(result))
             }
 
             _ => {
-                return (
-                    MochaOperation::Abort,
-                    Value::Error("Key exists but is not an Integer".to_string()),
-                );
+                return (MochaOperation::Abort, ProtocolError::WrongType.into());
             }
         };
         (

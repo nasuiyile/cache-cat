@@ -38,35 +38,24 @@ impl HMSetCommand {
     /// Format:
     /// HMSET key field value [field value ...]
     fn parse_args(items: &[Value]) -> Result<HMSetParams, ProtocolError> {
-        // At least:
-        // HMSET key field value
-        //
-        // Number of arguments after key must be even.
         if items.len() < 4 || items.len() % 2 != 0 {
             return Err(ProtocolError::WrongArgCount("hmset"));
         }
-
         let key = items[1]
             .string_bytes_clone()
             .ok_or(ProtocolError::InvalidArgument("key"))?;
-
         let mut fields = Vec::with_capacity((items.len() - 2) / 2);
-
         let mut index = 2;
         while index < items.len() {
             let field = items[index]
                 .string_bytes_clone()
                 .ok_or(ProtocolError::InvalidArgument("field"))?;
-
             let value = items[index + 1]
                 .string_bytes_clone()
                 .ok_or(ProtocolError::InvalidArgument("value"))?;
-
             fields.push((field, value));
-
             index += 2;
         }
-
         Ok(HMSetParams { key, fields })
     }
 }
@@ -79,7 +68,6 @@ impl RaftCommand for HMSetCommand {
             key: params.key,
             fields: params.fields,
         });
-
         Ok(Operation::Base(operation))
     }
 }
@@ -94,11 +82,9 @@ impl Command for HMSetCommand {
     ) -> Result<Value, CacheCatError> {
         if let Some(vec) = client.transaction_queue.as_mut() {
             vec.push(self.raft_request(items)?);
-            return Ok(Value::SimpleString(String::from("QUEUED")));
+            return Ok(Value::queued());
         }
-
         let operation = self.raft_request(items)?;
-
         let value = server.app.write(operation, client.db_number).await?;
 
         Ok(value)
@@ -139,13 +125,10 @@ impl ComputeCommand for HMSetReq {
         match &entry.value.data {
             ValueObject::Hash(hash) => {
                 let mut map = hash.lock();
-
                 for (field, value) in self.fields {
                     map.insert(field, HashValue::Str(value));
                 }
-
                 drop(map);
-
                 (
                     MochaOperation::Insert {
                         value: entry.value.clone(),
@@ -155,23 +138,18 @@ impl ComputeCommand for HMSetReq {
                     Value::SimpleString(String::from("OK")),
                 )
             }
-
             _ => (
                 MochaOperation::Abort,
-                Value::Error(
-                    "WRONGTYPE Operation against a key holding the wrong kind of value".into(),
-                ),
+                ProtocolError::WrongType.into(),
             ),
         }
     }
 
     fn init(self) -> (MochaOperation<MyValue>, Value) {
         let mut map = HashMap::with_capacity(self.fields.len());
-
         for (field, value) in self.fields {
             map.insert(field, HashValue::Str(value));
         }
-
         (
             MochaOperation::Insert {
                 value: MyValue::new(ValueObject::Hash(Arc::new(Mutex::new(map)))),

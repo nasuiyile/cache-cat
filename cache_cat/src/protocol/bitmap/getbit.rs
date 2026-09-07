@@ -1,4 +1,5 @@
 use crate::error::{CacheCatError, ProtocolError};
+use crate::mocha::EntrySnapshot;
 use crate::protocol::command::{Client, Command};
 use crate::protocol::raft_command::{RaftCommand, ReadRaftCommand};
 use crate::raft::network::redis_server::RedisServer;
@@ -11,7 +12,6 @@ use async_trait::async_trait;
 use bytes::Bytes;
 use serde::{Deserialize, Serialize};
 use std::fmt::Display;
-use crate::mocha::EntrySnapshot;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GetBitParams {
@@ -66,7 +66,7 @@ impl GetBitCommand {
             .string_bytes_clone()
             .ok_or(ProtocolError::InvalidArgument("getbit"))?;
 
-        let offset = items[2].parse_u64().ok_or(ProtocolError::Custom(
+        let offset = items[2].parse_u64().ok_or(ProtocolError::response(
             "ERR bit offset is not an integer or out of range",
         ))?;
 
@@ -90,7 +90,7 @@ impl Command for GetBitCommand {
     ) -> Result<Value, CacheCatError> {
         if let Some(vec) = client.transaction_queue.as_mut() {
             vec.push(self.raft_request(items)?);
-            return Ok(Value::SimpleString(String::from("GETBIT")));
+            return Ok(Value::queued());
         }
         let params = self.read_operation(items)?;
         server.app.read(params, client.db_number).await

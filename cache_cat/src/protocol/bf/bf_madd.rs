@@ -1,9 +1,10 @@
 use crate::error::{CacheCatError, ProtocolError};
 use crate::mocha::{EntrySnapshot, ExpirePolicy, MochaOperation};
+use crate::protocol::bf::error::{BloomOperation, from_engine};
 use crate::protocol::command::{Client, Command};
 use crate::protocol::raft_command::RaftCommand;
 use crate::raft::network::redis_server::RedisServer;
-use crate::raft::types::core::mocha::bloom_filter::{BloomError, BloomObject};
+use crate::raft::types::core::mocha::bloom_filter::BloomObject;
 use crate::raft::types::core::mocha::cas::ComputeCommand;
 use crate::raft::types::core::mocha::core::MyValue;
 use crate::raft::types::core::response_value::Value;
@@ -106,7 +107,6 @@ impl ComputeCommand for BfMAddReq {
         entry: EntrySnapshot<MyValue>,
         _write_clock: u64,
     ) -> (MochaOperation<MyValue>, Value) {
-
         let expire = entry.get_expire_policy();
         let (replies, mutated) = {
             let bloom = match &entry.value.data {
@@ -140,7 +140,10 @@ impl ComputeCommand for BfMAddReq {
         let mut bloom = match BloomObject::redis_default() {
             Ok(bloom) => bloom,
             Err(error) => {
-                return (MochaOperation::Abort, bloom_create_error(error).into());
+                return (
+                    MochaOperation::Abort,
+                    from_engine(error, BloomOperation::Create).into(),
+                );
             }
         };
         let (replies, _mutated) = add_items(&mut bloom, &self.items);
@@ -166,22 +169,17 @@ fn add_items(bloom: &mut BloomObject, items: &[Bytes]) -> (Vec<Value>, bool) {
             Ok(false) => {
                 replies.push(Value::Boolean(false));
             }
-            Err(BloomError::Full) => {
-                replies.push(ProtocolError::BloomFilterFull.into());
-                break;
-            }
-            Err(_) => {
-                replies.push(ProtocolError::BloomInsertFailed.into());
+            Err(error) => {
+                let is_full = matches!(
+                    error,
+                    crate::raft::types::core::mocha::bloom_filter::BloomError::Full
+                );
+                replies.push(from_engine(error, BloomOperation::Insert).into());
+                if is_full {
+                    break;
+                }
             }
         }
     }
     (replies, mutated)
-}
-
-#[inline]
-fn bloom_create_error(error: BloomError) -> ProtocolError {
-    match error {
-        BloomError::OutOfMemory => ProtocolError::BloomCreateOutOfMemory,
-        _ => ProtocolError::BloomCreateFailed,
-    }
 }

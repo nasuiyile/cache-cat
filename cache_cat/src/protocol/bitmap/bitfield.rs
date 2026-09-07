@@ -29,7 +29,6 @@ const ERR_INVALID_TYPE: &str = "ERR Invalid bitfield type. Use something like i1
 const ERR_INVALID_OFFSET: &str = "ERR bit offset is not an integer or out of range";
 const ERR_INVALID_INTEGER: &str = "ERR value is not an integer or out of range";
 const ERR_INVALID_OVERFLOW: &str = "ERR Invalid OVERFLOW type specified";
-const ERR_WRONG_TYPE: &str = "WRONGTYPE Operation against a key holding the wrong kind of value";
 
 /// BITFIELD 的整数编码。
 ///
@@ -456,7 +455,6 @@ fn write_bitfield(bytes: &mut BytesMut, encoding: BitFieldEncoding, offset: u64,
     }
 }
 
-
 /// 假设 response_value::Value 中的 RESP Null 变体叫做 `Null`。
 /// 如果项目中叫做 Nil、NullBulkString 等，只需要改这一行。
 #[inline]
@@ -492,10 +490,7 @@ impl ComputeCommand for BitFieldReq {
             ValueObject::Int(value) => value.to_string().into(),
 
             _ => {
-                return (
-                    MochaOperation::Abort,
-                    Value::Error(ERR_WRONG_TYPE.to_string()),
-                );
+                return (MochaOperation::Abort, ProtocolError::WrongType.into());
             }
         };
 
@@ -566,7 +561,7 @@ impl BitFieldCommand {
             match subcommand.as_str() {
                 "GET" => {
                     if index + 2 >= items.len() {
-                        return Err(ProtocolError::Custom(ERR_SYNTAX));
+                        return Err(ProtocolError::response(ERR_SYNTAX));
                     }
 
                     let encoding = parse_encoding(&items[index + 1])?;
@@ -578,7 +573,7 @@ impl BitFieldCommand {
 
                 "SET" => {
                     if index + 3 >= items.len() {
-                        return Err(ProtocolError::Custom(ERR_SYNTAX));
+                        return Err(ProtocolError::response(ERR_SYNTAX));
                     }
 
                     let encoding = parse_encoding(&items[index + 1])?;
@@ -597,7 +592,7 @@ impl BitFieldCommand {
 
                 "INCRBY" => {
                     if index + 3 >= items.len() {
-                        return Err(ProtocolError::Custom(ERR_SYNTAX));
+                        return Err(ProtocolError::response(ERR_SYNTAX));
                     }
 
                     let encoding = parse_encoding(&items[index + 1])?;
@@ -616,7 +611,7 @@ impl BitFieldCommand {
 
                 "OVERFLOW" => {
                     if index + 1 >= items.len() {
-                        return Err(ProtocolError::Custom(ERR_SYNTAX));
+                        return Err(ProtocolError::response(ERR_SYNTAX));
                     }
 
                     overflow = parse_overflow(&items[index + 1])?;
@@ -624,7 +619,7 @@ impl BitFieldCommand {
                 }
 
                 _ => {
-                    return Err(ProtocolError::Custom(ERR_SYNTAX));
+                    return Err(ProtocolError::response(ERR_SYNTAX));
                 }
             }
         }
@@ -638,7 +633,7 @@ fn parse_upper_token(value: &Value) -> Result<String, ProtocolError> {
         .string_bytes_clone()
         .ok_or(ProtocolError::InvalidArgument("bitfield"))?;
 
-    let string = std::str::from_utf8(&bytes).map_err(|_| ProtocolError::Custom(ERR_SYNTAX))?;
+    let string = std::str::from_utf8(&bytes).map_err(|_| ProtocolError::response(ERR_SYNTAX))?;
 
     Ok(string.to_ascii_uppercase())
 }
@@ -646,10 +641,10 @@ fn parse_upper_token(value: &Value) -> Result<String, ProtocolError> {
 fn parse_encoding(value: &Value) -> Result<BitFieldEncoding, ProtocolError> {
     let bytes = value
         .string_bytes_clone()
-        .ok_or(ProtocolError::Custom(ERR_INVALID_TYPE))?;
+        .ok_or(ProtocolError::response(ERR_INVALID_TYPE))?;
 
     if bytes.len() < 2 {
-        return Err(ProtocolError::Custom(ERR_INVALID_TYPE));
+        return Err(ProtocolError::response(ERR_INVALID_TYPE));
     }
 
     /*
@@ -659,15 +654,15 @@ fn parse_encoding(value: &Value) -> Result<BitFieldEncoding, ProtocolError> {
     let signed = match bytes[0] {
         b'i' => true,
         b'u' => false,
-        _ => return Err(ProtocolError::Custom(ERR_INVALID_TYPE)),
+        _ => return Err(ProtocolError::response(ERR_INVALID_TYPE)),
     };
 
     let width_string =
-        std::str::from_utf8(&bytes[1..]).map_err(|_| ProtocolError::Custom(ERR_INVALID_TYPE))?;
+        std::str::from_utf8(&bytes[1..]).map_err(|_| ProtocolError::response(ERR_INVALID_TYPE))?;
 
     let bits = width_string
         .parse::<u8>()
-        .map_err(|_| ProtocolError::Custom(ERR_INVALID_TYPE))?;
+        .map_err(|_| ProtocolError::response(ERR_INVALID_TYPE))?;
 
     let valid = if signed {
         (1..=64).contains(&bits)
@@ -676,7 +671,7 @@ fn parse_encoding(value: &Value) -> Result<BitFieldEncoding, ProtocolError> {
     };
 
     if !valid {
-        return Err(ProtocolError::Custom(ERR_INVALID_TYPE));
+        return Err(ProtocolError::response(ERR_INVALID_TYPE));
     }
 
     Ok(BitFieldEncoding { signed, bits })
@@ -685,7 +680,7 @@ fn parse_encoding(value: &Value) -> Result<BitFieldEncoding, ProtocolError> {
 fn parse_offset(value: &Value, encoding: BitFieldEncoding) -> Result<u64, ProtocolError> {
     let bytes = value
         .string_bytes_clone()
-        .ok_or(ProtocolError::Custom(ERR_INVALID_OFFSET))?;
+        .ok_or(ProtocolError::response(ERR_INVALID_OFFSET))?;
 
     let (multiply_by_width, number_bytes) = match bytes.first() {
         Some(b'#') => (true, &bytes[1..]),
@@ -693,11 +688,11 @@ fn parse_offset(value: &Value, encoding: BitFieldEncoding) -> Result<u64, Protoc
     };
 
     if number_bytes.is_empty() {
-        return Err(ProtocolError::Custom(ERR_INVALID_OFFSET));
+        return Err(ProtocolError::response(ERR_INVALID_OFFSET));
     }
 
-    let number_string =
-        std::str::from_utf8(number_bytes).map_err(|_| ProtocolError::Custom(ERR_INVALID_OFFSET))?;
+    let number_string = std::str::from_utf8(number_bytes)
+        .map_err(|_| ProtocolError::response(ERR_INVALID_OFFSET))?;
 
     /*
      * 使用 u64 解析：
@@ -707,29 +702,29 @@ fn parse_offset(value: &Value, encoding: BitFieldEncoding) -> Result<u64, Protoc
      */
     let base_offset = number_string
         .parse::<u64>()
-        .map_err(|_| ProtocolError::Custom(ERR_INVALID_OFFSET))?;
+        .map_err(|_| ProtocolError::response(ERR_INVALID_OFFSET))?;
 
     let offset = if multiply_by_width {
         base_offset
             .checked_mul(encoding.width())
-            .ok_or(ProtocolError::Custom(ERR_INVALID_OFFSET))?
+            .ok_or(ProtocolError::response(ERR_INVALID_OFFSET))?
     } else {
         base_offset
     };
 
     let end_bit = offset
         .checked_add(encoding.width() - 1)
-        .ok_or(ProtocolError::Custom(ERR_INVALID_OFFSET))?;
+        .ok_or(ProtocolError::response(ERR_INVALID_OFFSET))?;
 
     let required_bytes = (end_bit >> 3)
         .checked_add(1)
-        .ok_or(ProtocolError::Custom(ERR_INVALID_OFFSET))?;
+        .ok_or(ProtocolError::response(ERR_INVALID_OFFSET))?;
 
     if required_bytes > MAX_BITFIELD_STRING_BYTES {
-        return Err(ProtocolError::Custom(ERR_INVALID_OFFSET));
+        return Err(ProtocolError::response(ERR_INVALID_OFFSET));
     }
 
-    usize::try_from(required_bytes).map_err(|_| ProtocolError::Custom(ERR_INVALID_OFFSET))?;
+    usize::try_from(required_bytes).map_err(|_| ProtocolError::response(ERR_INVALID_OFFSET))?;
 
     Ok(offset)
 }
@@ -737,14 +732,14 @@ fn parse_offset(value: &Value, encoding: BitFieldEncoding) -> Result<u64, Protoc
 fn parse_i64_argument(value: &Value) -> Result<i64, ProtocolError> {
     let bytes = value
         .string_bytes_clone()
-        .ok_or(ProtocolError::Custom(ERR_INVALID_INTEGER))?;
+        .ok_or(ProtocolError::response(ERR_INVALID_INTEGER))?;
 
     let string =
-        std::str::from_utf8(&bytes).map_err(|_| ProtocolError::Custom(ERR_INVALID_INTEGER))?;
+        std::str::from_utf8(&bytes).map_err(|_| ProtocolError::response(ERR_INVALID_INTEGER))?;
 
     string
         .parse::<i64>()
-        .map_err(|_| ProtocolError::Custom(ERR_INVALID_INTEGER))
+        .map_err(|_| ProtocolError::response(ERR_INVALID_INTEGER))
 }
 
 fn parse_overflow(value: &Value) -> Result<BitFieldOverflow, ProtocolError> {
@@ -754,7 +749,7 @@ fn parse_overflow(value: &Value) -> Result<BitFieldOverflow, ProtocolError> {
         "WRAP" => Ok(BitFieldOverflow::Wrap),
         "SAT" => Ok(BitFieldOverflow::Sat),
         "FAIL" => Ok(BitFieldOverflow::Fail),
-        _ => Err(ProtocolError::Custom(ERR_INVALID_OVERFLOW)),
+        _ => Err(ProtocolError::response(ERR_INVALID_OVERFLOW)),
     }
 }
 
@@ -779,9 +774,8 @@ impl Command for BitFieldCommand {
     ) -> Result<Value, CacheCatError> {
         if let Some(queue) = client.transaction_queue.as_mut() {
             queue.push(self.raft_request(items)?);
-            return Ok(Value::SimpleString(String::from("BITFIELD")));
+            return Ok(Value::queued());
         }
-
         let operation = self.raft_request(items)?;
         let value = server.app.write(operation, client.db_number).await?;
         Ok(value)

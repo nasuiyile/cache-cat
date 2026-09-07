@@ -29,33 +29,30 @@ impl HelloParam {
         if items.is_empty() {
             return Err(ProtocolError::WrongArgCount("HELLO"));
         }
-
         let mut proto_version: Option<u8> = None;
         let mut username = None;
         let mut password = None;
         let mut client_name = None;
-
         let mut idx = 1; // Skip command name
-
         // Parse optional protocol version
         if idx < items.len() {
             let proto_val = &items[idx];
             let requested = match proto_val {
                 Value::Integer(v) => {
                     if *v < 0 || *v > 255 {
-                        return Err(ProtocolError::Custom(
+                        return Err(ProtocolError::response(
                             "NOPROTO unsupported protocol version",
                         ));
                     }
                     *v as u8
                 }
-                Value::BulkString(Some(data)) => String::from_utf8_lossy(data)
-                    .parse::<u8>()
-                    .map_err(|_| {
-                        ProtocolError::Custom(
+                Value::BulkString(Some(data)) => {
+                    String::from_utf8_lossy(data).parse::<u8>().map_err(|_| {
+                        ProtocolError::response(
                             "ERR Protocol version is not an integer or out of range",
                         )
-                    })?,
+                    })?
+                }
                 Value::BulkString(None) => {
                     return Err(ProtocolError::InvalidArgument(
                         "protocol version cannot be null",
@@ -67,18 +64,15 @@ impl HelloParam {
                     ));
                 }
             };
-
             // Validate protocol version
             if requested != 2 && requested != 3 {
-                return Err(ProtocolError::Custom(
+                return Err(ProtocolError::response(
                     "NOPROTO unsupported protocol version",
                 ));
             }
-
             proto_version = Some(requested);
             idx += 1;
         }
-
         // Parse optional AUTH and/or SETNAME
         while idx < items.len() {
             let option = match &items[idx] {
@@ -90,7 +84,6 @@ impl HelloParam {
                     ));
                 }
             };
-
             match option.as_str() {
                 "AUTH" => {
                     idx += 1;
@@ -99,7 +92,6 @@ impl HelloParam {
                     if idx >= items.len() {
                         return Err(ProtocolError::WrongArgCount("HELLO AUTH"));
                     }
-
                     // Parse username (Redis 6+ style) or password (Redis 5 style)
                     let auth_username = match &items[idx] {
                         Value::BulkString(Some(data)) => {
@@ -113,14 +105,11 @@ impl HelloParam {
                             ));
                         }
                     };
-
                     idx += 1;
-
                     // Check if next argument is password
                     if idx >= items.len() {
                         return Err(ProtocolError::WrongArgCount("HELLO AUTH missing password"));
                     }
-
                     let auth_password = match &items[idx] {
                         Value::BulkString(Some(data)) => String::from_utf8_lossy(data).to_string(),
                         Value::BulkString(None) => {
@@ -135,7 +124,6 @@ impl HelloParam {
                             ));
                         }
                     };
-
                     // Redis 6 format with username, or Redis 5 format (username is "default")
                     if auth_username.is_some() {
                         username = auth_username;
@@ -150,7 +138,6 @@ impl HelloParam {
                     if idx >= items.len() {
                         return Err(ProtocolError::WrongArgCount("HELLO SETNAME"));
                     }
-
                     let name = match &items[idx] {
                         Value::BulkString(Some(data)) => {
                             Some(String::from_utf8_lossy(data).to_string())
@@ -163,7 +150,6 @@ impl HelloParam {
                             ));
                         }
                     };
-
                     client_name = name;
                     idx += 1;
                 }
@@ -172,7 +158,6 @@ impl HelloParam {
                 }
             }
         }
-
         Ok(HelloParam {
             proto_version,
             username,
@@ -195,17 +180,13 @@ impl Command for HelloCommand {
             Ok(p) => p,
             Err(e) => return Err(e.into()),
         };
-
         // Handle authentication if password provided
         if let Some(password) = &params.password {
             // Validate password against server config
             match &server.app.config.password {
                 Some(configured_password) => {
                     if password != configured_password {
-                        return Err(ProtocolError::Custom(
-                            "WRONGPASS invalid username-password pair",
-                        )
-                        .into());
+                        return Err(ProtocolError::AuthenticationFailed.into());
                     }
                     client.authenticated = true;
                 }
@@ -216,12 +197,10 @@ impl Command for HelloCommand {
                 }
             }
         }
-
         // Set client name if provided
         if let Some(name) = params.client_name {
             client.name = name;
         }
-
         // Switch protocol only when a version was explicitly requested;
         // a bare HELLO just reports the current connection context.
         match params.proto_version {
@@ -229,13 +208,10 @@ impl Command for HelloCommand {
             Some(3) => client.framed.codec_mut().switch_resp3(),
             _ => {}
         }
-
         let current_proto = client.framed.codec().proto_version();
-
         // Build the response: a map reply, exactly like Redis.
         // (The encoder emits %7 for RESP3 and a flat *14 array for RESP2.)
         let bulk = |s: &'static [u8]| Value::BulkString(Some(Bytes::from_static(s)));
-
         let map_pairs = vec![
             (bulk(b"server"), bulk(b"redis")),
             (

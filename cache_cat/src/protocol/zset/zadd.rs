@@ -6,6 +6,7 @@ use crate::raft::network::redis_server::RedisServer;
 use crate::raft::types::core::mocha::cas::ComputeCommand;
 use crate::raft::types::core::mocha::core::MyValue;
 use crate::raft::types::core::response_value::Value;
+use crate::raft::types::core::sorted_set::SortedSet;
 use crate::raft::types::core::value_object::ValueObject::ZSet;
 use crate::raft::types::entry::bae_operation::BaseOperation;
 use crate::raft::types::entry::bae_operation::BaseOperation::ZAdd;
@@ -17,7 +18,6 @@ use serde::{Deserialize, Serialize};
 use std::fmt;
 use std::fmt::Display;
 use std::sync::Arc;
-use crate::raft::types::core::sorted_set::SortedSet;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ZAddParam {
@@ -98,13 +98,13 @@ impl ZAddCommand {
         }
 
         if nx && xx {
-            return Err(ProtocolError::Custom(
+            return Err(ProtocolError::response(
                 "ERR XX and NX options at the same time are not compatible",
             ));
         }
 
         if gt && lt {
-            return Err(ProtocolError::Custom(
+            return Err(ProtocolError::response(
                 "ERR GT and LT options at the same time are not compatible",
             ));
         }
@@ -121,7 +121,7 @@ impl ZAddCommand {
             let score = remaining[j]
                 .as_str_lossy()
                 .and_then(|v| v.parse::<f64>().ok())
-                .ok_or(ProtocolError::Custom("ERR value is not a valid float"))?;
+                .ok_or(ProtocolError::response("ERR value is not a valid float"))?;
 
             let member = remaining[j + 1]
                 .string_bytes_clone()
@@ -231,10 +231,7 @@ impl ComputeCommand for ZAddReq {
                     Value::Integer(changed_count),
                 )
             }
-            _ => (
-                MochaOperation::Abort,
-                Value::Error("zadd: key is not a zset".to_string()),
-            ),
+            _ => (MochaOperation::Abort, ProtocolError::WrongType.into()),
         }
     }
 

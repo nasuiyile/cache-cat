@@ -43,23 +43,17 @@ impl LPushCommand {
         if items.len() < 3 {
             return Err(ProtocolError::WrongArgCount("lpush"));
         }
-
-        // Parse key
         let key = items[1]
             .string_bytes_clone()
             .ok_or(ProtocolError::InvalidArgument("key"))?;
-
-        // Parse elements from items[2..]
         let elements = items
             .iter()
             .skip(2)
             .map_while(Value::string_bytes_clone)
             .collect::<Vec<_>>();
-
         if elements.len() < items.len() - 2 {
             return Err(ProtocolError::InvalidArgument("element"));
         }
-
         Ok(LPushArgs { key, elements })
     }
 }
@@ -90,7 +84,7 @@ impl Command for LPushCommand {
     ) -> Result<Value, CacheCatError> {
         if let Some(vec) = client.transaction_queue.as_mut() {
             vec.push(self.raft_request(items)?);
-            return Ok(Value::SimpleString(String::from("QUEUED")));
+            return Ok(Value::queued());
         }
         // Parse arguments
         let operation = self.raft_request(items)?;
@@ -149,7 +143,7 @@ impl ComputeCommand for LPushReq {
             }
             _ => (
                 MochaOperation::Abort,
-                Value::Error("Key exists but is not a List".to_string()),
+                ProtocolError::WrongType.into(),
             ),
         }
     }

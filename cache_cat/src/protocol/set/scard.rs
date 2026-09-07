@@ -84,7 +84,7 @@ impl Command for SCardCommand {
         // 如果在事务上下文中，将命令加入队列
         if let Some(vec) = client.transaction_queue.as_mut() {
             vec.push(self.raft_request(items)?);
-            return Ok(Value::SimpleString(String::from("QUEUED")));
+            return Ok(Value::queued());
         }
         let params = self.read_operation(items)?;
         server.app.read(params, client.db_number).await

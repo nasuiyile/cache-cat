@@ -97,7 +97,7 @@ impl Command for BfMExistsCommand {
     ) -> Result<Value, CacheCatError> {
         if let Some(queue) = client.transaction_queue.as_mut() {
             queue.push(self.raft_request(items)?);
-            return Ok(Value::SimpleString(String::from("QUEUED")));
+            return Ok(Value::queued());
         }
         let operation = self.read_operation(items)?;
         server.app.read(operation, client.db_number).await

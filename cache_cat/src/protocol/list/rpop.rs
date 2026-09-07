@@ -37,11 +37,9 @@ impl RPopCommand {
         if items.len() < 2 || items.len() > 3 {
             return Err(ProtocolError::WrongArgCount("rpop"));
         }
-
         let key = items[1]
             .string_bytes_clone()
             .ok_or(ProtocolError::InvalidArgument("key"))?;
-
         let count = if items.len() == 3 {
             Some(
                 items[2]
@@ -51,7 +49,6 @@ impl RPopCommand {
         } else {
             None
         };
-
         Ok(RPopArgs { key, count })
     }
 }
@@ -83,12 +80,10 @@ impl Command for RPopCommand {
     ) -> Result<Value, CacheCatError> {
         if let Some(vec) = client.transaction_queue.as_mut() {
             vec.push(self.raft_request(items)?);
-            return Ok(Value::SimpleString(String::from("QUEUED")));
+            return Ok(Value::queued());
         }
-
         let operation = self.raft_request(items)?;
         let value = server.app.write(operation, client.db_number).await?;
-
         Ok(value)
     }
 }
@@ -149,7 +144,7 @@ impl ComputeCommand for RPopReq {
             }
             _ => (
                 Abort,
-                Value::Error("Key exists but is not a List".to_string()),
+                ProtocolError::WrongType.into(),
             ),
         }
     }

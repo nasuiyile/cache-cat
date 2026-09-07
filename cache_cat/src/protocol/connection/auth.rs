@@ -32,15 +32,15 @@ impl Command for AuthCommand {
                 .config
                 .password
                 .as_ref()
-                .ok_or(ProtocolError::Custom(
-                    "AUTH called without any password configured",
+                .ok_or(ProtocolError::response(
+                    "ERR AUTH <password> called without any password configured for the default user. Are you sure your configuration is correct?",
                 ))?;
 
         if password == *configured_password {
             client.authenticated = true;
             Ok(Value::ok())
         } else {
-            Err(ProtocolError::Custom("invalid username-password pair").into())
+            Err(ProtocolError::AuthenticationFailed.into())
         }
     }
 }

@@ -21,7 +21,7 @@ impl Command for DiscardCommand {
 
         // MULTI must be enabled first
         if client.transaction_queue.is_none() {
-            return Err(ProtocolError::Custom("DISCARD without MULTI").into());
+            return Err(ProtocolError::response("ERR DISCARD without MULTI").into());
         }
 
         // Clear transaction queue

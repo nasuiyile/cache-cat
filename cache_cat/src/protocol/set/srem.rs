@@ -72,7 +72,7 @@ impl Command for SRemCommand {
         if let Some(vec) = client.transaction_queue.as_mut() {
             vec.push(self.raft_request(items)?);
 
-            return Ok(Value::SimpleString(String::from("QUEUED")));
+            return Ok(Value::queued());
         }
 
         // Build raft operation
@@ -162,9 +162,7 @@ impl ComputeCommand for SRemReq {
             // Key exists but is not a Set - return error (Redis behavior)
             _ => (
                 MochaOperation::Abort,
-                Value::Error(
-                    "WRONGTYPE Operation against a key holding the wrong kind of value".into(),
-                ),
+                ProtocolError::WrongType.into(),
             ),
         }
     }

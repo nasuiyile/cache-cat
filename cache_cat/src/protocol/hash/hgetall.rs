@@ -33,7 +33,6 @@ impl ReadCommand for HGetAllParams {
     fn key(&self) -> &Bytes {
         &self.key
     }
-
     fn execute(&self, value: Option<EntrySnapshot<MyValue>>) -> Value {
         match value {
             None => Value::Map(Vec::new()),
@@ -49,7 +48,6 @@ impl ReadCommand for HGetAllParams {
                             )
                         })
                         .collect::<Vec<_>>();
-
                     Value::Map(result)
                 }
                 _ => CacheCatError::from(ProtocolError::WrongType).into(),
@@ -68,11 +66,9 @@ impl HGetAllCommand {
         if items.len() < 2 {
             return Err(ProtocolError::WrongArgCount("hgetall"));
         }
-
         let key = items[1]
             .string_bytes_clone()
             .ok_or(ProtocolError::InvalidArgument("key"))?;
-
         Ok(HGetAllParams { key })
     }
 }
@@ -93,7 +89,7 @@ impl Command for HGetAllCommand {
     ) -> Result<Value, CacheCatError> {
         if let Some(vec) = client.transaction_queue.as_mut() {
             vec.push(self.raft_request(items)?);
-            return Ok(Value::SimpleString(String::from("QUEUED")));
+            return Ok(Value::queued());
         }
         let params = self.read_operation(items)?;
         server.app.read(params, client.db_number).await

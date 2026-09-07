@@ -41,23 +41,16 @@ impl LSetCommand {
         if items.len() != 4 {
             return Err(ProtocolError::WrongArgCount("lset"));
         }
-
-        // Parse key
         let key = items[1]
             .string_bytes_clone()
             .ok_or(ProtocolError::InvalidArgument("key"))?;
-
-        // Parse index (must be an integer)
         let index_str = items[2]
             .string_bytes_clone()
             .ok_or(ProtocolError::InvalidArgument("index"))?;
-
         let index_str = String::from_utf8_lossy(&index_str);
         let index = index_str
             .parse::<i64>()
             .map_err(|_| ProtocolError::InvalidArgument("index must be an integer"))?;
-
-        // Parse value
         let value = items[3]
             .string_bytes_clone()
             .ok_or(ProtocolError::InvalidArgument("value"))?;
@@ -94,7 +87,7 @@ impl Command for LSetCommand {
     ) -> Result<Value, CacheCatError> {
         if let Some(vec) = client.transaction_queue.as_mut() {
             vec.push(self.raft_request(items)?);
-            return Ok(Value::SimpleString(String::from("QUEUED")));
+            return Ok(Value::queued());
         }
         // Parse arguments
         let operation = self.raft_request(items)?;
@@ -147,15 +140,13 @@ impl ComputeCommand for LSetReq {
                 } else {
                     self.index
                 };
-
                 // 检查索引是否有效
                 if index < 0 || index >= len {
                     return (
                         MochaOperation::Abort,
-                        Value::Error("ERR index out of range".to_string()),
+                        ProtocolError::response("ERR index out of range").into(),
                     );
                 }
-
                 // 将索引转换为usize并替换元素
                 let idx = index as usize;
                 if let Some(element) = list.get_mut(idx) {
@@ -164,10 +155,9 @@ impl ComputeCommand for LSetReq {
                     // 理论上不会发生，因为我们已经检查了索引范围
                     return (
                         MochaOperation::Abort,
-                        Value::Error("ERR index out of range".to_string()),
+                        ProtocolError::response("ERR index out of range").into(),
                     );
                 }
-
                 (
                     MochaOperation::Insert {
                         value: entry.value.clone(),
@@ -178,9 +168,7 @@ impl ComputeCommand for LSetReq {
             }
             _ => (
                 MochaOperation::Abort,
-                Value::Error(
-                    "WRONGTYPE Operation against a key holding the wrong kind of value".to_string(),
-                ),
+                ProtocolError::WrongType.into(),
             ),
         }
     }
@@ -189,7 +177,7 @@ impl ComputeCommand for LSetReq {
         // LSET cannot create a new key
         (
             MochaOperation::Abort,
-            Value::Error("ERR no such key".to_string()),
+            ProtocolError::response("ERR no such key").into(),
         )
     }
 }

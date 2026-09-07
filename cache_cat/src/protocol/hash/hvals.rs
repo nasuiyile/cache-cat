@@ -34,7 +34,6 @@ impl ReadCommand for HValsParams {
     fn key(&self) -> &Bytes {
         &self.key
     }
-
     fn execute(&self, value: Option<EntrySnapshot<MyValue>>) -> Value {
         match value {
             None => Value::Array(Some(vec![])),
@@ -59,13 +58,10 @@ impl ReadCommand for HValsParams {
 pub struct HValsCommand;
 
 impl HValsCommand {
-    /// Parse arguments from RESP items
-    /// Format: HVALS key
     fn parse_args(items: &[Value]) -> Result<HValsParams, ProtocolError> {
         if items.len() < 2 {
             return Err(ProtocolError::WrongArgCount("hvals"));
         }
-
         let key = items[1]
             .string_bytes_clone()
             .ok_or(ProtocolError::InvalidArgument("key"))?;
@@ -90,7 +86,7 @@ impl Command for HValsCommand {
     ) -> Result<Value, CacheCatError> {
         if let Some(vec) = client.transaction_queue.as_mut() {
             vec.push(self.raft_request(items)?);
-            return Ok(Value::SimpleString(String::from("QUEUED")));
+            return Ok(Value::queued());
         }
         let params = self.read_operation(items)?;
         server.app.read(params, client.db_number).await

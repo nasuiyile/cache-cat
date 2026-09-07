@@ -34,7 +34,6 @@ impl ReadCommand for HKeysParams {
     fn key(&self) -> &Bytes {
         &self.key
     }
-
     fn execute(&self, value: Option<EntrySnapshot<MyValue>>) -> Value {
         match value {
             None => Value::Array(Some(vec![])),
@@ -62,11 +61,9 @@ impl HKeysCommand {
         if items.len() < 2 {
             return Err(ProtocolError::WrongArgCount("hkeys"));
         }
-
         let key = items[1]
             .string_bytes_clone()
             .ok_or(ProtocolError::InvalidArgument("key"))?;
-
         Ok(HKeysParams { key })
     }
 }
@@ -88,7 +85,7 @@ impl Command for HKeysCommand {
     ) -> Result<Value, CacheCatError> {
         if let Some(vec) = client.transaction_queue.as_mut() {
             vec.push(self.raft_request(items)?);
-            return Ok(Value::SimpleString(String::from("QUEUED")));
+            return Ok(Value::queued());
         }
         let params = ReadOperation::HKeys(Self::parse_args(items)?);
         server.app.read(params, client.db_number).await

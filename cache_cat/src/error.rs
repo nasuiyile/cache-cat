@@ -8,6 +8,7 @@ use crate::raft::types::core::response_value::Value;
 use crate::raft::types::raft_types::TypeConfig;
 use mlua::prelude::LuaError;
 use openraft::error::RPCError;
+use std::borrow::Cow;
 use std::error::Error as StdError;
 use std::fmt;
 use std::fmt::Display;
@@ -195,7 +196,7 @@ pub enum ProtocolError {
     DbNotExist,
 
     /// Unknown command
-    #[error("unknown command '{0}'")]
+    #[error("ERR unknown command '{0}'")]
     UnknownCommand(String),
 
     /// Wrong number of arguments for a command
@@ -214,9 +215,7 @@ pub enum ProtocolError {
     #[error("WRONGTYPE Operation against a key holding the wrong kind of value")]
     WrongType,
 
-    #[error(
-        "READONLY This instance is not the master. Write operations are only allowed on the master node."
-    )]
+    #[error("READONLY You can't write against a read only replica.")]
     ReadOnly,
 
     /// Value is not a valid integer
@@ -227,96 +226,59 @@ pub enum ProtocolError {
     #[error("ERR increment or decrement would overflow")]
     Overflow,
 
-    /// Custom error with full Redis error message
+    /// Command-specific error containing the complete Redis reply text.
     #[error("{0}")]
-    Custom(&'static str),
+    Response(Cow<'static, str>),
 
-    #[error("ERR Client sent AUTH, but no password is set")]
+    #[error("NOAUTH Authentication required.")]
     NotAuthenticated,
 
-    /// Bloom filter is full and cannot scale.
-    #[error("ERR non scaling filter is full")]
-    BloomFilterFull,
+    #[error("WRONGPASS invalid username-password pair or user is disabled.")]
+    AuthenticationFailed,
+}
 
-    /// Failed to insert an item into a Bloom filter.
-    #[error("ERR problem inserting into filter")]
-    BloomInsertFailed,
+impl ProtocolError {
+    /// Build a command-specific Redis error reply without adding a global enum variant.
+    pub fn response(message: impl Into<Cow<'static, str>>) -> Self {
+        Self::Response(message.into())
+    }
+}
 
-    /// Not enough memory to create a Bloom filter.
-    #[error("ERR Insufficient memory to create filter")]
-    BloomCreateOutOfMemory,
+#[cfg(test)]
+mod protocol_error_tests {
+    use super::ProtocolError;
 
-    /// Failed to create a Bloom filter.
-    #[error("ERR could not create filter")]
-    BloomCreateFailed,
-
-    /// BF.RESERVE: error rate cannot be parsed.
-    #[error("ERR bad error rate")]
-    BloomBadErrorRate,
-
-    /// BF.RESERVE: error rate is outside Redis supported range.
-    #[error("ERR error rate must be in the range (0.000000, 1.000000)")]
-    BloomErrorRateOutOfRange,
-
-    /// BF.RESERVE: capacity cannot be parsed.
-    #[error("ERR bad capacity")]
-    BloomBadCapacity,
-
-    /// BF.RESERVE: capacity outside Redis supported range.
-    #[error("ERR capacity must be in the range [1, 1048576]")]
-    BloomCapacityOutOfRange,
-
-    /// BF.RESERVE EXPANSION without a following value.
-    #[error("ERR no expansion")]
-    BloomNoExpansion,
-
-    /// BF.RESERVE: expansion cannot be parsed.
-    #[error("ERR bad expansion")]
-    BloomBadExpansion,
-
-    /// BF.RESERVE: expansion outside Redis supported range.
-    #[error("ERR expansion must be in the range [0, 32768]")]
-    BloomExpansionOutOfRange,
-
-    /// EXPANSION > 0 cannot be combined with NONSCALING.
-    #[error("Nonscaling filters cannot expand")]
-    BloomNonScalingCannotExpand,
-
-    /// BF.RESERVE on an already existing Bloom filter.
-    #[error("ERR item exists")]
-    BloomItemExists,
-    /// BF.INFO key does not exist.
-    #[error("ERR not found")]
-    BloomNotFound,
-    /// BF.INFO received an unsupported information selector.
-    #[error("Invalid information value")]
-    BloomInvalidInformationValue,
-
-    #[error("Bad error rate")]
-    BloomInsertBadErrorRate,
-
-    #[error("Bad capacity")]
-    BloomInsertBadCapacity,
-
-    #[error("Bad expansion")]
-    BloomInsertBadExpansion,
-
-    #[error("Unknown argument received")]
-    BloomInsertUnknownArgument,
-
-    #[error("Second argument must be numeric")]
-    BloomScanDumpIteratorNotNumeric,
-    #[error("ERR Second argument must be numeric")]
-    BloomLoadChunkIteratorNotNumeric,
-
-    #[error("ERR received bad data")]
-    BloomLoadChunkBadData,
-
-    #[error("ERR invalid offset - no link found")]
-    BloomLoadChunkInvalidOffset,
-
-    #[error("ERR invalid chunk - Too big for current filter")]
-    BloomLoadChunkTooBig,
+    #[test]
+    fn shared_errors_match_redis_replies() {
+        assert_eq!(
+            ProtocolError::WrongType.to_string(),
+            "WRONGTYPE Operation against a key holding the wrong kind of value"
+        );
+        assert_eq!(
+            ProtocolError::NotAnInteger.to_string(),
+            "ERR value is not an integer or out of range"
+        );
+        assert_eq!(
+            ProtocolError::Overflow.to_string(),
+            "ERR increment or decrement would overflow"
+        );
+        assert_eq!(
+            ProtocolError::NotAuthenticated.to_string(),
+            "NOAUTH Authentication required."
+        );
+        assert_eq!(
+            ProtocolError::AuthenticationFailed.to_string(),
+            "WRONGPASS invalid username-password pair or user is disabled."
+        );
+        assert_eq!(
+            ProtocolError::ReadOnly.to_string(),
+            "READONLY You can't write against a read only replica."
+        );
+        assert_eq!(
+            ProtocolError::response(format!("ERR dynamic {}", "reply")).to_string(),
+            "ERR dynamic reply"
+        );
+    }
 }
 
 /// TLS-related errors

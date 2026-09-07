@@ -35,7 +35,6 @@ impl LLenCommand {
         if items.len() != 2 {
             return Err(ProtocolError::WrongArgCount("llen"));
         }
-
         let key = items[1]
             .string_bytes_clone()
             .ok_or(ProtocolError::InvalidArgument("key"))?;
@@ -76,9 +75,8 @@ impl Command for LLenCommand {
     ) -> Result<Value, CacheCatError> {
         if let Some(vec) = client.transaction_queue.as_mut() {
             vec.push(self.raft_request(items)?);
-            return Ok(Value::SimpleString(String::from("QUEUED")));
+            return Ok(Value::queued());
         }
-
         let params = self.read_operation(items)?;
         server.app.read(params, client.db_number).await
     }

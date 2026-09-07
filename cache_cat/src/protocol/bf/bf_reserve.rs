@@ -1,11 +1,12 @@
 use crate::error::{CacheCatError, ProtocolError};
 use crate::mocha::{EntrySnapshot, ExpirePolicy, MochaOperation};
+use crate::protocol::bf::error::{BloomOperation, from_engine};
 use crate::protocol::command::{Client, Command};
 use crate::protocol::raft_command::RaftCommand;
 use crate::raft::network::redis_server::RedisServer;
 use crate::raft::types::core::mocha::bloom_filter::{
     BLOOM_CAPACITY_MAX, BLOOM_CAPACITY_MIN, BLOOM_ERROR_RATE_CAP, BLOOM_EXPANSION_MAX,
-    BLOOM_EXPANSION_MIN, BloomError, BloomObject, DEFAULT_BLOOM_EXPANSION,
+    BLOOM_EXPANSION_MIN, BloomObject, DEFAULT_BLOOM_EXPANSION,
 };
 use crate::raft::types::core::mocha::cas::ComputeCommand;
 use crate::raft::types::core::mocha::core::MyValue;
@@ -21,6 +22,10 @@ use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
 use std::fmt;
 use std::sync::Arc;
+
+const BAD_ERROR_RATE: &str = "ERR bad error rate";
+const BAD_CAPACITY: &str = "ERR bad capacity";
+const BAD_EXPANSION: &str = "ERR bad expansion";
 
 /// BF.RESERVE key error_rate capacity
 ///     [EXPANSION expansion]
@@ -66,9 +71,10 @@ impl BfReserveParams {
          */
         let error_bytes = values[2]
             .string_bytes_clone()
-            .ok_or(ProtocolError::BloomBadErrorRate)?;
+            .ok_or(ProtocolError::response(BAD_ERROR_RATE))?;
 
-        let mut error_rate = parse_f64(&error_bytes).ok_or(ProtocolError::BloomBadErrorRate)?;
+        let mut error_rate =
+            parse_f64(&error_bytes).ok_or(ProtocolError::response(BAD_ERROR_RATE))?;
 
         /*
          * Redis config says valid range is:
@@ -78,11 +84,13 @@ impl BfReserveParams {
          * NaN/Infinity should not be accepted.
          */
         if !error_rate.is_finite() {
-            return Err(ProtocolError::BloomBadErrorRate);
+            return Err(ProtocolError::response(BAD_ERROR_RATE));
         }
 
         if error_rate <= 0.0 || error_rate >= 1.0 {
-            return Err(ProtocolError::BloomErrorRateOutOfRange);
+            return Err(ProtocolError::response(
+                "ERR error rate must be in the range (0.000000, 1.000000)",
+            ));
         }
 
         /*
@@ -101,12 +109,14 @@ impl BfReserveParams {
          */
         let capacity_bytes = values[3]
             .string_bytes_clone()
-            .ok_or(ProtocolError::BloomBadCapacity)?;
+            .ok_or(ProtocolError::response(BAD_CAPACITY))?;
 
-        let capacity = parse_i64(&capacity_bytes).ok_or(ProtocolError::BloomBadCapacity)?;
+        let capacity = parse_i64(&capacity_bytes).ok_or(ProtocolError::response(BAD_CAPACITY))?;
 
         if capacity < BLOOM_CAPACITY_MIN as i64 || capacity > BLOOM_CAPACITY_MAX as i64 {
-            return Err(ProtocolError::BloomCapacityOutOfRange);
+            return Err(ProtocolError::response(
+                "ERR capacity must be in the range [1, 1073741824]",
+            ));
         }
 
         let capacity = capacity as u64;
@@ -160,19 +170,21 @@ impl BfReserveParams {
                  * EXPANSION must have a value.
                  */
                 if index + 1 >= values.len() {
-                    return Err(ProtocolError::BloomNoExpansion);
+                    return Err(ProtocolError::response("ERR no expansion"));
                 }
                 let expansion_bytes = values[index + 1]
                     .string_bytes_clone()
-                    .ok_or(ProtocolError::BloomBadExpansion)?;
+                    .ok_or(ProtocolError::response(BAD_EXPANSION))?;
 
                 let parsed_expansion =
-                    parse_i64(&expansion_bytes).ok_or(ProtocolError::BloomBadExpansion)?;
+                    parse_i64(&expansion_bytes).ok_or(ProtocolError::response(BAD_EXPANSION))?;
 
                 if parsed_expansion < BLOOM_EXPANSION_MIN as i64
                     || parsed_expansion > BLOOM_EXPANSION_MAX as i64
                 {
-                    return Err(ProtocolError::BloomExpansionOutOfRange);
+                    return Err(ProtocolError::response(
+                        "ERR expansion must be in the range [0, 32768]",
+                    ));
                 }
                 expansion = parsed_expansion as u32;
                 expansion_was_set = true;
@@ -208,7 +220,7 @@ impl BfReserveParams {
              *
              * Nonscaling filters cannot expand
              */
-            return Err(ProtocolError::BloomNonScalingCannotExpand);
+            return Err(ProtocolError::response("Nonscaling filters cannot expand"));
         }
 
         Ok(Self {
@@ -253,19 +265,12 @@ impl Command for BfReserveCommand {
         items: &[Value],
         server: &RedisServer,
     ) -> Result<Value, CacheCatError> {
-        /*
-         * MULTI / EXEC:
-         *
-         * Parse before queueing, just like your other commands.
-         */
+
         if let Some(queue) = client.transaction_queue.as_mut() {
             queue.push(self.raft_request(items)?);
-
-            return Ok(Value::SimpleString("QUEUED".to_string()));
+            return Ok(Value::queued());
         }
-
         let operation = self.raft_request(items)?;
-
         server.app.write(operation, client.db_number).await
     }
 }
@@ -273,13 +278,9 @@ impl Command for BfReserveCommand {
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct BfReserveReq {
     pub key: Bytes,
-
     pub error_rate: f64,
-
     pub capacity: u64,
-
     pub expansion: u32,
-
     pub non_scaling: bool,
 }
 
@@ -312,16 +313,13 @@ impl ComputeCommand for BfReserveReq {
         _write_clock: u64,
     ) -> (MochaOperation<MyValue>, Value) {
         match &entry.value.data {
-            ValueObject::Bloom(_) => (MochaOperation::Abort, ProtocolError::BloomItemExists.into()),
+            ValueObject::Bloom(_) => (
+                MochaOperation::Abort,
+                ProtocolError::response("ERR item exists").into(),
+            ),
             _ => (MochaOperation::Abort, ProtocolError::WrongType.into()),
         }
     }
-
-    /*
-     * init() means key doesn't exist.
-     *
-     * BF.RESERVE creates an EMPTY filter.
-     */
     fn init(self) -> (MochaOperation<MyValue>, Value) {
         let bloom = match BloomObject::new(
             self.capacity,
@@ -331,7 +329,10 @@ impl ComputeCommand for BfReserveReq {
         ) {
             Ok(bloom) => bloom,
             Err(error) => {
-                return (MochaOperation::Abort, bloom_create_error(error).into());
+                return (
+                    MochaOperation::Abort,
+                    from_engine(error, BloomOperation::Create).into(),
+                );
             }
         };
         (
@@ -341,14 +342,6 @@ impl ComputeCommand for BfReserveReq {
             },
             Value::SimpleString("OK".to_string()),
         )
-    }
-}
-
-#[inline]
-fn bloom_create_error(error: BloomError) -> ProtocolError {
-    match error {
-        BloomError::OutOfMemory => ProtocolError::BloomCreateOutOfMemory,
-        _ => ProtocolError::BloomCreateFailed,
     }
 }
 

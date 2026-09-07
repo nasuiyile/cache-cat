@@ -1,5 +1,6 @@
 use crate::error::{CacheCatError, ProtocolError};
 use crate::mocha::EntrySnapshot;
+use crate::protocol::bf::error::NOT_FOUND;
 use crate::protocol::command::{Client, Command};
 use crate::protocol::raft_command::{RaftCommand, ReadRaftCommand};
 use crate::raft::network::redis_server::RedisServer;
@@ -14,6 +15,8 @@ use async_trait::async_trait;
 use bytes::Bytes;
 use serde::{Deserialize, Serialize};
 use std::fmt::Display;
+
+const INVALID_INFORMATION_VALUE: &str = "Invalid information value";
 
 /// BF.INFO optional information selector.
 ///
@@ -49,7 +52,7 @@ impl BfInfoField {
         if value.eq_ignore_ascii_case(b"EXPANSION") {
             return Ok(Self::Expansion);
         }
-        Err(ProtocolError::BloomInvalidInformationValue)
+        Err(ProtocolError::response(INVALID_INFORMATION_VALUE))
     }
 
     fn redis_name(self) -> &'static str {
@@ -106,7 +109,7 @@ impl BfInfoParams {
         let field = if items.len() == 3 {
             let value = items[2]
                 .string_bytes_clone()
-                .ok_or(ProtocolError::BloomInvalidInformationValue)?;
+                .ok_or(ProtocolError::response(INVALID_INFORMATION_VALUE))?;
             Some(BfInfoField::parse(value.as_ref())?)
         } else {
             None
@@ -126,7 +129,7 @@ impl ReadCommand for BfInfoParams {
     fn execute(&self, value: Option<EntrySnapshot<MyValue>>) -> Value {
         let entry = match value {
             Some(entry) => entry,
-            None => return ProtocolError::BloomNotFound.into(),
+            None => return ProtocolError::response(NOT_FOUND).into(),
         };
         let bloom = match &entry.value.data {
             ValueObject::Bloom(bloom) => bloom,
@@ -162,12 +165,10 @@ fn info_value(field: BfInfoField, bloom: &BloomObject) -> Value {
         BfInfoField::Size => Value::Integer(usize_to_redis_integer(bloom.info_size())),
         BfInfoField::Filters => Value::Integer(usize_to_redis_integer(bloom.info_filter_count())),
         BfInfoField::Items => Value::Integer(u64_to_redis_integer(bloom.info_items())),
-        BfInfoField::Expansion => {
-            match bloom.info_expansion() {
-                Some(expansion) => Value::Integer(i64::from(expansion)),
-                None => Value::Null,
-            }
-        }
+        BfInfoField::Expansion => match bloom.info_expansion() {
+            Some(expansion) => Value::Integer(i64::from(expansion)),
+            None => Value::Null,
+        },
     }
 }
 
@@ -197,7 +198,7 @@ impl Command for BfInfoCommand {
     ) -> Result<Value, CacheCatError> {
         if let Some(queue) = client.transaction_queue.as_mut() {
             queue.push(self.raft_request(items)?);
-            return Ok(Value::SimpleString(String::from("QUEUED")));
+            return Ok(Value::queued());
         }
         let operation = self.read_operation(items)?;
         server.app.read(operation, client.db_number).await

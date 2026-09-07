@@ -83,7 +83,7 @@ impl Command for ExistsCommand {
     ) -> Result<Value, CacheCatError> {
         if let Some(vec) = client.transaction_queue.as_mut() {
             vec.push(self.raft_request(items)?);
-            return Ok(Value::SimpleString(String::from("QUEUED")));
+            return Ok(Value::queued());
         }
         let params = self.read_operation(items)?;
         server.app.multi_read(params, client.db_number).await

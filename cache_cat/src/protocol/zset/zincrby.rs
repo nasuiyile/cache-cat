@@ -6,6 +6,7 @@ use crate::raft::network::redis_server::RedisServer;
 use crate::raft::types::core::mocha::cas::ComputeCommand;
 use crate::raft::types::core::mocha::core::MyValue;
 use crate::raft::types::core::response_value::Value;
+use crate::raft::types::core::sorted_set::SortedSet;
 use crate::raft::types::core::value_object::ValueObject;
 use crate::raft::types::entry::bae_operation::BaseOperation;
 use crate::raft::types::entry::bae_operation::BaseOperation::ZIncrBy;
@@ -16,7 +17,6 @@ use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
 use std::fmt;
 use std::sync::Arc;
-use crate::raft::types::core::sorted_set::SortedSet;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ZIncrByParam {
@@ -101,7 +101,7 @@ impl Command for ZIncrByCommand {
         // Keep behavior consistent with INCRBY.
         if let Some(vec) = client.transaction_queue.as_mut() {
             vec.push(self.raft_request(items)?);
-            return Ok(Value::SimpleString(String::from("QUEUED")));
+            return Ok(Value::queued());
         }
 
         let operation = self.raft_request(items)?;
@@ -154,9 +154,10 @@ impl ComputeCommand for ZIncrByReq {
                         None => {
                             return (
                                 MochaOperation::Abort,
-                                Value::Error(
-                                    "ERR resulting score is not a number (NaN)".to_string(),
-                                ),
+                                ProtocolError::response(
+                                    "ERR resulting score is not a number (NaN)",
+                                )
+                                .into(),
                             );
                         }
                     }
@@ -173,12 +174,7 @@ impl ComputeCommand for ZIncrByReq {
                 )
             }
 
-            _ => (
-                MochaOperation::Abort,
-                Value::Error(
-                    "WRONGTYPE Operation against a key holding the wrong kind of value".to_string(),
-                ),
-            ),
+            _ => (MochaOperation::Abort, ProtocolError::WrongType.into()),
         }
     }
 
@@ -190,7 +186,7 @@ impl ComputeCommand for ZIncrByReq {
             None => {
                 return (
                     MochaOperation::Abort,
-                    Value::Error("ERR resulting score is not a number (NaN)".to_string()),
+                    ProtocolError::response("ERR resulting score is not a number (NaN)").into(),
                 );
             }
         };

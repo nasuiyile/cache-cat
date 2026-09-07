@@ -44,37 +44,28 @@ impl HSetCommand {
     /// Parse arguments from RESP items
     /// Format: HSET key field value [field value ...]
     fn parse_args(items: &[Value]) -> Result<HSetParam, ProtocolError> {
-        // Minimum: HSET key field value (4 items)
         if items.len() < 4 {
             return Err(ProtocolError::WrongArgCount("hset"));
         }
-
-        // Parse key
         let key = items[1]
             .string_bytes_clone()
             .ok_or(ProtocolError::InvalidArgument("key"))?;
-
-        // Parse field-value pairs from items[2..]
         let field_count = items.len() - 2; // items[2] onwards
         if !field_count.is_multiple_of(2) {
             return Err(ProtocolError::WrongArgCount("hset"));
         }
-
         let mut fields = Vec::with_capacity(field_count / 2);
         let mut i = 2;
         while i < items.len() {
             let field = items[i]
                 .string_bytes_clone()
                 .ok_or(ProtocolError::InvalidArgument("field"))?;
-
             let value = items[i + 1]
                 .string_bytes_clone()
                 .ok_or(ProtocolError::InvalidArgument("value"))?;
-
             fields.push((field, value));
             i += 2;
         }
-
         Ok(HSetParam { key, fields })
     }
 }
@@ -100,7 +91,7 @@ impl Command for HSetCommand {
     ) -> Result<Value, CacheCatError> {
         if let Some(vec) = client.transaction_queue.as_mut() {
             vec.push(self.raft_request(items)?);
-            return Ok(Value::SimpleString(String::from("QUEUED")));
+            return Ok(Value::queued());
         }
         let operation = self.raft_request(items)?;
         let value = server.app.write(operation, client.db_number).await?;
@@ -162,9 +153,7 @@ impl ComputeCommand for HSetReq {
             }
             _ => (
                 MochaOperation::Abort,
-                Value::Error(
-                    "WRONGTYPE Operation against a key holding the wrong kind of value".into(),
-                ),
+                ProtocolError::WrongType.into(),
             ),
         }
     }
