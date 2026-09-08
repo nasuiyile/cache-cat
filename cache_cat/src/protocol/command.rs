@@ -575,7 +575,7 @@ impl CommandFactory {
         }
     }
 
-    /// Execute a single command, including handling blocking command subscription streams
+    /// Execute a single command, including handling blocking command subscription stream
     async fn execute_command(
         &self,
         client: &mut Client,

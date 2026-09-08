@@ -2,6 +2,7 @@ use crate::protocol::bf::bf_card::BfCardParams;
 use crate::protocol::bf::bf_exits::BfExistsParams;
 use crate::protocol::bf::bf_info::BfInfoParams;
 use crate::protocol::bf::bf_mexits::BfMExistsParams;
+use crate::protocol::bf::bf_scandump::BfScanDumpParams;
 use crate::protocol::bitmap::bitcount::BitCountParams;
 use crate::protocol::bitmap::bitpos::BitPosParams;
 use crate::protocol::bitmap::getbit::GetBitParams;
@@ -41,7 +42,6 @@ use crate::protocol::zset::zrank::ZRankParams;
 use crate::protocol::zset::zrevrank::ZRevRankParams;
 use crate::protocol::zset::zscore::ZScoreParams;
 use serde::{Deserialize, Serialize};
-use crate::protocol::bf::bf_scandump::BfScanDumpParams;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum ReadOperation {
@@ -87,5 +87,5 @@ pub enum ReadOperation {
     BfMExists(BfMExistsParams),
     BfInfo(BfInfoParams),
     BfCard(BfCardParams),
-    BfScanDump(BfScanDumpParams)
+    BfScanDump(BfScanDumpParams),
 }

@@ -55,9 +55,12 @@ tokio-rustls = "0.26"
 rustls-pemfile = "2.2.0"
 rand = "0.8.5"
 serde_json = "1.0.149"
+blart = "0.5.0"
 [dev-dependencies]
 anyhow = "1.0.102"
 tempfile = "3.27.0"
+tokio = { version = "1.50.0", features = ["test-util"] }
+
 
 [features]
 default = []

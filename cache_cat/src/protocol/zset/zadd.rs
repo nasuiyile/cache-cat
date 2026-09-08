@@ -6,7 +6,7 @@ use crate::raft::network::redis_server::RedisServer;
 use crate::raft::types::core::mocha::cas::ComputeCommand;
 use crate::raft::types::core::mocha::core::MyValue;
 use crate::raft::types::core::response_value::Value;
-use crate::raft::types::core::sorted_set::SortedSet;
+use crate::raft::types::core::structure::sorted_set::SortedSet;
 use crate::raft::types::core::value_object::ValueObject::ZSet;
 use crate::raft::types::entry::bae_operation::BaseOperation;
 use crate::raft::types::entry::bae_operation::BaseOperation::ZAdd;

@@ -1,15 +1,15 @@
-use bytes::Bytes;
-use parking_lot::Mutex;
-use serde::{Deserialize, Serialize};
-use std::collections::{HashMap, HashSet, VecDeque};
-use std::sync::Arc;
-
 use crate::raft::types::core::mocha::bloom_filter::BloomObject;
 use crate::raft::types::core::size_estimate::{
     estimate_bloom_usage, estimate_hash_usage, estimate_list_usage, estimate_set_usage,
     estimate_zset_usage, estimated_bytes_heap_usage,
 };
-use crate::raft::types::core::sorted_set::SortedSet;
+use crate::raft::types::core::structure::sorted_set::SortedSet;
+use crate::raft::types::core::structure::stream::RedisStream;
+use bytes::Bytes;
+use parking_lot::Mutex;
+use serde::{Deserialize, Serialize};
+use std::collections::{HashMap, HashSet, VecDeque};
+use std::sync::Arc;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum HashValue {
@@ -29,23 +29,18 @@ impl HashValue {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum ValueObject {
     Int(i64),
-
     String(Bytes),
-
     #[serde(with = "mutex_vecdeque_serde")]
     List(Arc<Mutex<VecDeque<Bytes>>>),
-
     #[serde(with = "mutex_hashmap_serde")]
     Hash(Arc<Mutex<HashMap<Bytes, HashValue>>>),
-
     #[serde(with = "mutex_zset_serde")]
     ZSet(Arc<Mutex<SortedSet>>),
-
     #[serde(with = "mutex_hashset_serde")]
     Set(Arc<Mutex<HashSet<Bytes>>>),
-
     #[serde(with = "mutex_bloom_serde")]
     Bloom(Arc<Mutex<BloomObject>>),
+    Stream(RedisStream),
 }
 
 impl ValueObject {
@@ -56,18 +51,16 @@ impl ValueObject {
     pub fn estimated_heap_usage(&self, samples: usize) -> usize {
         match self {
             ValueObject::Int(_) => 0,
-
             ValueObject::String(value) => estimated_bytes_heap_usage(value),
-
             ValueObject::List(value) => estimate_list_usage(value, samples),
-
             ValueObject::Hash(value) => estimate_hash_usage(value, samples),
-
             ValueObject::ZSet(value) => estimate_zset_usage(value, samples),
-
             ValueObject::Set(value) => estimate_set_usage(value, samples),
-
             ValueObject::Bloom(value) => estimate_bloom_usage(value),
+            ValueObject::Stream(value) => {
+                let usage = value.memory_usage();
+                usage.total_bytes.saturating_sub(usage.stream_inline_bytes)
+            }
         }
     }
 }

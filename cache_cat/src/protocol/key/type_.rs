@@ -53,6 +53,7 @@ fn value_object_to_type_string(value_obj: &ValueObject) -> &'static str {
         ValueObject::ZSet(_) => "zset",
         ValueObject::Hash(_) => "hash",
         ValueObject::Bloom(_) => "MBbloom--",
+        ValueObject::Stream(_) => "stream",
     }
 }
 
