@@ -23,6 +23,12 @@ Compared with more widely known service-discovery and coordination systems such 
 
 However, under the same environment and with default configurations, the performance and latency of these systems still cannot match cache-cat. For example, cache-cat can achieve approximately 500k writes per second, while TiKV achieves around 200k writes per second. In addition, these middleware systems were not originally designed for caching scenarios, so they lack many features commonly required by cache systems, such as LRU and LFU eviction policies and maximum memory usage limits.
 
+## Benchmark
+
+YCSB throughput benchmark results:
+
+![YCSB throughput benchmark](benchmark/res/ycsb_throughput.png)
+
 ## Features
 
 For many small companies, you may simply want to build a highly available application without introducing a large number of middleware services.
@@ -38,7 +44,7 @@ In theory, cache-cat can be used as:
 
 For many other scenarios, you can still choose traditional cache systems such as Redis. For example, if you simply want to preload frequently accessed configuration data that is originally stored in a database, a traditional cache may be perfectly suitable.
 
-A complete benchmark section will be added after cache-cat's functionality becomes more mature.
+See the [Benchmark](#benchmark) section above for YCSB throughput results. A more complete benchmark section will be added as cache-cat's functionality becomes more mature.
 
 ## Consistency Model
 
