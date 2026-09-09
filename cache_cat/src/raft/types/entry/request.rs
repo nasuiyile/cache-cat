@@ -124,6 +124,7 @@ impl fmt::Display for Request {
             Operation::Base(op) => match op {
                 BaseOperation::Empty => write!(f, "None"),
                 BaseOperation::Set(req) => write!(f, "Set: {}", req),
+                BaseOperation::XAdd(req) => write!(f, "XAdd: {}", req),
                 BaseOperation::LPush(req) => write!(f, "LPush: {}", req),
                 BaseOperation::Del(req) => write!(f, "DEL: {}", req),
                 BaseOperation::Incr(req) => write!(f, "Incr: {}", req),

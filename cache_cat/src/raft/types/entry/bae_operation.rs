@@ -31,6 +31,7 @@ use crate::protocol::set::sinterstore::SInterStoreReq;
 use crate::protocol::set::spop::SPopReq;
 use crate::protocol::set::srem::SRemReq;
 use crate::protocol::set::sunionstore::SUnionStoreReq;
+use crate::protocol::stream::xadd::XAddReq;
 use crate::protocol::string::append::AppendReq;
 use crate::protocol::string::decr::DecrReq;
 use crate::protocol::string::decrby::DecrByReq;
@@ -73,6 +74,7 @@ pub enum BaseOperation {
     PFMerge(PFMergeReq),
     PfAdd(PfAddReq),
     BitOp(BitOpReq),
+    XAdd(XAddReq),
     // list
     LPush(LPushReq),
     RPush(RPushReq),

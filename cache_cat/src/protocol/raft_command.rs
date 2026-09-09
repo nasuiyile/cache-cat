@@ -61,6 +61,7 @@ use crate::protocol::set::srandmember::SRandMemberCommand;
 use crate::protocol::set::srem::SRemCommand;
 use crate::protocol::set::sunion::SUnionCommand;
 use crate::protocol::set::sunionstore::SUnionStoreCommand;
+use crate::protocol::stream::xadd::XAddCommand;
 use crate::protocol::string::append::AppendCommand;
 use crate::protocol::string::decr::DecrCommand;
 use crate::protocol::string::decrby::DecrByCommand;
@@ -222,6 +223,7 @@ impl RaftCommandFactory {
         factory.register("PFADD", PfAddCommand);
         factory.register("PFMERGE", PFMergeCommand);
         factory.register("BITOP", BitOpCommand);
+        factory.register("XADD", XAddCommand);
         factory.register("BF.ADD", BfAddCommand);
         factory.register("BF.EXISTS", BfExistsCommand);
         factory.register("BF.MADD", BfMAddCommand);

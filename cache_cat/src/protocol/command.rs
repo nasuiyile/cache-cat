@@ -87,6 +87,7 @@ use crate::protocol::set::srandmember::SRandMemberCommand;
 use crate::protocol::set::srem::SRemCommand;
 use crate::protocol::set::sunion::SUnionCommand;
 use crate::protocol::set::sunionstore::SUnionStoreCommand;
+use crate::protocol::stream::xadd::XAddCommand;
 use crate::protocol::string::append::AppendCommand;
 use crate::protocol::string::decr::DecrCommand;
 use crate::protocol::string::decrby::DecrByCommand;
@@ -416,6 +417,8 @@ impl CommandFactory {
         factory.register("BF.CARD", BfCardCommand);
         factory.register("BF.SCANDUMP", BfScanDumpCommand);
         factory.register("BF.LOADCHUNK", BfLoadChunkCommand);
+        // Stream
+        factory.register("XADD", XAddCommand);
         factory
     }
 

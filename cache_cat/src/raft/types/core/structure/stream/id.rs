@@ -73,7 +73,7 @@ impl FromStr for StreamId {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum AddId {
     Auto,
     AutoSequence(u64),

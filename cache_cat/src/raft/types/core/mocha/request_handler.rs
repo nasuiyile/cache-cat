@@ -70,6 +70,7 @@ pub fn base_request(
             Value::ok()
         }
         BaseOperation::Set(param) => my_cache.set(param, update),
+        BaseOperation::XAdd(param) => my_cache.execute_compute(param, update),
         BaseOperation::Expire(param) => my_cache.expire(param, update),
         BaseOperation::PExpire(param) => my_cache.p_expire(param, update),
         BaseOperation::LPush(param) => my_cache.l_push(param, update),
