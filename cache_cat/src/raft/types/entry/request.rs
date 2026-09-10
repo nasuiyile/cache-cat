@@ -79,6 +79,7 @@ impl fmt::Display for Request {
             Operation::Read(op) => match op {
                 ReadOperation::Get(req) => write!(f, "Get: {}", req),
                 ReadOperation::MGet(req) => write!(f, "MGet: {}", req),
+                ReadOperation::XRead(req) => write!(f, "XRead: {}", req),
                 ReadOperation::ZRange(req) => write!(f, "ZRange: {}", req),
                 ReadOperation::Exists(req) => write!(f, "Exists: {}", req),
                 ReadOperation::LRange(req) => write!(f, "LRange: {}", req),

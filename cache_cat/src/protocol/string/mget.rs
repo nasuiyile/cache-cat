@@ -82,23 +82,18 @@ impl MultiReadCommand for MgetParams {
 
     fn execute(&self, values: Vec<Option<EntrySnapshot<MyValue>>>) -> Value {
         let mut results = Vec::with_capacity(values.len());
-        
         for value in values {
             results.push(match value {
                 None => Value::BulkString(None),
-
                 Some(v) => match v.value.data {
                     ValueObject::Int(int_value) => {
                         Value::BulkString(Some(int_value.to_string().into()))
                     }
-
                     ValueObject::String(str_value) => Value::BulkString(Some(str_value)),
-
                     _ => ProtocolError::WrongType.into(),
                 },
             });
         }
-
         Value::Array(Some(results))
     }
 }

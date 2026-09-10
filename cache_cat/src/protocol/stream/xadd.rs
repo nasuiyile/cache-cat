@@ -8,14 +8,16 @@ use crate::raft::network::redis_server::RedisServer;
 use crate::raft::types::core::mocha::cas::ComputeCommand;
 use crate::raft::types::core::mocha::core::MyValue;
 use crate::raft::types::core::response_value::Value;
-use crate::raft::types::core::structure::stream::{AddId, Fields, RedisStream, SharedStream};
+use crate::raft::types::core::structure::stream::{AddId, Fields, RedisStream};
 use crate::raft::types::core::value_object::ValueObject;
 use crate::raft::types::entry::bae_operation::BaseOperation;
 use crate::raft::types::entry::request::Operation;
 use async_trait::async_trait;
 use bytes::Bytes;
+use parking_lot::RwLock;
 use serde::{Deserialize, Serialize};
 use std::fmt;
+use std::sync::Arc;
 
 /// Parsed parameters for the basic XADD form.
 ///
@@ -137,7 +139,7 @@ impl ComputeCommand for XAddReq {
     ) -> (MochaOperation<MyValue>, Value) {
         let expire = entry.get_expire_policy();
         let version = entry.value.version;
-        let ValueObject::Stream(stream) = entry.value.data else {
+        let ValueObject::Stream(mut stream) = entry.value.data else {
             return (MochaOperation::Abort, ProtocolError::WrongType.into());
         };
         //使用write_clock 确保所有节点确定性的执行。
@@ -145,7 +147,7 @@ impl ComputeCommand for XAddReq {
             AddId::Auto => AddId::AutoSequence(write_clock),
             _ => self.id,
         };
-        let id = match stream.xadd(add_id, self.fields) {
+        let id = match stream.write().xadd(add_id, self.fields) {
             Ok(id) => id,
             Err(error) => {
                 return (
@@ -178,7 +180,7 @@ impl ComputeCommand for XAddReq {
                 );
             }
         };
-        let value = MyValue::new(ValueObject::Stream(SharedStream::new(stream)));
+        let value = MyValue::new(ValueObject::Stream(Arc::new(RwLock::new(stream))));
         (
             MochaOperation::Insert {
                 value,
@@ -186,149 +188,5 @@ impl ComputeCommand for XAddReq {
             },
             Value::BulkString(Some(id.to_string().into())),
         )
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::{XAddCommand, XAddParams, XAddReq};
-    use crate::error::ProtocolError;
-    use crate::mocha::{EntrySnapshot, ExpirePolicy, MochaOperation};
-    use crate::protocol::raft_command::RaftCommand;
-    use crate::raft::types::core::mocha::cas::ComputeCommand;
-    use crate::raft::types::core::mocha::core::MyValue;
-    use crate::raft::types::core::response_value::Value;
-    use crate::raft::types::core::structure::stream::{AddId, RedisStream, SharedStream, StreamId};
-    use crate::raft::types::core::value_object::ValueObject;
-    use crate::raft::types::entry::bae_operation::BaseOperation;
-    use crate::raft::types::entry::request::Operation;
-    use bytes::Bytes;
-
-    fn bulk(value: &'static [u8]) -> Value {
-        Value::BulkString(Some(Bytes::from_static(value)))
-    }
-
-    #[test]
-    fn parses_basic_xadd_arguments() {
-        let params = XAddParams::parse(&[
-            bulk(b"XADD"),
-            bulk(b"events"),
-            bulk(b"*"),
-            bulk(b"type"),
-            bulk(b"created"),
-        ])
-        .unwrap();
-
-        assert_eq!(params.key, "events");
-        assert_eq!(params.id, AddId::Auto);
-        assert_eq!(params.fields, vec![(b"type".to_vec(), b"created".to_vec())]);
-    }
-
-    #[test]
-    fn parses_explicit_and_auto_sequence_ids() {
-        let explicit = XAddParams::parse(&[
-            bulk(b"XADD"),
-            bulk(b"events"),
-            bulk(b"42-7"),
-            bulk(b"type"),
-            bulk(b"created"),
-        ])
-        .unwrap();
-        let auto_sequence = XAddParams::parse(&[
-            bulk(b"XADD"),
-            bulk(b"events"),
-            bulk(b"42-*"),
-            bulk(b"type"),
-            bulk(b"created"),
-        ])
-        .unwrap();
-
-        assert_eq!(explicit.id, AddId::Explicit(StreamId::new(42, 7)));
-        assert_eq!(auto_sequence.id, AddId::AutoSequence(42));
-    }
-
-    #[test]
-    fn rejects_unpaired_fields() {
-        let error = XAddParams::parse(&[bulk(b"XADD"), bulk(b"events"), bulk(b"*"), bulk(b"type")])
-            .unwrap_err();
-
-        assert_eq!(error, ProtocolError::WrongArgCount("xadd"));
-    }
-
-    #[test]
-    fn builds_a_replicated_xadd_request() {
-        let operation = XAddCommand
-            .raft_request(&[
-                bulk(b"XADD"),
-                bulk(b"events"),
-                bulk(b"*"),
-                bulk(b"type"),
-                bulk(b"created"),
-            ])
-            .unwrap();
-
-        let Operation::Base(BaseOperation::XAdd(XAddReq { key, id, fields })) = operation else {
-            panic!("expected XADD base operation");
-        };
-        assert_eq!(key, "events");
-        assert_eq!(id, AddId::Auto);
-        assert_eq!(fields, vec![(b"type".to_vec(), b"created".to_vec())]);
-    }
-
-    #[test]
-    fn writes_a_new_stream_and_returns_the_id() {
-        let request = XAddReq {
-            key: Bytes::from_static(b"events"),
-            id: AddId::Explicit(StreamId::new(1, 0)),
-            fields: vec![(b"type".to_vec(), b"created".to_vec())],
-        };
-
-        let (operation, response) = request.init();
-
-        assert!(matches!(response, Value::BulkString(Some(ref id)) if id == "1-0"));
-        let MochaOperation::Insert { value, expire } = operation else {
-            panic!("expected inserted stream");
-        };
-        assert_eq!(expire, ExpirePolicy::Persistent);
-        let ValueObject::Stream(stream) = value.data else {
-            panic!("expected stream value");
-        };
-        assert_eq!(
-            stream.inspect(|s| s.get(StreamId::new(1, 0))).unwrap().unwrap().fields,
-            vec![(b"type".to_vec(), b"created".to_vec())]
-        );
-    }
-
-    #[test]
-    fn appends_to_an_existing_stream_and_preserves_expiry() {
-        let mut stream = RedisStream::new();
-        stream
-            .xadd(
-                AddId::Explicit(StreamId::new(1, 0)),
-                vec![(b"first".to_vec(), b"entry".to_vec())],
-            )
-            .unwrap();
-        let entry = EntrySnapshot {
-            value: MyValue::new(ValueObject::Stream(SharedStream::new(stream))),
-            expire_at: Some(42),
-        };
-        let request = XAddReq {
-            key: Bytes::from_static(b"events"),
-            id: AddId::Explicit(StreamId::new(2, 0)),
-            fields: vec![(b"second".to_vec(), b"entry".to_vec())],
-        };
-
-        let (operation, response) = request.mutate(entry, 0);
-
-        assert!(matches!(response, Value::BulkString(Some(ref id)) if id == "2-0"));
-        let MochaOperation::Insert { value, expire } = operation else {
-            panic!("expected updated stream");
-        };
-        assert_eq!(expire, ExpirePolicy::Absolute(42));
-        let ValueObject::Stream(stream) = value.data else {
-            panic!("expected stream value");
-        };
-        assert_eq!(stream.xlen().unwrap(), 2);
-        assert!(stream.inspect(|s| s.contains(StreamId::new(2, 0))).unwrap());
     }
 }

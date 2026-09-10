@@ -4,9 +4,9 @@ use crate::raft::types::core::size_estimate::{
     estimate_zset_usage, estimated_bytes_heap_usage,
 };
 use crate::raft::types::core::structure::sorted_set::SortedSet;
-use crate::raft::types::core::structure::stream::SharedStream;
+use crate::raft::types::core::structure::stream::RedisStream;
 use bytes::Bytes;
-use parking_lot::Mutex;
+use parking_lot::{Mutex, RwLock};
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::Arc;
@@ -40,7 +40,8 @@ pub enum ValueObject {
     Set(Arc<Mutex<HashSet<Bytes>>>),
     #[serde(with = "mutex_bloom_serde")]
     Bloom(Arc<Mutex<BloomObject>>),
-    Stream(SharedStream),
+    #[serde(with = "mutex_stream_serde")]
+    Stream(Arc<RwLock<RedisStream>>),
 }
 
 impl ValueObject {
@@ -57,11 +58,7 @@ impl ValueObject {
             ValueObject::ZSet(value) => estimate_zset_usage(value, samples),
             ValueObject::Set(value) => estimate_set_usage(value, samples),
             ValueObject::Bloom(value) => estimate_bloom_usage(value),
-            ValueObject::Stream(value) => {
-                value.memory_usage_with_samples(samples)
-                    .map(|usage| usage.total_bytes.saturating_sub(size_of::<SharedStream>()))
-                    .unwrap_or(usize::MAX)
-            }
+            ValueObject::Stream(value) => value.write().memory_usage_with_samples(samples).total_bytes,
         }
     }
 }
@@ -97,6 +94,36 @@ macro_rules! impl_mutex_serde {
         }
     };
 }
+macro_rules! impl_rwlock_serde {
+    ($mod_name:ident, $inner_type:ty) => {
+        mod $mod_name {
+            use super::*;
+            use serde::Deserialize;
+            use serde::de::Deserializer;
+
+            pub fn serialize<S>(
+                data: &Arc<RwLock<$inner_type>>,
+                serializer: S,
+            ) -> Result<S::Ok, S::Error>
+            where
+                S: serde::Serializer,
+            {
+                let guard = data.read();
+                guard.serialize(serializer)
+            }
+
+            pub fn deserialize<'de, D>(
+                deserializer: D,
+            ) -> Result<Arc<RwLock<$inner_type>>, D::Error>
+            where
+                D: Deserializer<'de>,
+            {
+                let value = <$inner_type>::deserialize(deserializer)?;
+                Ok(Arc::new(RwLock::new(value)))
+            }
+        }
+    };
+}
 
 impl_mutex_serde!(mutex_vecdeque_serde, VecDeque<Bytes>);
 
@@ -110,3 +137,5 @@ impl_mutex_serde!(mutex_zset_serde, SortedSet);
 impl_mutex_serde!(mutex_hashset_serde, HashSet<Bytes>);
 
 impl_mutex_serde!(mutex_bloom_serde, BloomObject);
+
+impl_rwlock_serde!(mutex_stream_serde, RedisStream);

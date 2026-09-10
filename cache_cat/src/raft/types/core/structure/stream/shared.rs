@@ -583,6 +583,17 @@ impl SharedStream {
         Ok(self.read()?.stream.xread_from(start, count))
     }
 
+    /// Bounded read under one lock. The predicate sees borrowed fields and
+    /// stops the shared range iterator before cloning an unwanted payload.
+    pub fn xread_while(
+        &self,
+        start: ReadStart,
+        count: Option<usize>,
+        include: impl FnMut(StreamId, &Fields) -> bool,
+    ) -> Result<Vec<Entry>> {
+        Ok(self.read()?.stream.xread_while(start, count, include))
+    }
+
     /// BLOCK waits asynchronously for data; acquiring the parking_lot lock is
     /// synchronous. `$` is resolved exactly once under the initial read lock.
     pub async fn xread_blocking(

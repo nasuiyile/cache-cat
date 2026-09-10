@@ -33,6 +33,7 @@ use crate::protocol::set::sunion::SUnionParams;
 use crate::protocol::string::get::GetParams;
 use crate::protocol::string::len::StrLenParams;
 use crate::protocol::string::mget::MgetParams;
+use crate::protocol::stream::xread::XReadParams;
 use crate::protocol::string::pfcount::PfcountParams;
 use crate::protocol::zset::zcard::ZCardParams;
 use crate::protocol::zset::zcount::ZCountParams;
@@ -88,4 +89,5 @@ pub enum ReadOperation {
     BfInfo(BfInfoParams),
     BfCard(BfCardParams),
     BfScanDump(BfScanDumpParams),
+    XRead(XReadParams),
 }

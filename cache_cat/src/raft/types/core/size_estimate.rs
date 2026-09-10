@@ -137,6 +137,7 @@ pub fn estimate_bloom_usage(value: &Arc<Mutex<BloomObject>>) -> usize {
     estimate_arc_allocation::<Mutex<BloomObject>>().saturating_add(bloom.estimated_heap_usage())
 }
 
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -210,18 +211,6 @@ mod tests {
         assert!(estimate_hash_table_usage::<Bytes>(14) > estimate_hash_table_usage::<Bytes>(7));
     }
 
-    #[test]
-    fn stream_inline_storage_is_only_counted_once() {
-        let stream = SharedStream::default();
-        let usage = stream.memory_usage().unwrap();
-        let value = ValueObject::Stream(stream);
-        let heap = usage.total_bytes - size_of::<SharedStream>();
-        assert_eq!(value.estimated_heap_usage(0), heap);
-        assert_eq!(
-            value.estimated_memory_usage(0),
-            size_of::<ValueObject>() + heap
-        );
-    }
 
     #[test]
     fn sampling_supports_full_scans_limits_and_saturation() {

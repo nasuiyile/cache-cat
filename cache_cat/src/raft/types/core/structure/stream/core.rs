@@ -341,12 +341,12 @@ impl RedisStream {
 
     /// Ascending range. Some(0) returns an empty result; None has no limit.
     pub fn xrange(&self, range: IdRange, count: Option<usize>) -> Vec<Entry> {
-        self.range_impl(range, count, false)
+        self.range_impl(range, count, false, |_, _| true)
     }
 
     /// Descending range. `range.start` is still the LOW bound, unlike RESP syntax.
     pub fn xrevrange(&self, range: IdRange, count: Option<usize>) -> Vec<Entry> {
-        self.range_impl(range, count, true)
+        self.range_impl(range, count, true, |_, _| true)
     }
 
     /// Text adapter preserving the Redis XREVRANGE argument order: end, start.
@@ -359,7 +359,13 @@ impl RedisStream {
         Ok(self.xrevrange(IdRange::parse(start, end)?, count))
     }
 
-    fn range_impl(&self, range: IdRange, count: Option<usize>, reverse: bool) -> Vec<Entry> {
+    fn range_impl(
+        &self,
+        range: IdRange,
+        count: Option<usize>,
+        reverse: bool,
+        mut include: impl FnMut(StreamId, &Fields) -> bool,
+    ) -> Vec<Entry> {
         let Some((lo, hi)) = range.normalized() else {
             return Vec::new();
         };
@@ -371,10 +377,19 @@ impl RedisStream {
             fields: fields.clone(),
         };
         let limit = count.unwrap_or(usize::MAX);
+        let mut include =
+            |(key, fields): &(&Key, &Fields)| include(StreamId::from_key(**key), fields);
         if reverse {
-            iter.rev().take(limit).map(convert).collect()
+            iter.rev()
+                .take(limit)
+                .take_while(&mut include)
+                .map(convert)
+                .collect()
         } else {
-            iter.take(limit).map(convert).collect()
+            iter.take(limit)
+                .take_while(&mut include)
+                .map(convert)
+                .collect()
         }
     }
 
@@ -385,10 +400,21 @@ impl RedisStream {
 
     /// Non-blocking handling of `$` / `+`. `$` has no existing data to return.
     pub fn xread_from(&self, start: ReadStart, count: Option<usize>) -> Vec<Entry> {
+        self.xread_while(start, count, |_, _| true)
+    }
+
+    /// Stop before the first rejected entry, without cloning its payload.
+    /// Reuses the range iterator so a bounded read performs a single tree seek.
+    pub fn xread_while(
+        &self,
+        start: ReadStart,
+        count: Option<usize>,
+        include: impl FnMut(StreamId, &Fields) -> bool,
+    ) -> Vec<Entry> {
         match start {
-            ReadStart::After(id) => self.xread(id, count),
+            ReadStart::After(id) => self.range_impl(IdRange::after(id), count, false, include),
             ReadStart::Tail => Vec::new(),
-            ReadStart::Latest => self.xrevrange(IdRange::all(), Some(1)),
+            ReadStart::Latest => self.range_impl(IdRange::all(), Some(1), true, include),
         }
     }
 

@@ -43,7 +43,7 @@ impl MyCache {
             None => return Value::error("Key not found"),
             Some(v) => &v.mocha,
         };
-        let keys: Vec<Option<EntrySnapshot<MyValue>>> = cmd
+        let read_entries: Vec<Option<EntrySnapshot<MyValue>>> = cmd
             .read_keys()
             .iter()
             .map(|key| cache.get_entry(key))
@@ -54,7 +54,7 @@ impl MyCache {
 
         match update.update_type {
             UpdateType::None => {
-                let (changed, res) = cmd.mutate(keys, update.write_clock);
+                let (changed, res) = cmd.mutate(read_entries, update.write_clock);
                 return_value = res;
                 match changed {
                     MochaOperation::Insert { value, expire } => {
@@ -69,7 +69,7 @@ impl MyCache {
             UpdateType::Snapshot(queue) => {
                 let cmd_copy = cmd.clone();
                 let mut next_version = 1;
-                let (changed, res) = cmd.mutate(keys, update.write_clock);
+                let (changed, res) = cmd.mutate(read_entries, update.write_clock);
                 return_value = res;
                 match changed {
                     MochaOperation::Insert { value, expire } => {
@@ -101,7 +101,7 @@ impl MyCache {
                     //这里说明，数据已经是最新的了这种情况下不用进行修改
                     return Value::Null;
                 }
-                let (changed, res) = cmd.mutate(keys, update.write_clock);
+                let (changed, res) = cmd.mutate(read_entries, update.write_clock);
                 return_value = res;
                 match changed {
                     MochaOperation::Insert { mut value, expire } => {
