@@ -1,11 +1,17 @@
 //! Approximate reachable allocation accounting, not allocator/RSS profiling.
 use std::mem::{align_of, size_of};
 
+pub(crate) const DEFAULT_MEMORY_SAMPLES: usize = 5;
+
 /// Estimated bytes reachable from ONE stream, including reserved capacities.
 /// Multiple SharedStream clones refer to the same allocations; do not sum their
 /// reports. Shared clocks are charged in full to each logical stream.
 ///
-/// ART node layout and Vec capacities are measured, HashMap/Arc layout is modeled.
+/// Entry buffers are sampled and extrapolated (five entries plus the tail by
+/// default). ART allocations are estimated from entry counts and a fixed fanout
+/// model; HashMap/Arc layout is modeled. PEL name copies use consumer name lengths
+/// and pending counts. Entry/group/consumer/pending counts remain exact.
+/// A zero sample budget scans all entry buffers, but other estimates remain.
 /// Allocator metadata, size-class rounding, fragmentation, executor task storage,
 /// lock/Notify waiter futures, temporary buffers, and custom clock heap storage
 /// not declared via Clock::estimated_heap_bytes are excluded. The report is NOT

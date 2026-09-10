@@ -8,7 +8,7 @@ use crate::raft::network::redis_server::RedisServer;
 use crate::raft::types::core::mocha::cas::ComputeCommand;
 use crate::raft::types::core::mocha::core::MyValue;
 use crate::raft::types::core::response_value::Value;
-use crate::raft::types::core::structure::stream::{AddId, Fields, RedisStream};
+use crate::raft::types::core::structure::stream::{AddId, Fields, RedisStream, SharedStream};
 use crate::raft::types::core::value_object::ValueObject;
 use crate::raft::types::entry::bae_operation::BaseOperation;
 use crate::raft::types::entry::request::Operation;
@@ -137,7 +137,7 @@ impl ComputeCommand for XAddReq {
     ) -> (MochaOperation<MyValue>, Value) {
         let expire = entry.get_expire_policy();
         let version = entry.value.version;
-        let ValueObject::Stream(mut stream) = entry.value.data else {
+        let ValueObject::Stream(stream) = entry.value.data else {
             return (MochaOperation::Abort, ProtocolError::WrongType.into());
         };
         //使用write_clock 确保所有节点确定性的执行。
@@ -178,7 +178,7 @@ impl ComputeCommand for XAddReq {
                 );
             }
         };
-        let value = MyValue::new(ValueObject::Stream(stream));
+        let value = MyValue::new(ValueObject::Stream(SharedStream::new(stream)));
         (
             MochaOperation::Insert {
                 value,
@@ -198,7 +198,7 @@ mod tests {
     use crate::raft::types::core::mocha::cas::ComputeCommand;
     use crate::raft::types::core::mocha::core::MyValue;
     use crate::raft::types::core::response_value::Value;
-    use crate::raft::types::core::structure::stream::{AddId, RedisStream, StreamId};
+    use crate::raft::types::core::structure::stream::{AddId, RedisStream, SharedStream, StreamId};
     use crate::raft::types::core::value_object::ValueObject;
     use crate::raft::types::entry::bae_operation::BaseOperation;
     use crate::raft::types::entry::request::Operation;
@@ -294,7 +294,7 @@ mod tests {
             panic!("expected stream value");
         };
         assert_eq!(
-            stream.get(StreamId::new(1, 0)).unwrap().fields,
+            stream.inspect(|s| s.get(StreamId::new(1, 0))).unwrap().unwrap().fields,
             vec![(b"type".to_vec(), b"created".to_vec())]
         );
     }
@@ -309,7 +309,7 @@ mod tests {
             )
             .unwrap();
         let entry = EntrySnapshot {
-            value: MyValue::new(ValueObject::Stream(stream)),
+            value: MyValue::new(ValueObject::Stream(SharedStream::new(stream))),
             expire_at: Some(42),
         };
         let request = XAddReq {
@@ -328,7 +328,7 @@ mod tests {
         let ValueObject::Stream(stream) = value.data else {
             panic!("expected stream value");
         };
-        assert_eq!(stream.xlen(), 2);
-        assert!(stream.contains(StreamId::new(2, 0)));
+        assert_eq!(stream.xlen().unwrap(), 2);
+        assert!(stream.inspect(|s| s.contains(StreamId::new(2, 0))).unwrap());
     }
 }

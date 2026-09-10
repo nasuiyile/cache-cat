@@ -1,7 +1,9 @@
 use crate::raft::types::core::structure::stream::core::*;
 use crate::raft::types::core::structure::stream::id::*;
 use crate::raft::types::core::structure::stream::memory::*;
+use crate::raft::types::core::structure::stream::snapshot::StreamSnapshot;
 use crate::raft::types::core::structure::stream::types::*;
+use parking_lot::{RwLock, RwLockReadGuard, RwLockWriteGuard};
 use std::{
     collections::HashMap,
     fmt,
@@ -12,16 +14,15 @@ use std::{
     time::Duration,
 };
 use tokio::{
-    sync::{Notify, RwLock, RwLockReadGuard, RwLockWriteGuard},
-    time::{timeout_at, Instant},
+    sync::Notify,
+    time::{Instant, timeout_at},
 };
-use crate::raft::types::core::structure::stream::snapshot::StreamSnapshot;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Block {
-    /// Do not wait for data. Lock acquisition can still yield.
+    /// Do not wait for data. Lock acquisition can still block the calling thread.
     NoWait,
-    /// Total async waiting budget, including lock acquisition.
+    /// Total waiting budget, including synchronous lock acquisition.
     /// Duration::ZERO is the same as NoWait.
     For(Duration),
     Forever,
@@ -188,7 +189,7 @@ struct Inner {
     readers: Notify,
 }
 
-/// Explicit poisoning: Tokio's locks do not provide std::sync poisoning.
+/// Explicit poisoning: parking_lot locks do not provide std::sync poisoning.
 /// A panicking mutation may have changed only part of the core state.
 struct WriteGuard<'a> {
     state: RwLockWriteGuard<'a, State>,
@@ -224,8 +225,8 @@ impl Drop for WriteGuard<'_> {
     }
 }
 
-/// Relay the notification on timeout/cancellation, including cancellation after
-/// Notify completed but before the caller reacquired the stream write lock.
+/// Relay the notification on timeout/cancellation, including deadline expiry
+/// while reacquiring the stream write lock after Notify completed.
 /// This guard is created BEFORE Notified; Notified is dropped first on exit.
 struct WakeRelay {
     signal: Arc<GroupSignal>,
@@ -240,7 +241,7 @@ impl Drop for WakeRelay {
     }
 }
 
-/// Tokio-based, single-stream sharing adapter.
+/// Single-stream sharing with parking_lot locks and Tokio data notifications.
 ///
 /// - Concurrent pure reads use RwLock::read; all mutations use RwLock::write.
 /// - No stream guard is held while waiting for data or any external future.
@@ -248,6 +249,9 @@ impl Drop for WakeRelay {
 /// - Successful group reads relay the wakeup while retained unread data exists.
 /// - Cancellation/timeout relays a possibly consumed group wakeup.
 /// - Timed operations share one absolute deadline, including lock acquisition.
+/// - Lock contention blocks the calling thread; only data notifications yield.
+/// - Only xread_blocking/xreadgroup_blocking are async; other operations execute
+///   synchronously and do not require a Tokio runtime.
 ///
 /// inspect/modify callbacks are synchronous. Keep them short, do not perform
 /// blocking I/O, and do not re-enter this adapter from a callback. A callback
@@ -276,16 +280,22 @@ impl SharedStream {
         }))
     }
 
-    async fn read(&self) -> Result<RwLockReadGuard<'_, State>> {
-        let state = self.0.state.read().await;
+    fn read(&self) -> Result<RwLockReadGuard<'_, State>> {
+        Self::check_read(self.0.state.read())
+    }
+
+    fn check_read(state: RwLockReadGuard<'_, State>) -> Result<RwLockReadGuard<'_, State>> {
         if state.poisoned {
             return Err(StreamError::LockPoisoned);
         }
         Ok(state)
     }
 
-    async fn write(&self) -> Result<WriteGuard<'_>> {
-        let state = self.0.state.write().await;
+    fn write(&self) -> Result<WriteGuard<'_>> {
+        self.check_write(self.0.state.write())
+    }
+
+    fn check_write<'a>(&'a self, state: RwLockWriteGuard<'a, State>) -> Result<WriteGuard<'a>> {
         if state.poisoned {
             return Err(StreamError::LockPoisoned);
         }
@@ -293,6 +303,34 @@ impl SharedStream {
             state,
             readers: &self.0.readers,
         })
+    }
+
+    fn read_before(&self, deadline: Deadline) -> Result<Option<RwLockReadGuard<'_, State>>> {
+        let Some(at) = deadline.at else {
+            return self.read().map(Some);
+        };
+        let Some(remaining) = at.checked_duration_since(Instant::now()) else {
+            return Ok(None);
+        };
+        let state = self.0.state.try_read_for(remaining);
+        if deadline.expired() {
+            return Ok(None);
+        }
+        state.map(Self::check_read).transpose()
+    }
+
+    fn write_before(&self, deadline: Deadline) -> Result<Option<WriteGuard<'_>>> {
+        let Some(at) = deadline.at else {
+            return self.write().map(Some);
+        };
+        let Some(remaining) = at.checked_duration_since(Instant::now()) else {
+            return Ok(None);
+        };
+        let state = self.0.state.try_write_for(remaining);
+        if deadline.expired() {
+            return Ok(None);
+        }
+        state.map(|state| self.check_write(state)).transpose()
     }
 
     fn publish_append(&self, groups: Vec<Arc<GroupSignal>>) {
@@ -303,21 +341,20 @@ impl SharedStream {
         }
     }
 
-    /// Await a read lock, then serialize a consistent borrowed view. Message
+    /// Acquire a read lock, then serialize a consistent borrowed view. Message
     /// fields are not cloned. Encoding is synchronous while holding the guard;
     /// a slow serializer blocks writers and can occupy a Tokio runtime worker.
     /// Do not re-enter this stream from the serializer or writer.
     ///
-    /// Unlike the direct Serialize impl, this method waits for lock contention.
+    /// Unlike direct Serialize, this waits synchronously for lock contention.
     /// Output may be partially written if the serializer fails; use a temporary
     /// file + atomic replacement at the application layer for durable snapshots.
-    pub async fn serialize_with<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
+    pub fn serialize_with<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
     where
         S: serde::Serializer,
     {
         let state = self
             .read()
-            .await
             .map_err(<S::Error as serde::ser::Error>::custom)?;
         serde::Serialize::serialize(&state.stream, serializer)
     }
@@ -325,19 +362,26 @@ impl SharedStream {
     /// Clone logical data under a read lock, then release it. The returned owned
     /// snapshot can be encoded/compressed/written without holding a stream lock.
     /// This costs an additional O(data) allocation; serialize_with avoids that.
-    pub async fn snapshot(&self) -> Result<StreamSnapshot> {
-        let state = self.read().await?;
+    pub fn snapshot(&self) -> Result<StreamSnapshot> {
+        let state = self.read()?;
         Ok(state.stream.snapshot())
     }
 
-    /// Estimate reachable memory under a read lock. Traverses the full stream;
-    /// use occasionally, not per message. See MemoryUsage for inclusions/limits.
+    /// Estimate reachable memory under a read lock using five entries plus the
+    /// tail. See MemoryUsage for inclusions/limits. Groups, consumers and the
+    /// notification registry are still visited; entry/PEL indexes are modeled.
     /// Reports the underlying stream ONCE, regardless of SharedStream clones.
-    pub async fn memory_usage(&self) -> Result<MemoryUsage> {
+    pub fn memory_usage(&self) -> Result<MemoryUsage> {
+        self.memory_usage_with_samples(DEFAULT_MEMORY_SAMPLES)
+    }
+
+    /// Same sampling semantics as RedisStream::memory_usage_with_samples, with
+    /// shared allocation and notification overhead included under the read lock.
+    pub fn memory_usage_with_samples(&self, samples: usize) -> Result<MemoryUsage> {
         use std::mem::size_of;
 
-        let state = self.read().await?;
-        let mut usage = state.stream.memory_usage();
+        let state = self.read()?;
+        let mut usage = state.stream.memory_usage_with_samples(samples);
         // Inner contains State and RedisStream inline. Avoid counting the core
         // inline size twice. This includes fixed lock/Notify and Arc overhead.
         usage.shared_overhead_bytes = size_of::<Self>()
@@ -368,21 +412,21 @@ impl SharedStream {
         Ok(usage)
     }
 
-    /// Convenience total, in bytes. Still performs a full scan.
-    pub async fn estimated_memory_usage(&self) -> Result<usize> {
-        Ok(self.memory_usage().await?.total_bytes)
+    /// Convenience total, in bytes, using the default five-entry sample budget.
+    pub fn estimated_memory_usage(&self) -> Result<usize> {
+        Ok(self.memory_usage()?.total_bytes)
     }
 
-    pub async fn inspect<T>(&self, read: impl FnOnce(&RedisStream) -> T) -> Result<T> {
-        let state = self.read().await?;
+    pub fn inspect<T>(&self, read: impl FnOnce(&RedisStream) -> T) -> Result<T> {
+        let state = self.read()?;
         Ok(read(&state.stream))
     }
 
     /// General escape hatch. Broadcasts even on Err because earlier mutations
     /// in the same callback may already have succeeded. NOT a transaction.
     /// Prefer dedicated xadd/xack methods in hot paths.
-    pub async fn modify<T>(&self, mutate: impl FnOnce(&mut RedisStream) -> Result<T>) -> Result<T> {
-        let mut state = self.write().await?;
+    pub fn modify<T>(&self, mutate: impl FnOnce(&mut RedisStream) -> Result<T>) -> Result<T> {
+        let mut state = self.write()?;
         let result = mutate(&mut state.stream);
         let targets = state.mutation_targets();
         drop(state);
@@ -393,18 +437,17 @@ impl SharedStream {
         result
     }
 
-    pub async fn xadd(&self, request: AddId, fields: Fields) -> Result<StreamId> {
+    pub fn xadd(&self, request: AddId, fields: Fields) -> Result<StreamId> {
         self.xadd_with_options(request, fields, AddOptions::default())
-            .await
     }
 
-    pub async fn xadd_with_options(
+    pub fn xadd_with_options(
         &self,
         request: AddId,
         fields: Fields,
         options: AddOptions,
     ) -> Result<StreamId> {
-        let mut state = self.write().await?;
+        let mut state = self.write()?;
         let id = state.stream.xadd_with_options(request, fields, options)?;
         let targets = state.append_targets();
         drop(state);
@@ -416,7 +459,7 @@ impl SharedStream {
     /// Build the input outside the lock. Keep batches bounded (e.g. 64-256);
     /// an enormous batch monopolizes the runtime worker and stream write lock.
     /// On failure, committed IDs are returned and those commits are notified.
-    pub async fn xadd_batch(
+    pub fn xadd_batch(
         &self,
         entries: Vec<(AddId, Fields)>,
         options: AddOptions,
@@ -426,7 +469,7 @@ impl SharedStream {
         }
         let mut committed = Vec::with_capacity(entries.len());
         let mut entries = entries.into_iter().enumerate();
-        let mut state = self.write().await.map_err(|error| BatchAddError {
+        let mut state = self.write().map_err(|error| BatchAddError {
             committed: Vec::new(),
             failed_index: 0,
             error,
@@ -461,63 +504,59 @@ impl SharedStream {
         }
     }
 
-    pub async fn xlen(&self) -> Result<usize> {
-        self.inspect(RedisStream::xlen).await
+    pub fn xlen(&self) -> Result<usize> {
+        self.inspect(RedisStream::xlen)
     }
 
-    pub async fn xrange(&self, range: IdRange, count: Option<usize>) -> Result<Vec<Entry>> {
-        self.inspect(|s| s.xrange(range, count)).await
+    pub fn xrange(&self, range: IdRange, count: Option<usize>) -> Result<Vec<Entry>> {
+        self.inspect(|s| s.xrange(range, count))
     }
 
-    pub async fn xrevrange(&self, range: IdRange, count: Option<usize>) -> Result<Vec<Entry>> {
-        self.inspect(|s| s.xrevrange(range, count)).await
+    pub fn xrevrange(&self, range: IdRange, count: Option<usize>) -> Result<Vec<Entry>> {
+        self.inspect(|s| s.xrevrange(range, count))
     }
 
     /// ACK does not make new messages available. No reader wakeup is needed.
-    pub async fn xack(&self, name: &[u8], ids: &[StreamId]) -> Result<usize> {
-        let mut state = self.write().await?;
+    pub fn xack(&self, name: &[u8], ids: &[StreamId]) -> Result<usize> {
+        let mut state = self.write()?;
         Ok(state.stream.xack(name, ids))
     }
 
-    pub async fn xpending(&self, name: &[u8]) -> Result<PendingSummary> {
-        self.read().await?.stream.xpending(name)
+    pub fn xpending(&self, name: &[u8]) -> Result<PendingSummary> {
+        self.read()?.stream.xpending(name)
     }
 
-    pub async fn xpending_range(
-        &self,
-        name: &[u8],
-        query: PendingQuery<'_>,
-    ) -> Result<Vec<PendingInfo>> {
-        self.read().await?.stream.xpending_range(name, query)
+    pub fn xpending_range(&self, name: &[u8], query: PendingQuery<'_>) -> Result<Vec<PendingInfo>> {
+        self.read()?.stream.xpending_range(name, query)
     }
 
-    pub async fn xdel(&self, ids: &[StreamId]) -> Result<usize> {
-        let mut state = self.write().await?;
+    pub fn xdel(&self, ids: &[StreamId]) -> Result<usize> {
+        let mut state = self.write()?;
         Ok(state.stream.xdel(ids))
     }
 
-    pub async fn xtrim(&self, options: TrimOptions) -> Result<usize> {
-        let mut state = self.write().await?;
+    pub fn xtrim(&self, options: TrimOptions) -> Result<usize> {
+        let mut state = self.write()?;
         Ok(state.stream.xtrim(options))
     }
 
-    pub async fn xgroup_create(
+    pub fn xgroup_create(
         &self,
         name: &[u8],
         start: GroupStart,
         entries_read: Option<u64>,
     ) -> Result<()> {
-        let mut state = self.write().await?;
+        let mut state = self.write()?;
         state.stream.xgroup_create(name, start, entries_read)
     }
 
-    pub async fn xgroup_setid(
+    pub fn xgroup_setid(
         &self,
         name: &[u8],
         start: GroupStart,
         entries_read: Option<u64>,
     ) -> Result<()> {
-        let mut state = self.write().await?;
+        let mut state = self.write()?;
         state.stream.xgroup_setid(name, start, entries_read)?;
         let target = state.groups.get(name).and_then(Weak::upgrade);
         drop(state);
@@ -527,8 +566,8 @@ impl SharedStream {
         Ok(())
     }
 
-    pub async fn xgroup_destroy(&self, name: &[u8]) -> Result<bool> {
-        let mut state = self.write().await?;
+    pub fn xgroup_destroy(&self, name: &[u8]) -> Result<bool> {
+        let mut state = self.write()?;
         let removed = state.stream.xgroup_destroy(name);
         let target = state.groups.remove(name).and_then(|weak| weak.upgrade());
         drop(state);
@@ -540,12 +579,12 @@ impl SharedStream {
     }
 
     /// Non-blocking with respect to data availability, not OS threads.
-    pub async fn xread(&self, start: ReadStart, count: Option<usize>) -> Result<Vec<Entry>> {
-        self.xread_blocking(start, count, Block::NoWait).await
+    pub fn xread(&self, start: ReadStart, count: Option<usize>) -> Result<Vec<Entry>> {
+        Ok(self.read()?.stream.xread_from(start, count))
     }
 
-    /// The name retains the old API's BLOCK meaning. This never uses a condvar
-    /// or an OS-thread blocking lock. `$` is resolved exactly once under read lock.
+    /// BLOCK waits asynchronously for data; acquiring the parking_lot lock is
+    /// synchronous. `$` is resolved exactly once under the initial read lock.
     pub async fn xread_blocking(
         &self,
         start: ReadStart,
@@ -558,50 +597,48 @@ impl SharedStream {
             block
         };
         let deadline = Deadline::new(effective)?;
-        let mut state = match deadline.run(self.read()).await {
-            Some(result) => result?,
-            None => return Ok(Vec::new()),
-        };
-        let after = match start {
-            ReadStart::After(id) => id,
-            ReadStart::Tail => state.stream.last_generated_id(),
-            ReadStart::Latest => return Ok(state.stream.xread_from(start, count)),
-        };
-        if count == Some(0) {
-            return Ok(Vec::new());
-        }
+        let mut after = None;
         loop {
-            let entries = state.stream.xread(after, count);
-            if !entries.is_empty() {
-                return Ok(entries);
-            }
-            if !deadline.can_wait || deadline.expired() {
-                return Ok(Vec::new());
-            }
-            // Predicate + registration share the read lock. No writer can
-            // append in between. The nonempty fast path never touches Notify.
             let mut notified = pin!(self.0.readers.notified());
-            notified.as_mut().enable();
-            drop(state);
+            {
+                let Some(state) = self.read_before(deadline)? else {
+                    return Ok(Vec::new());
+                };
+                if matches!(start, ReadStart::Latest) || count == Some(0) {
+                    return Ok(state.stream.xread_from(start, count));
+                }
+                let after = *after.get_or_insert_with(|| match start {
+                    ReadStart::After(id) => id,
+                    ReadStart::Tail => state.stream.last_generated_id(),
+                    ReadStart::Latest => unreachable!("handled above"),
+                });
+                let entries = state.stream.xread(after, count);
+                if !entries.is_empty() {
+                    return Ok(entries);
+                }
+                if !deadline.can_wait || deadline.expired() {
+                    return Ok(Vec::new());
+                }
+                // Predicate + registration share the read lock, so an append
+                // cannot fall into a wakeup gap. The guard ends before await.
+                notified.as_mut().enable();
+            }
             if !deadline.wait(notified.as_mut()).await {
                 return Ok(Vec::new());
             }
-            state = match deadline.run(self.read()).await {
-                Some(result) => result?,
-                None => return Ok(Vec::new()),
-            };
         }
     }
 
-    pub async fn xreadgroup(
+    pub fn xreadgroup(
         &self,
         name: &[u8],
         consumer: &[u8],
         mode: GroupRead,
         options: ReadGroupOptions,
     ) -> Result<Vec<GroupEntry>> {
-        self.xreadgroup_blocking(name, consumer, mode, options, Block::NoWait)
-            .await
+        self.write()?
+            .stream
+            .xreadgroup(name, consumer, mode, options)
     }
 
     pub async fn xreadgroup_blocking(
@@ -614,47 +651,47 @@ impl SharedStream {
     ) -> Result<Vec<GroupEntry>> {
         let immediate = matches!(mode, GroupRead::PendingAfter(_)) || options.count == Some(0);
         let deadline = Deadline::new(if immediate { Block::NoWait } else { block })?;
-        let mut state = match deadline.run(self.write()).await {
-            Some(result) => result?,
-            None => return Ok(Vec::new()),
+        let (identity, signal) = {
+            let Some(mut state) = self.write_before(deadline)? else {
+                return Ok(Vec::new());
+            };
+            let identity = state.stream.group_identity(name)?;
+            let entries = state.stream.xreadgroup(name, consumer, mode, options)?;
+            if !entries.is_empty() || immediate || !deadline.can_wait || deadline.expired() {
+                return Ok(entries);
+            }
+            // Allocate a signal only on the empty/blocking path, not on hot reads.
+            let signal = state.group_signal(name, &identity);
+            (identity, signal)
         };
-        let identity = state.stream.group_identity(name)?;
-        let entries = state.stream.xreadgroup(name, consumer, mode, options)?;
-        if !entries.is_empty() || immediate || !deadline.can_wait || deadline.expired() {
-            return Ok(entries);
-        }
-        // Allocate a signal only on the empty/blocking path, not on hot reads.
-        let signal = state.group_signal(name, &identity);
         let mut relay = WakeRelay {
             signal: signal.clone(),
             forward: true,
         };
         loop {
-            // The predicate was checked while holding state. Register before
-            // releasing state, so an append cannot fall into a wakeup gap.
             let mut notified = pin!(signal.changed.notified());
-            notified.as_mut().enable();
-            drop(state);
+            {
+                let Some(mut state) = self.write_before(deadline)? else {
+                    return Ok(Vec::new());
+                };
+                let current = state.stream.group_identity(name)?;
+                if !Arc::ptr_eq(&identity, &current) {
+                    return Err(StreamError::GroupRecreated);
+                }
+                let entries = state.stream.xreadgroup(name, consumer, mode, options)?;
+                if !entries.is_empty() {
+                    relay.forward = state.stream.group_has_new(name)?;
+                    // Guard release and handoff happen in the same poll.
+                    return Ok(entries);
+                }
+                if deadline.expired() {
+                    return Ok(Vec::new());
+                }
+                // Recheck after signal creation and register under the lock.
+                // This also covers appends before the first registration.
+                notified.as_mut().enable();
+            }
             if !deadline.wait(notified.as_mut()).await {
-                return Ok(Vec::new());
-            }
-            state = match deadline.run(self.write()).await {
-                Some(result) => result?,
-                None => return Ok(Vec::new()),
-            };
-            let current = state.stream.group_identity(name)?;
-            if !Arc::ptr_eq(&identity, &current) {
-                return Err(StreamError::GroupRecreated);
-            }
-            let entries = state.stream.xreadgroup(name, consumer, mode, options)?;
-            if !entries.is_empty() {
-                relay.forward = state.stream.group_has_new(name)?;
-                // No await after mutation: commit, release and handoff happen
-                // within the same poll, before returning the ready result.
-                drop(state);
-                return Ok(entries);
-            }
-            if deadline.expired() {
                 return Ok(Vec::new());
             }
         }
@@ -664,15 +701,16 @@ impl SharedStream {
 /// Serde is synchronous, so this implementation acquires a read lock only when
 /// immediately available. Contention (including a queued writer) returns a
 /// serializer error instead of blocking a runtime thread or panicking.
-/// Use `serialize_with(...).await` or `snapshot().await` to wait asynchronously.
+/// Use `serialize_with(...)` or `snapshot()` to wait for the lock
+/// synchronously on the calling thread.
 impl serde::Serialize for SharedStream {
     fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
     where
         S: serde::Serializer,
     {
-        let state = self.0.state.try_read().map_err(|_| {
+        let state = self.0.state.try_read().ok_or_else(|| {
             <S::Error as serde::ser::Error>::custom(
-                "SharedStream read lock is busy; use serialize_with(...).await or snapshot().await",
+                "SharedStream read lock is busy; use serialize_with(...) or snapshot()",
             )
         })?;
         if state.poisoned {

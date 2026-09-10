@@ -61,7 +61,7 @@ impl MemoryHelpCommand {
                 "    Return memory in bytes used by <key> and its value. Nested values are",
             ),
             Self::help_line(
-                "    sampled up to <count> times (default: 5, 0 means sample all).",
+                "    sampled up to <count> times where supported (default: 5, 0 means all).",
             ),
             Self::help_line("HELP"),
             Self::help_line("    Prints this help."),

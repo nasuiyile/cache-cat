@@ -548,6 +548,7 @@ impl BloomObject {
 
     /// 不包括 BloomObject 自己 inline 的大小，
     /// 只统计它额外拥有的 heap allocation。
+    /// 对齐 RedisBloom BFMemUsage：遍历全部子过滤器，不使用 SAMPLES。
     pub fn estimated_heap_usage(&self) -> usize {
         /*
          * Vec<BloomSubFilter> allocation。

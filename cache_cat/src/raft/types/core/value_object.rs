@@ -4,7 +4,7 @@ use crate::raft::types::core::size_estimate::{
     estimate_zset_usage, estimated_bytes_heap_usage,
 };
 use crate::raft::types::core::structure::sorted_set::SortedSet;
-use crate::raft::types::core::structure::stream::RedisStream;
+use crate::raft::types::core::structure::stream::SharedStream;
 use bytes::Bytes;
 use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
@@ -40,7 +40,7 @@ pub enum ValueObject {
     Set(Arc<Mutex<HashSet<Bytes>>>),
     #[serde(with = "mutex_bloom_serde")]
     Bloom(Arc<Mutex<BloomObject>>),
-    Stream(RedisStream),
+    Stream(SharedStream),
 }
 
 impl ValueObject {
@@ -58,8 +58,9 @@ impl ValueObject {
             ValueObject::Set(value) => estimate_set_usage(value, samples),
             ValueObject::Bloom(value) => estimate_bloom_usage(value),
             ValueObject::Stream(value) => {
-                let usage = value.memory_usage();
-                usage.total_bytes.saturating_sub(usage.stream_inline_bytes)
+                value.memory_usage_with_samples(samples)
+                    .map(|usage| usage.total_bytes.saturating_sub(size_of::<SharedStream>()))
+                    .unwrap_or(usize::MAX)
             }
         }
     }

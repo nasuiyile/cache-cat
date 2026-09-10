@@ -23,7 +23,8 @@ const DEFAULT_SAMPLES: usize = 5;
 pub struct MemoryUsageParams {
     pub key: Bytes,
 
-    /// 0 = scan all elements
+    /// 对支持采样的类型，0 遍历全部元素，正数按样本平均大小外推。
+    /// 固定开销独立计入；标量及 Bloom 的估算不受 samples 影响。
     pub samples: usize,
 }
 
@@ -44,7 +45,7 @@ impl MemoryUsageParams {
     /// MEMORY USAGE key
     /// MEMORY USAGE key SAMPLES count
     fn parse(items: &[Value]) -> Result<Self, ProtocolError> {
-        if items.len() != 3 && items.len() != 5 {
+        if items.len() < 3 {
             return Err(ProtocolError::WrongArgCount("MEMORY USAGE"));
         }
 
@@ -71,34 +72,34 @@ impl MemoryUsageParams {
             .string_bytes_clone()
             .ok_or(ProtocolError::InvalidArgument("key"))?;
 
-        // MEMORY USAGE key
-        if items.len() == 3 {
-            return Ok(Self {
-                key,
-                samples: DEFAULT_SAMPLES,
-            });
+        // Redis memoryCommand accepts repeated SAMPLES options; the last wins.
+        let mut samples = DEFAULT_SAMPLES;
+        for option in items[3..].chunks(2) {
+            let [keyword, count] = option else {
+                return Err(ProtocolError::SyntaxError);
+            };
+            if !keyword
+                .string_bytes_clone()
+                .is_some_and(|bytes| bytes.eq_ignore_ascii_case(b"SAMPLES"))
+            {
+                return Err(ProtocolError::SyntaxError);
+            }
+            let bytes = count
+                .string_bytes_clone()
+                .ok_or(ProtocolError::NotAnInteger)?;
+            let count = std::str::from_utf8(&bytes)
+                .ok()
+                .and_then(|text| text.parse::<i64>().ok())
+                // Redis string2ll accepts canonical decimal only: no '+',
+                // leading zeroes, '-0', whitespace, or values outside i64.
+                .filter(|count| count.to_string().as_bytes() == bytes.as_ref())
+                .ok_or(ProtocolError::NotAnInteger)?;
+            if count < 0 {
+                return Err(ProtocolError::SyntaxError);
+            }
+            // A budget larger than usize::MAX already covers any container.
+            samples = usize::try_from(count).unwrap_or(usize::MAX);
         }
-
-        // MEMORY USAGE key SAMPLES count
-        let samples_keyword = items[3]
-            .string_bytes_clone()
-            .ok_or(ProtocolError::InvalidArgument("samples"))?;
-
-        if !samples_keyword.as_ref().eq_ignore_ascii_case(b"SAMPLES") {
-            return Err(ProtocolError::InvalidArgument("samples"));
-        }
-
-        let samples_value = items[4]
-            .string_bytes_clone()
-            .ok_or(ProtocolError::InvalidArgument("samples"))?;
-
-        let samples_str = std::str::from_utf8(samples_value.as_ref())
-            .map_err(|_| ProtocolError::InvalidArgument("samples"))?;
-
-        // usize 会自动拒绝 -1 等负数
-        let samples = samples_str
-            .parse::<usize>()
-            .map_err(|_| ProtocolError::InvalidArgument("samples"))?;
 
         Ok(Self { key, samples })
     }
@@ -114,26 +115,18 @@ impl ReadCommand for MemoryUsageParams {
             // Redis: MEMORY USAGE missing-key -> nil
             return Value::BulkString(None);
         };
-
-        /*
-         * MyValue 本身的 inline 数据：
-         *
-         * - ValueObject enum
-         * - expiration/version 等 MyValue 自己的字段
-         *
-         * heap 部分则由 ValueObject::estimated_heap_usage() 统计。
-         */
         let size = size_of_val(&snapshot.value)
             .saturating_add(std::mem::size_of::<Bytes>())
             .saturating_add(self.key.len())
+            // 由各类型决定采样单位或直接统计，遵循 Redis 的按类型分派。
             .saturating_add(snapshot.value.data.estimated_heap_usage(self.samples));
-
         // RESP integer 是 i64。
         let size = i64::try_from(size).unwrap_or(i64::MAX);
-
         Value::Integer(size)
     }
 }
+
+
 
 /// MEMORY command executor.
 ///

@@ -200,7 +200,7 @@ print(r.zrevrank("my_zset", "a"))
 print(r.dbsize())
 
 r.set("test30", "test")
-# print(r.memory_usage("test30"))
+print(r.memory_usage("test30"))
 # print(r.memory_stats())
 #
 # print(r.memory_purge())
@@ -239,3 +239,5 @@ r.bitop("AND", "result", "a", "b")
 value = r.get("result")
 print(value)  # b'\x03'
 print(bin(value[0]))  # 0b11
+r.xadd("stream_key", {"field1": "value1"})
+print(r.memory_usage("test30"))

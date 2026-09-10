@@ -1,5 +1,7 @@
 //! 估算单个值的堆内存；ValueObject 的内联大小由调用方统计。
 //! 容器布局和分配器开销是近似值，共享分配不做跨键去重。
+//! 采样策略参照 Redis 8.2 kvobjComputeSize：按迭代顺序取前 N 项，
+//! 平均值外推；本项目没有 listpack/intset/quicklist 编码，不套用其阈值。
 
 use crate::raft::types::core::mocha::bloom_filter::BloomObject;
 use crate::raft::types::core::structure::sorted_set::SortedSet;
@@ -138,7 +140,7 @@ pub fn estimate_bloom_usage(value: &Arc<Mutex<BloomObject>>) -> usize {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::raft::types::core::structure::stream::RedisStream;
+    use crate::raft::types::core::structure::stream::SharedStream;
     use crate::raft::types::core::value_object::ValueObject;
 
     #[test]
@@ -210,10 +212,10 @@ mod tests {
 
     #[test]
     fn stream_inline_storage_is_only_counted_once() {
-        let stream = RedisStream::new();
-        let usage = stream.memory_usage();
+        let stream = SharedStream::default();
+        let usage = stream.memory_usage().unwrap();
         let value = ValueObject::Stream(stream);
-        let heap = usage.total_bytes - usage.stream_inline_bytes;
+        let heap = usage.total_bytes - size_of::<SharedStream>();
         assert_eq!(value.estimated_heap_usage(0), heap);
         assert_eq!(
             value.estimated_memory_usage(0),
@@ -229,5 +231,18 @@ mod tests {
         assert_eq!(sampled_total(std::iter::empty(), 0, 0), 0);
         assert_eq!(sampled_total([usize::MAX].into_iter(), 2, 1), usize::MAX);
         assert_eq!(sampled_total([usize::MAX, 1].into_iter(), 2, 0), usize::MAX);
+    }
+
+    #[test]
+    fn sampling_only_visits_the_requested_number_of_elements() {
+        for (samples, expected_visits) in [(0, 10), (1, 1), (5, 5), (100, 10)] {
+            let mut visits = 0;
+            let values = (0..10).map(|_| {
+                visits += 1;
+                17
+            });
+            assert_eq!(sampled_total(values, 10, samples), 170);
+            assert_eq!(visits, expected_visits);
+        }
     }
 }
