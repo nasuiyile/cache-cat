@@ -1,8 +1,4 @@
 mod test;
-mod insert_watch;
-
-pub(crate) use insert_watch::InsertSubscription;
-use insert_watch::InsertWatchers;
 
 use crate::utils::glob::GlobMatcher;
 use crate::utils::now_ms;
@@ -237,7 +233,6 @@ where
     map: Arc<HashMap<K, Entry<V>>>,
     logic_clock: Arc<AtomicU64>,
     expire_tx: Sender<ExpireCommand<K>>,
-    insert_watchers: Arc<InsertWatchers<K>>,
 }
 
 impl<K, V> Mocha<K, V>
@@ -255,7 +250,6 @@ where
             map,
             logic_clock,
             expire_tx,
-            insert_watchers: Arc::new(InsertWatchers::new()),
         }
     }
 
@@ -297,20 +291,8 @@ where
         let expire_at = new_entry.expire_at;
         let mg = self.map.pin();
         mg.insert(key.clone(), new_entry);
-        self.insert_watchers.notify(&key);
         self.enqueue_expiry(key, expire_at);
         snapshot
-    }
-
-    /// Subscribe before looking up the key. Deletions alone cannot satisfy a
-    /// blocked read; its next insertion (including snapshot restore) can.
-    pub(crate) fn watch_inserts(&self, keys: &[K]) -> InsertSubscription<K> {
-        self.insert_watchers.subscribe(keys)
-    }
-
-    #[cfg(test)]
-    pub(crate) fn insert_subscriber_count(&self) -> usize {
-        self.insert_watchers.subscriber_count()
     }
 
     fn remove_expired_if_current_from(
