@@ -65,8 +65,8 @@ impl RaftNode {
         )
         .await
         .map_err(|e| Error::internal(format!("Failed to create raft: {}", e)))?;
-
         let app = CacheCatApp {
+            blocking_keys: sm_store.data.kvs.blocking_keys.clone(),
             path,
             cluster: Cluster::new(raft, config.raft_advertise_endpoint.clone()),
             config,

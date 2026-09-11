@@ -239,5 +239,3 @@ r.bitop("AND", "result", "a", "b")
 value = r.get("result")
 print(value)  # b'\x03'
 print(bin(value[0]))  # 0b11
-r.xadd("stream_key", {"field1": "value1"})
-print(r.memory_usage("test30"))

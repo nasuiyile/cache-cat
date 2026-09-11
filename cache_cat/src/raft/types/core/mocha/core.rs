@@ -1,6 +1,8 @@
 use crate::error::ProtocolError;
 use crate::mocha::Mocha;
 use crate::protocol::lua_env::LuaEnv;
+use crate::protocol::stream::xread::XReadParams;
+use crate::raft::application::blocking_keys::BlockingKeys;
 use crate::raft::types::core::response_value::Value;
 use crate::raft::types::core::value_object::ValueObject;
 use crate::raft::types::entry::request::AtomicRequest;
@@ -9,6 +11,7 @@ use bytes::Bytes;
 use parking_lot::RwLock;
 use serde::{Deserialize, Serialize};
 use std::cmp::max;
+use std::collections::HashSet;
 use std::option::Option;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -48,6 +51,10 @@ pub struct MyCache {
     pub lua_env: LuaEnv,
 
     pub databases: Vec<Database>,
+    /// Pending stream reads, shared with the command handlers.
+    pub blocking_keys: BlockingKeys<(u16, Bytes), Value, XReadParams>,
+    /// XADD keys to serve after the entire command or transaction finishes.
+    pub(crate) ready_streams: parking_lot::Mutex<HashSet<(u16, Bytes)>>,
     // 这俩把锁是为了保证每条指令的原子性 多key写，多key读需要同时获取俩把锁 同时获取俩把锁时 先加write_lock
     pub write_lock: Arc<Mutex<()>>, //单key写
     pub read_lock: Arc<RwLock<()>>, //单key读
@@ -107,6 +114,8 @@ impl MyCache {
             read_logic_clock: Arc::new(AtomicU64::new(0)),
             write_logic_clock,
             databases: vec,
+            blocking_keys: BlockingKeys::new(),
+            ready_streams: parking_lot::Mutex::new(HashSet::new()),
             write_lock: Arc::new(Default::default()),
             read_lock: Arc::new(Default::default()),
         })

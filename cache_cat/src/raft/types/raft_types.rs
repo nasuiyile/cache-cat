@@ -1,6 +1,8 @@
 use super::endpoint::Endpoint;
 use crate::error::{CacheCatError, ProtocolError, StorageError};
 use crate::node::parsed_config::ParsedConfig;
+use crate::protocol::stream::xread::XReadParams;
+use crate::raft::application::blocking_keys::BlockingKeys;
 use crate::raft::application::cluster::Cluster;
 use crate::raft::application::connector::Connector;
 use crate::raft::application::pub_sub::PubSub;
@@ -11,6 +13,7 @@ use crate::raft::types::core::response_value::Value;
 use crate::raft::types::entry::read_operation::ReadOperation;
 use crate::raft::types::entry::request::{Operation, Request};
 use crate::raft::types::file_operator::FileOperator;
+use bytes::Bytes;
 use futures::future::join_all;
 use openraft::RPCTypes::Vote;
 use openraft::error::Timeout;
@@ -24,8 +27,6 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::broadcast;
-
-// pub type SnapshotData = tokio::fs::File;
 
 pub type NodeId = u16;
 
@@ -49,10 +50,10 @@ openraft::declare_raft_types!(
         R = Value,
         NodeId = NodeId,
         Node = Node,
-        // SnapshotData = FileOperator,
 );
 
 pub struct CacheCatApp {
+    pub blocking_keys: BlockingKeys<(u16, Bytes), Value, XReadParams>,
     pub config: ParsedConfig,
     pub cluster: Cluster,
     pub state_machine: StateMachineStore,
@@ -110,6 +111,7 @@ impl CacheCatApp {
         Ok(())
     }
 
+    //写锁是在真正修改时加的
     pub async fn write(&self, op: Operation, db_number: u16) -> Result<Value, CacheCatError> {
         let write_clock = self.state_machine.data.kvs.generate_new_write_clock();
         let request = Request::new(write_clock, db_number, op);
@@ -152,11 +154,8 @@ impl CacheCatApp {
 
 pub type Entry = <TypeConfig as openraft::RaftTypeConfig>::Entry;
 pub type LogState = openraft::storage::LogState<TypeConfig>;
-
 pub type LogId = openraft::alias::LogIdOf<TypeConfig>;
-// pub type LogId = openraft::LogId<TypeConfig>;
 pub type LeaderId = <TypeConfig as openraft::RaftTypeConfig>::LeaderId;
-
 pub type ForwardToLeader = openraft::error::ForwardToLeader<TypeConfig>;
 pub type StoredMembership = openraft::alias::StoredMembershipOf<TypeConfig>;
 pub type Snapshot = openraft::alias::SnapshotOf<TypeConfig, FileOperator>;
