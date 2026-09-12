@@ -5,3 +5,4 @@ pub mod set;
 mod string;
 mod zset;
 mod bitmap;
+mod stream;

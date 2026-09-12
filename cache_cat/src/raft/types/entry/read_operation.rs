@@ -30,10 +30,11 @@ use crate::protocol::set::sismember::SIsMemberParams;
 use crate::protocol::set::smembers::SMembersParams;
 use crate::protocol::set::srandmember::SRandMemberParams;
 use crate::protocol::set::sunion::SUnionParams;
+use crate::protocol::stream::xread::XReadParams;
+use crate::protocol::stream::xreadgroup::XReadGroupParams;
 use crate::protocol::string::get::GetParams;
 use crate::protocol::string::len::StrLenParams;
 use crate::protocol::string::mget::MgetParams;
-use crate::protocol::stream::xread::XReadParams;
 use crate::protocol::string::pfcount::PfcountParams;
 use crate::protocol::zset::zcard::ZCardParams;
 use crate::protocol::zset::zcount::ZCountParams;
@@ -90,4 +91,5 @@ pub enum ReadOperation {
     BfCard(BfCardParams),
     BfScanDump(BfScanDumpParams),
     XRead(XReadParams),
+    XReadGroup(XReadGroupParams),
 }

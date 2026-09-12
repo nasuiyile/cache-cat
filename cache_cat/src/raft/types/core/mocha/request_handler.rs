@@ -56,6 +56,9 @@ pub fn read_request(
         ReadOperation::BfInfo(param) => my_cache.execute_read(param, db_number, read_clock),
         ReadOperation::BfCard(param) => my_cache.execute_read(param, db_number, read_clock),
         ReadOperation::BfScanDump(param) => my_cache.execute_read(param, db_number, read_clock),
+        ReadOperation::XReadGroup(param) => {
+            my_cache.execute_multi_read(param, db_number, read_clock)
+        }
     }
 }
 
@@ -135,6 +138,7 @@ pub fn base_request(
         BaseOperation::BfReserve(param) => my_cache.bf_reserve(param, update),
         BaseOperation::BfInsert(param) => my_cache.bf_insert(param, update),
         BaseOperation::BfLoadChunk(param) => my_cache.bf_load(param, update),
+        BaseOperation::XGroup(param) => my_cache.x_group(param, update),
     }
 }
 

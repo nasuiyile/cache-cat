@@ -1,8 +1,21 @@
-use std::{fmt, ops::Bound, str::FromStr};
 use crate::raft::types::core::structure::stream::types::StreamError;
+use serde::{Deserialize, Serialize};
+use std::{fmt, ops::Bound, str::FromStr};
 
 /// A Redis stream ID, ordered numerically by (milliseconds, sequence).
-#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, serde::Serialize, serde::Deserialize)]
+#[derive(
+    Debug,
+    Default,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Hash,
+    serde::Serialize,
+    serde::Deserialize,
+)]
 pub struct StreamId {
     pub ms: u64,
     pub seq: u64,
@@ -10,9 +23,14 @@ pub struct StreamId {
 
 impl StreamId {
     pub const ZERO: Self = Self { ms: 0, seq: 0 };
-    pub const MAX: Self = Self { ms: u64::MAX, seq: u64::MAX };
+    pub const MAX: Self = Self {
+        ms: u64::MAX,
+        seq: u64::MAX,
+    };
 
-    pub const fn new(ms: u64, seq: u64) -> Self { Self { ms, seq } }
+    pub const fn new(ms: u64, seq: u64) -> Self {
+        Self { ms, seq }
+    }
 
     /// Fixed-width, prefix-free, lexicographically order-preserving encoding.
     pub fn to_key(self) -> [u8; 16] {
@@ -83,7 +101,9 @@ pub enum AddId {
 impl FromStr for AddId {
     type Err = StreamError;
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        if s == "*" { return Ok(Self::Auto); }
+        if s == "*" {
+            return Ok(Self::Auto);
+        }
         if let Some(ms) = s.strip_suffix("-*") {
             return Ok(Self::AutoSequence(decimal(ms)?));
         }
@@ -91,7 +111,7 @@ impl FromStr for AddId {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum GroupStart {
     Id(StreamId),
     /// Resolve `$` to the last generated ID at the time of the operation.
@@ -101,7 +121,11 @@ pub enum GroupStart {
 impl FromStr for GroupStart {
     type Err = StreamError;
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        if s == "$" { Ok(Self::Last) } else { Ok(Self::Id(s.parse()?)) }
+        if s == "$" {
+            Ok(Self::Last)
+        } else {
+            Ok(Self::Id(s.parse()?))
+        }
     }
 }
 
@@ -113,20 +137,31 @@ pub struct IdRange {
 }
 
 impl Default for IdRange {
-    fn default() -> Self { Self::all() }
+    fn default() -> Self {
+        Self::all()
+    }
 }
 
 impl IdRange {
     pub const fn all() -> Self {
-        Self { start: Bound::Unbounded, end: Bound::Unbounded }
+        Self {
+            start: Bound::Unbounded,
+            end: Bound::Unbounded,
+        }
     }
 
     pub const fn inclusive(start: StreamId, end: StreamId) -> Self {
-        Self { start: Bound::Included(start), end: Bound::Included(end) }
+        Self {
+            start: Bound::Included(start),
+            end: Bound::Included(end),
+        }
     }
 
     pub const fn after(id: StreamId) -> Self {
-        Self { start: Bound::Excluded(id), end: Bound::Unbounded }
+        Self {
+            start: Bound::Excluded(id),
+            end: Bound::Unbounded,
+        }
     }
 
     /// Parses XRANGE-style bounds, including `-`, `+`, `(id` and bare ms.
@@ -142,9 +177,16 @@ impl IdRange {
                 "+" => StreamId::MAX,
                 _ => StreamId::parse_with_default(text, seq)?,
             };
-            Ok(if exclusive { Bound::Excluded(id) } else { Bound::Included(id) })
+            Ok(if exclusive {
+                Bound::Excluded(id)
+            } else {
+                Bound::Included(id)
+            })
         }
-        Ok(Self { start: bound(start, 0)?, end: bound(end, u64::MAX)? })
+        Ok(Self {
+            start: bound(start, 0)?,
+            end: bound(end, u64::MAX)?,
+        })
     }
 
     /// None means an empty interval. Avoid passing invalid bounds to blart.

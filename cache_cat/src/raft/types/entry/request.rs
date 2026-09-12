@@ -121,6 +121,7 @@ impl fmt::Display for Request {
                 ReadOperation::BfInfo(req) => write!(f, "BfInfo: {}", req),
                 ReadOperation::BfCard(req) => write!(f, "BfCard: {}", req),
                 ReadOperation::BfScanDump(req) => write!(f, "BfScanDump: {}", req),
+                ReadOperation::XReadGroup(req) => write!(f, "XReadGroup: {}", req),
             },
             Operation::Base(op) => match op {
                 BaseOperation::Empty => write!(f, "None"),
@@ -171,6 +172,7 @@ impl fmt::Display for Request {
                 BaseOperation::BfReserve(req) => write!(f, "BfReserve: {}", req),
                 BaseOperation::BfInsert(req) => write!(f, "BfInsert: {}", req),
                 BaseOperation::BfLoadChunk(req) => write!(f, "BfLoadChunk: {}", req),
+                BaseOperation::XGroup(req) => write!(f, "XGroup: {}", req),
             },
             Operation::Redis(op) => match op {
                 RedisOperation::RedisSet(req) => write!(f, "RedisSet: {}", req),

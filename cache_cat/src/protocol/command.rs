@@ -88,7 +88,9 @@ use crate::protocol::set::srem::SRemCommand;
 use crate::protocol::set::sunion::SUnionCommand;
 use crate::protocol::set::sunionstore::SUnionStoreCommand;
 use crate::protocol::stream::xadd::XAddCommand;
+use crate::protocol::stream::xgroup::XGroupCommand;
 use crate::protocol::stream::xread::XReadCommand;
+use crate::protocol::stream::xreadgroup::XReadGroupCommand;
 use crate::protocol::string::append::AppendCommand;
 use crate::protocol::string::decr::DecrCommand;
 use crate::protocol::string::decrby::DecrByCommand;
@@ -421,6 +423,8 @@ impl CommandFactory {
         // Stream
         factory.register("XADD", XAddCommand);
         factory.register("XREAD", XReadCommand);
+        factory.register("XREADGROUP", XReadGroupCommand);
+        factory.register("XGROUP", XGroupCommand);
         factory
     }
 

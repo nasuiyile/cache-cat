@@ -1,4 +1,5 @@
 use crate::raft::types::core::structure::stream::id::{IdRange, StreamId};
+use serde::{Deserialize, Serialize};
 use std::fmt;
 
 pub type Fields = Vec<(Vec<u8>, Vec<u8>)>;
@@ -117,7 +118,7 @@ pub enum ReadStart {
     Latest,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum GroupRead {
     New,
     PendingAfter(StreamId),
