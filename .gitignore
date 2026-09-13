@@ -28,7 +28,7 @@ target/
 
 # 移除 Rust 的文档输出
 /doc/
-
+/target_tests
 # 操作系统生成的文件
 .DS_Store
 Thumbs.db

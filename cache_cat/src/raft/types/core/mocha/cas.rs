@@ -73,7 +73,7 @@ impl MyCache {
                 return_value = res;
                 match changed {
                     MochaOperation::Insert { value, expire } => {
-                        next_version = value.version + 1;
+                        next_version = value.version;
                         cache.insert_entry(write_key.clone(), value, expire);
                     }
                     MochaOperation::Remove => {
@@ -86,33 +86,35 @@ impl MyCache {
                     request: cmd_copy.into_base_op(),
                     version: next_version,
                     write_clock: update.write_clock,
+                    db_number: update.db_number,
                 });
             }
             UpdateType::CAS(cas_version) => {
-                let expected_version = *cas_version - 1;
-
-                let option = cache.get_entry(&write_key);
-                let entry = match option {
-                    None => return Value::Null,
-                    Some(v) => v,
-                };
-                if entry.value.version != expected_version {
-                    //如果 快照线程存放的是快照后的数据，那么版本号就会产生不一致，这是符合预期的
-                    //这里说明，数据已经是最新的了这种情况下不用进行修改
+                let expected_version = cas_version.saturating_sub(1);
+                if let Some(entry) = cache.get_entry(&write_key) {
+                    if entry.value.version != expected_version {
+                        return Value::Null;
+                    }
+                    let (changed, res) = cmd.mutate(read_entries, update.write_clock);
+                    match changed {
+                        MochaOperation::Insert { value, expire } => {
+                            cache.insert_entry(write_key, value, expire);
+                        }
+                        MochaOperation::Remove => {
+                            cache.remove(&write_key);
+                        }
+                        MochaOperation::Abort => {}
+                    }
+                    return res;
+                }
+                if *cas_version != 1 {
                     return Value::Null;
                 }
                 let (changed, res) = cmd.mutate(read_entries, update.write_clock);
-                return_value = res;
-                match changed {
-                    MochaOperation::Insert { mut value, expire } => {
-                        value.version += 1;
-                        cache.insert_entry(write_key.clone(), value, expire);
-                    }
-                    MochaOperation::Remove => {
-                        cache.remove(&write_key);
-                    }
-                    MochaOperation::Abort => {}
+                if let MochaOperation::Insert { value, expire } = changed {
+                    cache.insert_entry(write_key, value, expire);
                 }
+                return res;
             }
         };
 
@@ -130,25 +132,32 @@ impl MyCache {
 
         let key = cmd.key().clone();
         let option = cache.get_entry(&key);
-        let entry = match option {
-            None => {
-                let (new_obj, res) = cmd.init();
-                match new_obj {
-                    MochaOperation::Insert { value, expire } => {
-                        cache.insert_entry(key.clone(), value, expire);
-                    }
-                    MochaOperation::Remove => {
-                        cache.remove(&key);
-                    }
-                    MochaOperation::Abort => {
-                        return Value::error("Key not found");
-                    }
-                }
-
+        if option.is_none() {
+            match update.update_type {
+                UpdateType::CAS(version) if *version != 1 => return Value::Null,
+                UpdateType::CAS(_) | UpdateType::None | UpdateType::Snapshot(_) => {}
+            }
+            let cmd_copy = cmd.clone();
+            let (new_obj, res) = cmd.init();
+            let mut inserted = false;
+            if let MochaOperation::Insert { value, expire } = new_obj {
+                cache.insert_entry(key.clone(), value, expire);
+                inserted = true;
+            }
+            if let UpdateType::Snapshot(queue) = update.update_type {
+                queue.push(AtomicRequest {
+                    request: cmd_copy.into_base_op(),
+                    version: 1,
+                    write_clock: update.write_clock,
+                    db_number: update.db_number,
+                });
+            }
+            if !inserted && matches!(res, Value::Error(_)) {
                 return res;
             }
-            Some(v) => v,
-        };
+            return res;
+        }
+        let entry = option.expect("checked above");
         let return_value;
 
         match update.update_type {
@@ -173,7 +182,7 @@ impl MyCache {
                 match changed {
                     MochaOperation::Insert { value, expire } => {
                         //版本号为当前数据的版本号 +1
-                        next_version = value.version + 1;
+                        next_version = value.version;
                         cache.insert_entry(key.clone(), value, expire);
                     }
                     MochaOperation::Remove => {
@@ -186,20 +195,20 @@ impl MyCache {
                     request: cmd_copy.into_base_op(),
                     version: next_version,
                     write_clock: update.write_clock,
+                    db_number: update.db_number,
                 });
             }
             UpdateType::CAS(cas_version) => {
-                let expected_version = *cas_version - 1;
+                let expected_version = cas_version.saturating_sub(1);
                 if entry.value.version != expected_version {
-                    //如果 快照线程存放的是快照后的数据，那么版本号就会产生不一致，这是符合预期的
-                    //这里说明，数据已经是最新的了这种情况下不用进行修改
+                    // The snapshot already contains this write (or a later
+                    // one), so replay is intentionally a no-op.
                     return Value::Null;
                 }
                 let (changed, res) = cmd.mutate(entry, update.write_clock);
                 return_value = res;
                 match changed {
-                    MochaOperation::Insert { mut value, expire } => {
-                        value.version += 1;
+                    MochaOperation::Insert { value, expire } => {
                         cache.insert_entry(key.clone(), value, expire);
                     }
                     MochaOperation::Remove => {

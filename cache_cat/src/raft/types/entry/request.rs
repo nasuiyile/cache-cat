@@ -197,4 +197,5 @@ pub struct AtomicRequest {
     pub request: BaseOperation,
     pub version: u32,
     pub write_clock: u64,
+    pub db_number: u16,
 }

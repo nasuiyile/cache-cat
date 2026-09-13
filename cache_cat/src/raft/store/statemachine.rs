@@ -86,13 +86,18 @@ impl RaftSnapshotBuilder<TypeConfig> for StateMachineStore {
         drop(raft_meta);
         //快照开始 此时快照线程和raft线程同时执行 快照线程只会读取数据
         let cache = self.data.kvs.clone();
-        dump_cache_to_path(
+        let dump_result = dump_cache_to_path(
             cache,
             &self.path,
             self.data.raft_meta_data.clone(),
             self.data.incremental_operation_queue.clone(),
         )
-        .await?;
+        .await;
+        if let Err(err) = dump_result {
+            self.data.raft_meta_data.lock().await.snapshot_state = SnapshotState::End;
+            self.data.incremental_operation_queue.lock().await.clear();
+            return Err(err);
+        }
         //创建快照的硬链接
         //理论上这里读取的快照可能不是这里dump的快照了，因此这里返回的metadata需要重新load
         let file = FileOperator::new(&self.path).await?;
@@ -137,7 +142,10 @@ impl StateMachineStore {
         match res {
             None => {}
             Some(data) => {
-                //如果有值就更新元数据
+                let snapshot_clock = sm.data.kvs.get_write_clock();
+                sm.data.kvs.reset_write_clock();
+                sm.replay_snapshot_queue(&data.1).await;
+                sm.data.kvs.set_write_clock(snapshot_clock);
                 sm.update_meta_data(data.0).await;
             }
         }
@@ -147,6 +155,18 @@ impl StateMachineStore {
         let mut guard = self.data.raft_meta_data.lock().await;
         guard.last_membership = metadata.last_membership;
         guard.last_applied_log_id = metadata.last_log_id;
+    }
+
+    async fn replay_snapshot_queue(&self, queue: &[AtomicRequest]) {
+        for atomic_request in queue {
+            let mut update_type = UpdateType::CAS(atomic_request.version);
+            let mut update = Update {
+                db_number: atomic_request.db_number,
+                update_type: &mut update_type,
+                write_clock: self.data.kvs.set_write_clock(atomic_request.write_clock),
+            };
+            base_request(&self.data.kvs, atomic_request.request.clone(), &mut update);
+        }
     }
 }
 
@@ -229,15 +249,10 @@ impl RaftStateMachine<TypeConfig> for StateMachineStore {
         let res = load_cache_from_path(self.data.kvs.clone(), &path_buf)
             .await?
             .ok_or(io::Error::other("meta data is empty"))?;
-        for atomic_request in res.1 {
-            let update_type = &mut UpdateType::CAS(atomic_request.version);
-            let mut update = Update {
-                db_number: 0,
-                update_type,
-                write_clock: atomic_request.write_clock,
-            };
-            base_request(&self.data.kvs, atomic_request.request, &mut update);
-        }
+        let snapshot_clock = self.data.kvs.get_write_clock();
+        self.data.kvs.reset_write_clock();
+        self.replay_snapshot_queue(&res.1).await;
+        self.data.kvs.set_write_clock(snapshot_clock);
         self.update_meta_data(res.0).await;
         Ok(())
     }

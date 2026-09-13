@@ -223,6 +223,7 @@ impl MyCache {
                     version,
                     request: BaseOperation::Unlink(del_req.clone()),
                     write_clock: update.write_clock,
+                    db_number: update.db_number,
                 });
 
                 let existed = cache.unlink(&del_req.key);
@@ -271,6 +272,7 @@ impl MyCache {
                     version,
                     request: BaseOperation::Del(del_req.clone()),
                     write_clock: update.write_clock,
+                    db_number: update.db_number,
                 });
 
                 let existed = cache.remove(&del_req.key);
@@ -307,6 +309,7 @@ impl MyCache {
                     version: 1,
                     request: BaseOperation::FlushDB(req.clone()),
                     write_clock: update.write_clock,
+                    db_number: update.db_number,
                 });
                 cache.clear();
             }
@@ -330,6 +333,7 @@ impl MyCache {
                     version: 1,
                     request: BaseOperation::FlushAll(req.clone()),
                     write_clock: update.write_clock,
+                    db_number: update.db_number,
                 });
                 for database in &self.databases {
                     database.mocha.clear();

@@ -66,12 +66,16 @@ where
     writer.write_all(&[0u8; PLACEHOLDER_LENGTH]).await?;
 
     cache.dump_cache_to_writer(&mut writer).await?;
-    //将所有期间的操作写入
-    dump_operation_queue_to_writer(&mut writer, queue).await?;
 
-    //在最耗时的刷盘工作开始前将快照标记为已经收尾
+    // Enter the post-snapshot tail. Operations after this point are normal
+    // Raft log applications and are recovered from logs after last_log_id;
+    // only operations observed while in Start belong to this queue.
     let mut raft_meta_data = raft_meta.lock().await;
     raft_meta_data.snapshot_state = Tail;
+    let pending = {
+        let mut guard = queue.lock().await;
+        std::mem::take(&mut *guard)
+    };
     let snapshot_meta = SnapshotMeta {
         last_log_id: raft_meta_data.last_applied_log_id,
         last_membership: raft_meta_data.last_membership.clone(),
@@ -83,19 +87,31 @@ where
     };
     let result = bincode2::serialize(&cache_cat_snapshot_meta)
         .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
+    if result.len() + 4 > PLACEHOLDER_LENGTH {
+        return Err(io::Error::new(io::ErrorKind::InvalidData, "snapshot metadata too large"));
+    }
     drop(raft_meta_data);
     //回填数据
     writer.seek(SeekFrom::Start(5)).await?;
     writer.write_u32(result.len() as u32).await?;
     writer.write_all(&result).await?;
+    writer.seek(SeekFrom::End(0)).await?;
+    write_operation_queue_to_writer(&mut writer, &pending).await?;
 
     writer.flush().await?;
     writer.get_ref().sync_all().await?;
 
+    // Windows cannot rename over an existing file; remove the old snapshot
+    // before the rename on that platform.
+    #[cfg(windows)]
+    if let Err(err) = fs::remove_file(&final_path).await {
+        if err.kind() != io::ErrorKind::NotFound {
+            return Err(err);
+        }
+    }
     // 通过 rename 原子替换目标文件
     fs::rename(&temp_path, &final_path).await?;
-    let mut meta_data = raft_meta.lock().await;
-    meta_data.snapshot_state = End;
+    raft_meta.lock().await.snapshot_state = End;
     Ok(())
 }
 
@@ -129,6 +145,9 @@ where
     }
 
     let meta_len = reader.read_u32().await? as usize;
+    if meta_len > PLACEHOLDER_LENGTH - 4 {
+        return Err(io::Error::new(io::ErrorKind::InvalidData, "snapshot metadata length exceeds placeholder"));
+    }
     let mut meta_buf = vec![0u8; meta_len];
     reader.read_exact(&mut meta_buf).await?;
     reader
@@ -153,9 +172,29 @@ pub async fn dump_operation_queue_to_writer<W>(
 where
     W: AsyncWrite + Unpin + Send,
 {
-    let queue = queue.lock().await;
+    let queue = {
+        let mut guard = queue.lock().await;
+        std::mem::take(&mut *guard)
+    };
     for request in queue.iter() {
         let request_bytes = bincode2::serialize(&request)
+            .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
+        writer.write_u64(request_bytes.len() as u64).await?;
+        writer.write_all(&request_bytes).await?;
+    }
+    writer.write_u64(0).await?;
+    Ok(())
+}
+
+async fn write_operation_queue_to_writer<W>(
+    writer: &mut W,
+    queue: &[AtomicRequest],
+) -> Result<(), io::Error>
+where
+    W: AsyncWrite + Unpin + Send,
+{
+    for request in queue {
+        let request_bytes = bincode2::serialize(request)
             .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
         writer.write_u64(request_bytes.len() as u64).await?;
         writer.write_all(&request_bytes).await?;
@@ -197,7 +236,6 @@ where
 async fn test_dump_and_load_with_data() {
     use bytes::Bytes;
 
-    pub const TEMP_PATH: &str = r"E:\tmp\raft\raft-engine";
     use crate::raft::types::core::mocha::core::MyValue;
     use crate::raft::types::core::value_object::ValueObject;
     let cache = Arc::new(MyCache::new(1).unwrap());
@@ -228,9 +266,10 @@ async fn test_dump_and_load_with_data() {
     // };
     // let mut opt_queue = Vec::new();
     // cache.snapshot_insert(req, &mut opt_queue).await;
+    // Use the platform's temporary directory so this test is portable.
     let path = tempfile::Builder::new()
         .suffix("_1")
-        .tempdir_in(TEMP_PATH)
+        .tempdir()
         .unwrap()
         .keep()
         .join("");

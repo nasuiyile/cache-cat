@@ -95,6 +95,11 @@ impl MyCache {
         max(old_value, new_clock)
     }
 
+    pub fn reset_write_clock(&self) {
+        self.write_logic_clock.store(0, Ordering::Release);
+        self.read_logic_clock.store(0, Ordering::Release);
+    }
+
     pub fn get_write_clock(&self) -> u64 {
         self.write_logic_clock.load(Ordering::Acquire)
     }
