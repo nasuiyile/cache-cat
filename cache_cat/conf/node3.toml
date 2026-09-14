@@ -13,9 +13,10 @@ address = "127.0.0.1:5003"
 log-path = "C:/tmp/raft/cache-cat/3"
 single = false
 join = ["127.0.0.1:5001"]
+# 告诉其他节点 通过该地址访问
 advertise-host = "127.0.0.1"
 # 选举超时时间，节点之间的时钟偏移不能超过该值，需要大于 500
-election-timeout = 899
+election-timeout = 999
 # 超过这个值将会直接进行快照，为 0 代表不用快照 需大于500000
 snapshot-policy = 50000000
 # 超过这个阈值表示严重落后，主节点会将快照发给从节点，而不是增量同步。需要大于 snapshot-policy，防止快照还没生成。

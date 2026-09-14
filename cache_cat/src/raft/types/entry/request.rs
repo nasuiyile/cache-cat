@@ -53,7 +53,8 @@ impl Request {
 
     #[inline]
     pub fn get_db_number(&self) -> u16 {
-        (self.number >> 16) as u16
+        // The database number lives in the low 16 bits (see `split_u64`).
+        (self.number & 0xFFFF) as u16
     }
 }
 

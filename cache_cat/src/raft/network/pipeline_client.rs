@@ -102,20 +102,12 @@ impl PipelineClient {
             .map_err(|_| "Response channel closed".to_string())?
     }
 }
+#[derive(Clone)]
 pub struct PipelineMultiClient {
     clients: Vec<Arc<RwLock<PipelineClient>>>,
-    next: AtomicU32,
+    /// Round-robin cursor, shared between clones so the whole pool is used.
+    next: Arc<AtomicU32>,
     addr: String,
-}
-
-impl Clone for PipelineMultiClient {
-    fn clone(&self) -> Self {
-        Self {
-            clients: self.clients.clone(),
-            next: AtomicU32::new(0),
-            addr: self.addr.clone(),
-        }
-    }
 }
 
 impl PipelineMultiClient {
@@ -132,7 +124,7 @@ impl PipelineMultiClient {
 
         Ok(Self {
             clients,
-            next: AtomicU32::new(0),
+            next: Arc::new(AtomicU32::new(0)),
             addr: addr.to_string(),
         })
     }

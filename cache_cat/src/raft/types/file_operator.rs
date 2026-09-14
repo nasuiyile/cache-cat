@@ -1,11 +1,12 @@
+use crate::raft::network::client::connect_cluster;
 use crate::raft::types::raft_types::SnapshotMeta;
 use serde::{Deserialize, Serialize};
 use std::error::Error;
 use std::path::{Path, PathBuf};
 use tokio::fs::File;
 use tokio::io::{AsyncReadExt, AsyncWriteExt, BufReader};
-use tokio::net::TcpStream;
 use tokio::{fs, io};
+use tokio_rustls::TlsConnector;
 use uuid::Uuid;
 
 const CACHE_MAGIC_NUM: &[u8; 4] = b"MCDC";
@@ -29,22 +30,18 @@ impl FileOperator {
     /// - 否则创建硬链接并返回 Ok(Some(HardlinkSender))
     pub async fn new<P: AsRef<Path>>(file_path: P) -> Result<Option<Self>, io::Error> {
         let snapshot_path = file_path.as_ref().join("snapshot").join("snapshot.bin");
-        // 1. 检查文件是否存在
-        match fs::metadata(&snapshot_path).await {
-            Ok(_) => {
-                let operator = Self {
-                    file_path: file_path.as_ref().to_path_buf(),
-                    uuid: Uuid::new_v4(),
-                };
-                // 2. 构造唯一硬链接路径
-                let hardlink_path = operator.get_hard_link_buf();
-                // 3. 创建硬链接
-                fs::hard_link(snapshot_path, &hardlink_path).await?;
-                // 4. 返回构造完成的结构体
-                Ok(Some(operator))
-            }
-            // 文件不存在时返回 None
-            Err(_) => Ok(None),
+        let operator = Self {
+            file_path: file_path.as_ref().to_path_buf(),
+            uuid: Uuid::new_v4(),
+        };
+        // 构造唯一硬链接路径
+        let hardlink_path = operator.get_hard_link_buf();
+        // 创建硬链接。snapshot.bin 由 promote_snapshot_file 用 rename 原子替换，
+        // 不存在只可能是还没生成过快照；其他错误（权限等）如实返回，不能当成"没有快照"。
+        match fs::hard_link(&snapshot_path, &hardlink_path).await {
+            Ok(()) => Ok(Some(operator)),
+            Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(None),
+            Err(e) => Err(e),
         }
     }
     pub fn get_hard_link_buf(&self) -> PathBuf {
@@ -62,9 +59,13 @@ impl FileOperator {
 
     /// 发送文件（使用硬链接路径），返回 send_file_once 的结果（成功时返回 Uuid）。
     /// 注意：这里不删除硬链接，删除由 Drop 完成（或手动调用 close）。
-    pub async fn send_file(&self, addr: &str) -> Result<Uuid, Box<dyn Error + Send + Sync>> {
+    pub async fn send_file(
+        &self,
+        addr: &str,
+        tls_connector: Option<TlsConnector>,
+    ) -> Result<Uuid, Box<dyn Error + Send + Sync>> {
         let hardlink_path = self.get_hard_link_buf();
-        let uuid = send_file_once(addr, hardlink_path, self.uuid).await?;
+        let uuid = send_file_once(addr, hardlink_path, self.uuid, tls_connector).await?;
         Ok(uuid)
     }
     pub async fn load_meta_data(&self) -> Result<Option<SnapshotMeta>, io::Error> {
@@ -110,23 +111,19 @@ pub async fn send_file_once<P: AsRef<Path>>(
     addr: &str,
     file_path: P,
     uuid: Uuid,
+    tls_connector: Option<TlsConnector>,
 ) -> Result<Uuid, Box<dyn Error + Send + Sync>> {
-    // 连接
-    let mut stream = TcpStream::connect(addr).await?;
-    // 关闭 Nagle 以降低延迟 / 确保小包快速发出（与服务端一致）
-    stream.set_nodelay(true)?;
-
+    // 连接。和 RPC 客户端走同一套 TLS 逻辑：服务端在 tls-replication 打开时
+    // 会对 raft 端口上的所有连接先做 TLS 握手，裸 TCP 会直接失败
+    let mut stream = connect_cluster(addr, tls_connector).await?;
     // 第一个字节：模式标识，服务端代码中 0 是 RPC，非 0 是 stream
     stream.write_all(&[1u8]).await?;
-
     //发送uuid
     stream.write_all(uuid.as_bytes()).await?;
-
     // 打开文件并把文件内容拷贝到 stream
     let mut file = File::open(file_path).await?;
     //零拷贝，直接将文件发送到网络缓冲区
     let _bytes_copied = io::copy(&mut file, &mut stream).await?;
-
     // 刷新并关闭写端，通知服务端
     stream.shutdown().await?;
     //获取返回的文件名（目前没有其他用处）

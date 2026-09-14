@@ -3,13 +3,13 @@ use crate::raft::network::model::{AppendEntriesReq, InstallFullSnapshotReq, Vote
 use crate::raft::types::file_operator::FileOperator;
 use crate::raft::types::raft_types::{Node, NodeId, Snapshot, TypeConfig};
 use crate::utils::now_ms;
-use openraft::RPCTypes::{InstallSnapshot, Vote};
 use openraft::alias::VoteOf;
 use openraft::error::{RPCError, ReplicationClosed, StreamingError, Timeout, Unreachable};
 use openraft::network::{Backoff, RPCOption};
 use openraft::raft::{
     AppendEntriesRequest, AppendEntriesResponse, SnapshotResponse, VoteRequest, VoteResponse,
 };
+use openraft::RPCTypes::{InstallSnapshot, Vote};
 use openraft::{OptionalSend, RaftNetworkFactory, RaftNetworkV2};
 use parking_lot::RwLock;
 use std::sync::Arc;
@@ -137,7 +137,7 @@ impl RaftNetworkV2<TypeConfig> for TcpNetwork {
         result
     }
 
-    // 只是一个标识，并不真正进行快照
+    // 把已有的快照发送出去
     async fn full_snapshot(
         &mut self,
         vote: VoteOf<TypeConfig>,
@@ -156,47 +156,50 @@ impl RaftNetworkV2<TypeConfig> for TcpNetwork {
                 )));
             }
         };
-
-        let send_result = tokio::select! {
-            _cancel_result = cancel => {
-                //直接return 无需管返回值
-                return Err(StreamingError::Timeout(Timeout{
-                    action: InstallSnapshot,
-                    target,
-                    timeout: option.soft_ttl(),
-                    id: node_id,
-                }));
+        let tls_connector = self.tls_connector.clone();
+        let hard_ttl = option.hard_ttl();
+        // Phase 1: stream the file, phase 2: ask the follower to install it.
+        // Both phases are cancellable: openraft closes the replication stream
+        // when the leader steps down or the target is removed, and a leftover
+        // install RPC would keep running against the follower otherwise.
+        let transfer = async move {
+            if let Err(e) = snapshot
+                .snapshot
+                .send_file(&client.addr, tls_connector)
+                .await
+            {
+                info!("Failed to stream snapshot to node {}: {}", target, e);
+                return Err(StreamingError::Unreachable(Unreachable::from_string(
+                    format!(
+                        "node {} not reachable for snapshot streaming",
+                        target as u64
+                    ),
+                )));
             }
-            send_result = snapshot.snapshot.send_file(&client.addr) => {
-                send_result
-            }
+            let req = InstallFullSnapshotReq {
+                vote,
+                snapshot_meta: snapshot.meta,
+                snapshot: snapshot.snapshot,
+            };
+            let result = client
+                .call_with_timeout(
+                    8,
+                    req,
+                    hard_ttl,
+                    Timeout {
+                        action: InstallSnapshot,
+                        target,
+                        timeout: hard_ttl,
+                        id: node_id,
+                    },
+                )
+                .await?;
+            Ok(result)
         };
-        if send_result.is_err() {
-            return Err(StreamingError::Unreachable(Unreachable::from_string(
-                format!("node {} not found", target as u64),
-            )));
+        tokio::select! {
+            closed = cancel => Err(StreamingError::Closed(closed)),
+            result = transfer => result,
         }
-
-        let req = InstallFullSnapshotReq {
-            vote,
-            snapshot_meta: snapshot.meta,
-            snapshot: snapshot.snapshot,
-        };
-
-        let result = client
-            .call_with_timeout(
-                8,
-                req,
-                option.hard_ttl(),
-                Timeout {
-                    action: Vote,
-                    target,
-                    timeout: option.hard_ttl(),
-                    id: node_id,
-                },
-            )
-            .await?;
-        Ok(result)
     }
     fn backoff(&self) -> Option<Backoff> {
         Some(Backoff::new(std::iter::repeat(Duration::from_millis(1500))))

@@ -21,6 +21,8 @@ Command implementations must use the appropriate trait based on their access pat
 * Single-key read-and-write commands must implement the `ComputeCommand` trait.
 * Multi-key reads with a single-key write should implement the `MultiReadComputeCommand` trait.
 
+These traits are designed to make it easier to perform the same set of operations during snapshot and restore.
+
 If you notice bugs unrelated to the current modification, report them first instead of fixing them directly.
 
 `src/mocha` contains the cache implementation for scheduled expiration based on a logical clock and timing wheel.

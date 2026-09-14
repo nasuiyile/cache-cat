@@ -1,14 +1,14 @@
 use crate::error::{CacheCatError, Error};
 use crate::node::parsed_config::ParsedConfig;
 use crate::raft::network::connection::Connection;
-use crate::raft::network::external_handler::{HANDLER_TABLE, write};
+use crate::raft::network::external_handler::{write, HANDLER_TABLE};
 use crate::raft::network::redis_server::RedisServer;
 use crate::raft::store::snapshot::snapshot_handler::get_snapshot_file_name;
 use crate::raft::types::entry::request::Request;
 use crate::raft::types::raft_types::CacheCatApp;
 use bytes::{Buf, BufMut, Bytes, BytesMut};
-use futures::FutureExt;
 use futures::stream::FuturesOrdered;
+use futures::FutureExt;
 use futures::{SinkExt, StreamExt};
 use std::net::SocketAddr;
 use std::result::Result as StdResult;
@@ -266,12 +266,21 @@ pub async fn hand(
     let handler = HANDLER_TABLE
         .iter()
         .find(|(id, _)| *id == func_id)
-        .map(|(_, ctor)| ctor())
-        .ok_or(())
-        .map_err(|_| Error::internal("Handler not found".to_string()))?;
+        .map(|(_, ctor)| ctor());
 
-    let response_data = handler.internal_call(app, package).await?;
-
+    let result = match handler {
+        Some(handler) => handler.internal_call(app, package).await,
+        None => Err(Error::internal(format!("Handler not found: {}", func_id))),
+    };
+    // 即便编解码失败也需要返回对应错误作为响应
+    let (response_data, error) = match result {
+        Ok(data) => (data, None),
+        Err(e) => {
+            let encoded = bincode2::serialize(&Err::<(), String>(e.to_string()))
+                .map_err(|err| Error::internal(err.to_string()))?;
+            (Bytes::from(encoded), Some(e))
+        }
+    };
     let mut payload = BytesMut::with_capacity(4 + response_data.len());
     payload.put_u32(request_id);
     payload.put(response_data);
@@ -279,7 +288,10 @@ pub async fn hand(
     if tx.send(payload.freeze()).is_err() {
         return Err(Error::internal("Write task has ended".to_string()));
     }
-    Ok(())
+    match error {
+        Some(e) => Err(e),
+        None => Ok(()),
+    }
 }
 
 // 修改stream_mode以接受Connection而不是TcpStream

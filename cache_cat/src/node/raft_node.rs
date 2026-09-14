@@ -35,19 +35,24 @@ impl RaftNode {
         let path = dir.join("");
         let raft_engine = dir.join("raft-engine");
         let engine = create_raft_engine(raft_engine.clone())?;
-        let raft_config = Arc::new(openraft::Config {
-            heartbeat_interval: 500,
+        let heartbeat_interval = (config.election_timeout / 3).max(50);
+        let raft_config = openraft::Config {
+            heartbeat_interval,
             election_timeout_min: config.election_timeout,
             election_timeout_max: config.election_timeout + 300, // 添加最大选举超时时间
             purge_batch_size: 256,                               //积累到一定一定数量后才进删除
-            max_in_snapshot_log_to_keep: config.replication_lag_threshold + 100, //生成快照后要保留的日志数量（以供从节点同步数据）需要大于等于replication_lag_threshold,该参数会影响快照逻辑
+            //生成快照后要保留的日志数量（以供从节点同步数据）需要大于等于replication_lag_threshold,该参数会影响快照逻辑
+            max_in_snapshot_log_to_keep: config.replication_lag_threshold + 100,
             max_append_entries: Some(5000000),
             max_payload_entries: 5000000,
             snapshot_policy: config.snapshot_policy.clone(), //LogsSinceLast(100),
             replication_lag_threshold: config.replication_lag_threshold, //需要大于snapshot_policy
             install_snapshot_timeout: 60 * 1000,             //60秒
             ..Default::default()
-        });
+        }
+        .validate()
+        .map_err(|e| Error::config(format!("invalid raft config: {}", e)))?;
+        let raft_config = Arc::new(raft_config);
         let group_id = 0;
         let log_store = LogStore::new(group_id, engine.clone());
         let sm_store = StateMachineStore::new(config.clone(), path.clone(), node_id).await?;
@@ -90,7 +95,7 @@ impl RaftNode {
         if config.raft_single {
             let node = Node {
                 node_id: config.node_id,
-                endpoint: config.raft_endpoint.clone(),
+                endpoint: config.raft_advertise_endpoint.clone(),
             };
             raft_node.init_cluster(node).await?;
         } else {
@@ -165,7 +170,8 @@ impl RaftNode {
         let join_req = JoinRequest {
             node_id: config.node_id,
             sentinel_master_name: config.sentinel_master_name.clone(),
-            endpoint: config.raft_endpoint.clone(),
+            // See `start`: the cluster must learn the advertised endpoint.
+            endpoint: config.raft_advertise_endpoint.clone(),
         };
         // let req = ForwardRequest {
         //     forward_to_leader: 1,
@@ -222,8 +228,8 @@ impl RaftNode {
         // Create oneshot channel to signal startup completion
         let (startup_tx, startup_rx) = oneshot::channel::<StdResult<(), String>>();
 
-        let addr = config.raft_advertise_endpoint.raft_addr();
-        let redis_addr = config.raft_advertise_endpoint.redis_addr();
+        let addr = config.raft_endpoint.raft_addr();
+        let redis_addr = config.raft_endpoint.redis_addr();
         let handle = tokio::task::spawn(async move {
             // Signal startup success
             let server = match Server::new(app, addr.clone(), startup_tx, redis_addr, &config) {

@@ -79,13 +79,13 @@ impl RaftLogReader<TypeConfig> for LogStore {
         &mut self,
         range: RB,
     ) -> Result<Vec<<TypeConfig as RaftTypeConfig>::Entry>, io::Error> {
-        let mut start = match range.start_bound() {
+        let start = match range.start_bound() {
             Bound::Included(&n) => n,
             Bound::Excluded(&n) => n + 1, // 排除转换为包含
             Bound::Unbounded => 0,        // 从0开始
         };
 
-        let mut end = match range.end_bound() {
+        let end = match range.end_bound() {
             Bound::Included(&n) => n + 1, // 包含转换为不包含
             Bound::Excluded(&n) => n,
             Bound::Unbounded => u64::MAX, // 到最大值
@@ -93,18 +93,41 @@ impl RaftLogReader<TypeConfig> for LogStore {
 
         let mut res = Vec::new();
 
-        match self.engine.last_index(self.group_id as u64) {
-            None => {
+        // openraft tolerates (and expects) a short read at both ends of the
+        // range: entries below `first_index` were removed by `purge`, entries
+        // above `last_index` are not appended yet. raft-engine, however,
+        // returns `EntryCompacted` / `EntryNotFound` for such ranges, and a
+        // storage error here is fatal for the raft core (the replication
+        // task reports it as `StorageError`). Clamp to what the engine holds.
+        // A purge can still land between the clamp and the fetch, so retry a
+        // few times before giving up.
+        const ATTEMPTS: usize = 3;
+        for attempt in 1..=ATTEMPTS {
+            let group = self.group_id as u64;
+            let (Some(first), Some(last)) = (self.engine.first_index(group), self.engine.last_index(group))
+            else {
+                return Ok(res);
+            };
+            let clamped_start = start.max(first);
+            let clamped_end = end.min(last + 1);
+            if clamped_start >= clamped_end {
                 return Ok(res);
             }
-            Some(x) => {
-                end = (x + 1).min(end);
-                start = (x + 1).min(start);
+            match self.engine.fetch_entries_to::<MessageExtTyped>(
+                group,
+                clamped_start,
+                clamped_end,
+                None,
+                &mut res,
+            ) {
+                Ok(_) => return Ok(res),
+                Err(raft_engine::Error::EntryCompacted) if attempt < ATTEMPTS => {
+                    res.clear();
+                    continue;
+                }
+                Err(e) => return Err(io::Error::new(io::ErrorKind::InvalidData, e)),
             }
         }
-        self.engine
-            .fetch_entries_to::<MessageExtTyped>(self.group_id as u64, start, end, None, &mut res)
-            .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
         Ok(res)
     }
 
@@ -188,13 +211,82 @@ impl RaftLogStorage<TypeConfig> for LogStore {
     }
 
     // 如果follower的日志与leader的日志不匹配，follower会删除冲突的日志
+    //
+    // raft-engine has no "drop the tail" primitive: it only knows `Compact`
+    // (drop a prefix) and overwrite-on-append (appending at an index that is
+    // already present drops everything from that index on). Leaving this a
+    // no-op is fine as long as the conflicting entries get overwritten by the
+    // very next append, which is what happens on the normal log-matching
+    // path. It is *not* fine on the two paths where openraft truncates without
+    // appending afterwards:
+    //
+    // - `install_full_snapshot` truncates to `committed` and then purges up to
+    //   the snapshot's last log id; a stale tail (from an older leader) beyond
+    //   that index stays on disk, and after a restart `get_log_state` reports
+    //   `last_log_id < last_purged_log_id` (older term), which openraft treats
+    //   as a corrupted store and refuses to start.
+    // - a `prev_log_id` mismatch truncates and replies "conflict" without
+    //   appending anything.
+    //
+    // So implement it with the primitives raft-engine does have: re-append the
+    // boundary entry (same content) so the engine drops the tail behind it, or
+    // compact everything away when the boundary is not in the engine any more.
     async fn truncate_after(
         &mut self,
-        _last_log_id: Option<LogIdOf<TypeConfig>>,
+        last_log_id: Option<LogIdOf<TypeConfig>>,
     ) -> Result<(), io::Error> {
-        // tracing::info!("truncate_after: ({:?}, +oo)", last_log_id);
+        tracing::debug!("truncate_after: ({:?}, +oo)", last_log_id);
+        let group = self.group_id as u64;
+        let (Some(first), Some(last)) = (self.engine.first_index(group), self.engine.last_index(group))
+        else {
+            // Nothing stored, nothing to truncate.
+            return Ok(());
+        };
 
-        // Truncating does not need to be persisted.
+        let keep_upto = last_log_id.as_ref().map(|id| id.index);
+        if keep_upto.is_some_and(|idx| idx >= last) {
+            // Nothing after `last_log_id`.
+            return Ok(());
+        }
+
+        match keep_upto {
+            Some(idx) if idx >= first => {
+                let boundary = self
+                    .engine
+                    .get_entry::<MessageExtTyped>(group, idx)
+                    .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?
+                    .ok_or_else(|| {
+                        io::Error::new(
+                            io::ErrorKind::InvalidData,
+                            format!("log entry {} is within [{}, {}] but missing", idx, first, last),
+                        )
+                    })?;
+                let mut batch = LogBatch::with_capacity(1);
+                // 读取后原样写回， raft-engine 会丢弃 `(idx, last]` 范围内的日志 实现删除冲突日志的效果。
+                batch
+                    .add_entries::<MessageExtTyped>(group, &[boundary])
+                    .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
+                self.engine.write(&mut batch, false).map_err(io::Error::other)?;
+            }
+            _ => {
+                // Either everything must go (`None`) or the boundary was already
+                // purged: every stored entry is behind it, drop them all. The
+                // memtable becomes empty, and raft-engine accepts an append at
+                // any index on an empty memtable, so a later append at
+                // `last_log_id + 1` (or at 1) works.
+                self.engine.compact_to(group, last + 1);
+            }
+        }
+
+        // A snapshot installed right after this truncation is fsync'ed; if the
+        // truncation were not, a crash could resurrect the stale tail next to
+        // the new snapshot and fail openraft's startup consistency check.
+        // Truncation is rare (conflicts only), so the extra fsync is cheap.
+        let engine = self.engine.clone();
+        TypeConfig::spawn_blocking(move || {
+            engine.sync().map_err(|e| io::Error::other(e.to_string()))
+        })
+        .await??;
         Ok(())
     }
 
@@ -252,5 +344,109 @@ mod meta {
     {
         const KEY: &'static str = "vote";
         type Value = VoteOf<C>;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::raft::store::raft_engine::create_raft_engine;
+    use crate::raft::types::raft_types::{LeaderId, LogId};
+
+    fn log_id(term: u64, index: u64) -> LogId {
+        LogId::new(LeaderId { term, node_id: 1 }, index)
+    }
+
+    fn blank(term: u64, index: u64) -> Entry {
+        Entry::new_blank(log_id(term, index))
+    }
+
+    async fn append(store: &mut LogStore, entries: Vec<Entry>) {
+        store.append(entries, IOFlushed::noop()).await.unwrap();
+    }
+
+    async fn indexes(store: &mut LogStore) -> Vec<u64> {
+        store
+            .try_get_log_entries(..)
+            .await
+            .unwrap()
+            .into_iter()
+            .map(|e| e.log_id().index)
+            .collect()
+    }
+
+    fn new_store() -> (tempfile::TempDir, LogStore) {
+        let dir = tempfile::tempdir().unwrap();
+        let engine = create_raft_engine(dir.path().join("raft-engine")).unwrap();
+        (dir, LogStore::new(0, engine))
+    }
+
+    #[tokio::test]
+    async fn truncate_after_drops_the_tail_and_allows_reappend() {
+        let (_dir, mut store) = new_store();
+        append(&mut store, (1..=5).map(|i| blank(1, i)).collect()).await;
+        assert_eq!(indexes(&mut store).await, vec![1, 2, 3, 4, 5]);
+
+        // Conflict at 4: the leader's log continues with a different entry.
+        store.truncate_after(Some(log_id(1, 3))).await.unwrap();
+        assert_eq!(indexes(&mut store).await, vec![1, 2, 3]);
+        assert_eq!(
+            store.get_log_state().await.unwrap().last_log_id,
+            Some(log_id(1, 3))
+        );
+
+        // The leader's version of 4.. is appended afterwards.
+        append(&mut store, vec![blank(2, 4), blank(2, 5), blank(2, 6)]).await;
+        let entries = store.try_get_log_entries(4..).await.unwrap();
+        assert_eq!(
+            entries.iter().map(|e| e.log_id()).collect::<Vec<_>>(),
+            vec![log_id(2, 4), log_id(2, 5), log_id(2, 6)]
+        );
+
+        // Truncating at (or beyond) the end is a no-op.
+        store.truncate_after(Some(log_id(2, 6))).await.unwrap();
+        assert_eq!(indexes(&mut store).await, vec![1, 2, 3, 4, 5, 6]);
+    }
+
+    #[tokio::test]
+    async fn truncate_after_none_and_after_purged_boundary_empty_the_log() {
+        let (_dir, mut store) = new_store();
+        append(&mut store, (1..=4).map(|i| blank(1, i)).collect()).await;
+
+        store.truncate_after(None).await.unwrap();
+        assert!(indexes(&mut store).await.is_empty());
+        assert_eq!(store.get_log_state().await.unwrap().last_log_id, None);
+
+        // The log can be rebuilt from index 1 afterwards.
+        append(&mut store, (1..=6).map(|i| blank(2, i)).collect()).await;
+        assert_eq!(indexes(&mut store).await, vec![1, 2, 3, 4, 5, 6]);
+
+        // install_full_snapshot pattern: purge a prefix, then truncate to a
+        // boundary that is no longer in the engine -> the (stale) rest goes.
+        store.purge(log_id(2, 3)).await.unwrap();
+        assert_eq!(indexes(&mut store).await, vec![4, 5, 6]);
+        store.truncate_after(Some(log_id(2, 3))).await.unwrap();
+        assert!(indexes(&mut store).await.is_empty());
+        let state = store.get_log_state().await.unwrap();
+        assert_eq!(state.last_purged_log_id, Some(log_id(2, 3)));
+        assert_eq!(state.last_log_id, Some(log_id(2, 3)));
+
+        // ...and the snapshot's successor entries can be appended at 4.
+        append(&mut store, vec![blank(3, 4)]).await;
+        assert_eq!(indexes(&mut store).await, vec![4]);
+    }
+
+    #[tokio::test]
+    async fn reads_below_the_purged_prefix_are_clamped_not_errors() {
+        let (_dir, mut store) = new_store();
+        append(&mut store, (1..=6).map(|i| blank(1, i)).collect()).await;
+        store.purge(log_id(1, 3)).await.unwrap();
+        // openraft tolerates a short read at the purged end of the range.
+        assert_eq!(indexes(&mut store).await, vec![4, 5, 6]);
+        let partial = store.try_get_log_entries(2..5).await.unwrap();
+        assert_eq!(
+            partial.iter().map(|e| e.log_id().index).collect::<Vec<_>>(),
+            vec![4]
+        );
     }
 }

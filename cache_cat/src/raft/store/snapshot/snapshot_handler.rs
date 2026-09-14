@@ -100,16 +100,7 @@ where
 
     writer.flush().await?;
     writer.get_ref().sync_all().await?;
-
-    // Windows cannot rename over an existing file; remove the old snapshot
-    // before the rename on that platform.
-    #[cfg(windows)]
-    if let Err(err) = fs::remove_file(&final_path).await {
-        if err.kind() != io::ErrorKind::NotFound {
-            return Err(err);
-        }
-    }
-    // 通过 rename 原子替换目标文件
+    // 通过 rename 原子替换目标文件 即便是windows tokio也能实现类似的原子替换 实现更新文件
     fs::rename(&temp_path, &final_path).await?;
     raft_meta.lock().await.snapshot_state = End;
     Ok(())

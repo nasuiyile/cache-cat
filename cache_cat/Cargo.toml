@@ -21,7 +21,6 @@ debug = true
 
 [dependencies]
 openraft = { version = "0.10.0-alpha.34", features = ["type-alias", "serde"] }
-#openraft = { git = "https://github.com/databendlabs/openraft", tag = "v0.10.0-alpha.13", features = ["type-alias", "serde"] }
 futures = "0.3.32"
 tracing = "0.1.44"
 serde = { version = "1.0.228", features = ["derive"] }

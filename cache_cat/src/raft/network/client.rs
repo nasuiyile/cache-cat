@@ -1,3 +1,4 @@
+use crate::raft::network::connection::Connection;
 use crate::raft::types::raft_types::TypeConfig;
 use bincode2;
 use bytes::{BufMut, Bytes, BytesMut};
@@ -89,9 +90,10 @@ impl SlotTable {
 }
 
 // --- RPC 核心实现 ---
+#[derive(Clone)]
 pub struct RpcMultiClient {
     clients: Vec<Arc<RwLock<RpcClient>>>,
-    next_client: AtomicU32,
+    next_client: Arc<AtomicU32>,
     pub addr: String,
     // 保存 TLS 配置以便在重连时使用
     tls_connector: Option<TlsConnector>,
@@ -101,20 +103,9 @@ impl Default for RpcMultiClient {
     fn default() -> Self {
         Self {
             clients: Vec::new(),
-            next_client: AtomicU32::new(0),
+            next_client: Arc::new(AtomicU32::new(0)),
             addr: String::new(),
             tls_connector: None,
-        }
-    }
-}
-
-impl Clone for RpcMultiClient {
-    fn clone(&self) -> Self {
-        Self {
-            addr: self.addr.clone(),
-            clients: self.clients.clone(),
-            next_client: AtomicU32::new(0),
-            tls_connector: self.tls_connector.clone(),
         }
     }
 }
@@ -132,7 +123,7 @@ impl RpcMultiClient {
         Ok(Self {
             addr: addr.to_string(),
             clients,
-            next_client: AtomicU32::new(0),
+            next_client: Arc::new(AtomicU32::new(0)),
             tls_connector,
         })
     }
@@ -150,7 +141,7 @@ impl RpcMultiClient {
         Ok(Self {
             addr: addr.to_string(),
             clients,
-            next_client: AtomicU32::new(0),
+            next_client: Arc::new(AtomicU32::new(0)),
             tls_connector,
         })
     }
@@ -223,6 +214,30 @@ impl RpcMultiClient {
     }
 }
 
+/// Open a cluster connection to `addr`, performing the TLS handshake when
+/// replication TLS is configured.
+pub async fn connect_cluster(
+    addr: &str,
+    tls_connector: Option<TlsConnector>,
+) -> Result<Connection, Box<dyn Error + Send + Sync>> {
+    let stream = TcpStream::connect(addr).await?;
+    stream.set_nodelay(true)?; // RPC 必须关闭 Nagle 算法以降低延迟
+    // 根据传入的 tls_connector 来决定走 TLS 还是普通明文 TCP
+    match tls_connector {
+        Some(connector) => {
+            // 从 "host:port" 字符串中直接解析出 host (domain)
+            let domain_str = addr.rsplit_once(':').map(|(host, _)| host).ok_or_else(|| {
+                std::io::Error::new(std::io::ErrorKind::InvalidInput, "Invalid address format")
+            })?;
+            let server_name = ServerName::try_from(domain_str.to_string())
+                .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidInput, e))?;
+            let tls_stream = connector.connect(server_name, stream).await?;
+            Ok(Connection::from(tls_stream))
+        }
+        None => Ok(Connection::from(stream)),
+    }
+}
+
 #[derive(Clone)]
 pub struct RpcClient {
     tx_writer: mpsc::Sender<BytesMut>,
@@ -235,24 +250,8 @@ impl RpcClient {
         addr: &str,
         tls_connector: Option<TlsConnector>,
     ) -> Result<Self, Box<dyn Error + Send + Sync>> {
-        let stream = TcpStream::connect(addr).await?;
-        stream.set_nodelay(true)?; // RPC 必须关闭 Nagle 算法以降低延迟
-
-        // 根据传入的 tls_connector 来决定走 TLS 还是普通明文 TCP
-        if let Some(connector) = tls_connector {
-            // 从 "host:port" 字符串中直接解析出 host (domain)
-            let domain_str = addr.split(':').next().ok_or_else(|| {
-                std::io::Error::new(std::io::ErrorKind::InvalidInput, "Invalid address format")
-            })?;
-
-            let server_name = ServerName::try_from(domain_str.to_string())
-                .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidInput, e))?;
-
-            let tls_stream = connector.connect(server_name, stream).await?;
-            Self::initialize_framed(tls_stream).await
-        } else {
-            Self::initialize_framed(stream).await
-        }
+        let connection = connect_cluster(addr, tls_connector).await?;
+        Self::initialize_framed(connection).await
     }
 
     /// 提取出统一的握手、编解码及后台读写 Task 绑定逻辑
@@ -300,17 +299,18 @@ impl RpcClient {
 
                 let idx = (request_id & INDEX_MASK) as usize;
                 let slot = &table_reader.slots[idx];
-
-                // 校验 generation 是否匹配，防止串号
-                if slot.generation.load(Ordering::Acquire) == request_id {
-                    {
-                        let mut err = slot.error.lock();
-                        *err = None;
-                    }
-                    {
-                        let mut guard = slot.data.lock();
+                // 校验 generation 是否匹配，防止串号。
+                let delivered = {
+                    let mut guard = slot.data.lock();
+                    if slot.generation.load(Ordering::Acquire) == request_id {
+                        *slot.error.lock() = None;
                         *guard = Some(body);
+                        true
+                    } else {
+                        false
                     }
+                };
+                if delivered {
                     slot.waker.wake();
                 }
             }
@@ -356,15 +356,12 @@ impl RpcClient {
             )));
         }
 
-        // 初始化槽位状态
-        slot.generation.store(request_id, Ordering::Release);
+        // 初始化槽位状态（与读任务的 generation 校验在同一把锁下完成）
         {
             let mut guard = slot.data.lock();
+            slot.generation.store(request_id, Ordering::Release);
             *guard = None;
-        }
-        {
-            let mut err = slot.error.lock();
-            *err = None;
+            *slot.error.lock() = None;
         }
 
         // 序列化帧：request_id + func_id + body
