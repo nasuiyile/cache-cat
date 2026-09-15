@@ -1,5 +1,5 @@
-use crate::raft::store::raft_engine::MessageExtTyped;
-use crate::raft::types::raft_types::{Entry, GroupId, TypeConfig};
+use crate::raft::store::raft_engine::{Bincode2Codec, MessageExtTyped, StoredEntry};
+use crate::raft::types::raft_types::{GroupId, TypeConfig};
 use meta::StoreMeta;
 use openraft::LogState;
 use openraft::OptionalSend;
@@ -49,7 +49,7 @@ impl LogStore {
         let key = M::KEY.as_bytes();
         let bytes = self
             .engine
-            .get_message::<M::Value>(self.group_id as u64, key)
+            .get_value::<M::Value, Bincode2Codec>(self.group_id as u64, key)
             .map_err(|e| io::Error::other(e.to_string()))?;
         let res = match bytes {
             None => return Ok(None),
@@ -63,7 +63,7 @@ impl LogStore {
     fn put_meta<M: StoreMeta<TypeConfig>>(&self, value: &M::Value) -> Result<(), io::Error> {
         let mut batch = LogBatch::with_capacity(256);
         batch
-            .put_message(self.group_id as u64, M::KEY.as_bytes().to_vec(), value)
+            .put_value::<Bincode2Codec, _>(self.group_id as u64, M::KEY.as_bytes().to_vec(), value)
             .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
 
         self.engine
@@ -91,7 +91,7 @@ impl RaftLogReader<TypeConfig> for LogStore {
             Bound::Unbounded => u64::MAX, // 到最大值
         };
 
-        let mut res = Vec::new();
+        let mut res: Vec<StoredEntry> = Vec::new();
 
         // openraft tolerates (and expects) a short read at both ends of the
         // range: entries below `first_index` were removed by `purge`, entries
@@ -106,21 +106,21 @@ impl RaftLogReader<TypeConfig> for LogStore {
             let group = self.group_id as u64;
             let (Some(first), Some(last)) = (self.engine.first_index(group), self.engine.last_index(group))
             else {
-                return Ok(res);
+                return Ok(Vec::new());
             };
             let clamped_start = start.max(first);
             let clamped_end = end.min(last + 1);
             if clamped_start >= clamped_end {
-                return Ok(res);
+                return Ok(Vec::new());
             }
-            match self.engine.fetch_entries_to::<MessageExtTyped>(
+            match self.engine.fetch_entries_to_with::<MessageExtTyped, Bincode2Codec>(
                 group,
                 clamped_start,
                 clamped_end,
                 None,
                 &mut res,
             ) {
-                Ok(_) => return Ok(res),
+                Ok(_) => return Ok(res.into_iter().map(|e| e.0).collect()),
                 Err(raft_engine::Error::EntryCompacted) if attempt < ATTEMPTS => {
                     res.clear();
                     continue;
@@ -128,7 +128,7 @@ impl RaftLogReader<TypeConfig> for LogStore {
                 Err(e) => return Err(io::Error::new(io::ErrorKind::InvalidData, e)),
             }
         }
-        Ok(res)
+        Ok(Vec::new())
     }
 
     async fn read_vote(&mut self) -> Result<Option<VoteOf<TypeConfig>>, io::Error> {
@@ -145,9 +145,9 @@ impl RaftLogStorage<TypeConfig> for LogStore {
             None => None, //  只要 last_index 为 None，直接返回 None
             Some(i) => self
                 .engine
-                .get_entry::<MessageExtTyped>(self.group_id as u64, i)
+                .get_entry_with::<MessageExtTyped, Bincode2Codec>(self.group_id as u64, i)
                 .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?
-                .map(|entry| entry.log_id()),
+                .map(|entry| entry.0.log_id()),
         };
 
         let last_purged_log_id = self.get_meta::<meta::LastPurged>()?;
@@ -186,9 +186,9 @@ impl RaftLogStorage<TypeConfig> for LogStore {
         I: IntoIterator<Item = EntryOf<TypeConfig>> + Send,
     {
         let mut batch = LogBatch::with_capacity(256);
-        let x: Vec<Entry> = entries.into_iter().collect();
+        let x: Vec<StoredEntry> = entries.into_iter().map(StoredEntry).collect();
         batch
-            .add_entries::<MessageExtTyped>(self.group_id as u64, &x)
+            .add_entries_with::<MessageExtTyped, Bincode2Codec>(self.group_id as u64, &x)
             .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
         //提前释放
         // 在调用回调函数之前，确保日志已经持久化到磁盘。
@@ -253,7 +253,7 @@ impl RaftLogStorage<TypeConfig> for LogStore {
             Some(idx) if idx >= first => {
                 let boundary = self
                     .engine
-                    .get_entry::<MessageExtTyped>(group, idx)
+                    .get_entry_with::<MessageExtTyped, Bincode2Codec>(group, idx)
                     .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?
                     .ok_or_else(|| {
                         io::Error::new(
@@ -264,7 +264,7 @@ impl RaftLogStorage<TypeConfig> for LogStore {
                 let mut batch = LogBatch::with_capacity(1);
                 // 读取后原样写回， raft-engine 会丢弃 `(idx, last]` 范围内的日志 实现删除冲突日志的效果。
                 batch
-                    .add_entries::<MessageExtTyped>(group, &[boundary])
+                    .add_entries_with::<MessageExtTyped, Bincode2Codec>(group, &[boundary])
                     .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
                 self.engine.write(&mut batch, false).map_err(io::Error::other)?;
             }
@@ -351,7 +351,7 @@ mod meta {
 mod tests {
     use super::*;
     use crate::raft::store::raft_engine::create_raft_engine;
-    use crate::raft::types::raft_types::{LeaderId, LogId};
+    use crate::raft::types::raft_types::{Entry, LeaderId, LogId};
 
     fn log_id(term: u64, index: u64) -> LogId {
         LogId::new(LeaderId { term, node_id: 1 }, index)

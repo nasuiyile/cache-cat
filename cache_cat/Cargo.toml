@@ -33,7 +33,7 @@ mimalloc = { version = "0.1.52", features = ["extended"] }
 libmimalloc-sys = "0.1.49"
 crossbeam-utils = "0.8.21"
 parking_lot = "0.12.5"
-raft-engine = { git = "https://github.com/nasuiyile/raft-engine-serde" }
+raft-engine = { git = "https://github.com/tikv/raft-engine", rev = "097c499a19fbb38754c73aa2f31532329df7c0c6" }
 #time = { version = "0.3", features = ["local-offset"] }
 tracing-subscriber = { version = "0.3.23", features = ["local-time"] }
 uuid = { version = "1.23.1", features = ["v4", "serde"] }

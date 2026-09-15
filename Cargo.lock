@@ -1486,9 +1486,9 @@ dependencies = [
 
 [[package]]
 name = "lz4-sys"
-version = "1.10.0"
+version = "1.9.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "109de74d5d2353660401699a4174a4ff23fcc649caf553df71933c7fb45ad868"
+checksum = "e9764018d143cc854c9f17f0b907de70f14393b1f502da6375dce70f00514eb3"
 dependencies = [
  "cc",
  "libc",
@@ -2057,9 +2057,8 @@ checksum = "f8dcc9c7d52a811697d2151c701e0d08956f92b0e24136cf4cf27b57a6a0d9bf"
 [[package]]
 name = "raft-engine"
 version = "0.4.2"
-source = "git+https://github.com/nasuiyile/raft-engine-serde#6c25d2547323715368efe5ec89252846ea3cbb4e"
+source = "git+https://github.com/tikv/raft-engine?rev=097c499a19fbb38754c73aa2f31532329df7c0c6#097c499a19fbb38754c73aa2f31532329df7c0c6"
 dependencies = [
- "bincode2",
  "byteorder",
  "crc32fast",
  "crossbeam",
