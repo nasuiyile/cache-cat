@@ -4,7 +4,7 @@ mod tests {
     use crate::raft::network::client::RpcMultiClient;
     use crate::raft::network::model::{GetReq, GetRes, PrintTestReq, PrintTestRes};
     use crate::raft::network::pipeline_client::{PipelineClient, PipelineMultiClient};
-    use crate::raft::types::entry::bae_operation::BaseOperation;
+    use crate::raft::types::entry::base_operation::BaseOperation;
     use crate::raft::types::entry::request::{Operation, Request};
     use crate::raft::types::raft_types::TypeConfig;
     use bytes::Bytes;

@@ -1,15 +1,20 @@
+use crate::protocol::bitmap::bitop::BitOpReq;
 use crate::protocol::key::rename::RenameParams;
 use crate::protocol::key::renamenx::RenameNxParams;
 use crate::protocol::key::unlink::UnlinkParams;
 use crate::protocol::lua::eval::EvalParams;
+use crate::protocol::set::sdiffstore::SDiffStoreReq;
+use crate::protocol::set::sinterstore::SInterStoreReq;
+use crate::protocol::set::sunionstore::SUnionStoreReq;
 use crate::protocol::string::getset::GetSetParams;
 use crate::protocol::string::mset::MsetParams;
+use crate::protocol::string::pfmerge::PFMergeReq;
 use crate::protocol::string::set::SetParams;
 use crate::protocol::string::setex::SetExParams;
 use crate::protocol::string::setnx::SetNxParams;
 use crate::protocol::transaction::exec::ExecParams;
 use crate::protocol::{key::del::DelParams, string::psetex::PSetExParams};
-use crate::raft::types::entry::bae_operation::BaseOperation;
+use crate::raft::types::entry::base_operation::BaseOperation;
 use crate::raft::types::entry::read_operation::ReadOperation;
 use crate::utils::merge_u64;
 use serde::{Deserialize, Serialize};
@@ -58,6 +63,8 @@ impl Request {
     }
 }
 
+/// Commands expanded into concrete BaseOperations while applying a Raft log.
+/// Snapshot queues record the resulting writes rather than these commands.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum RedisOperation {
     RedisSet(SetParams),
@@ -69,6 +76,11 @@ pub enum RedisOperation {
     RedisDel(DelParams),
     RedisRename(RenameParams),
     RedisRenameNx(RenameNxParams),
+    RedisBitOp(BitOpReq),
+    RedisSInterStore(SInterStoreReq),
+    RedisSUnionStore(SUnionStoreReq),
+    RedisSDiffStore(SDiffStoreReq),
+    RedisPFMerge(PFMergeReq),
     RedisEval(EvalParams),
     RedisExec(ExecParams),
     RedisUnlink(UnlinkParams),
@@ -163,11 +175,6 @@ impl fmt::Display for Request {
                 BaseOperation::ZIncrBy(req) => write!(f, "ZIncrBy: {}", req),
                 BaseOperation::HMSet(req) => write!(f, "HMSet: {}", req),
                 BaseOperation::PfAdd(req) => write!(f, "PfAdd: {}", req),
-                BaseOperation::SInterStore(req) => write!(f, "SInterStore: {}", req),
-                BaseOperation::SUnionStore(req) => write!(f, "SUnionStore: {}", req),
-                BaseOperation::SDiffStore(req) => write!(f, "SDiffStore: {}", req),
-                BaseOperation::PFMerge(req) => write!(f, "PFMerge: {}", req),
-                BaseOperation::BitOp(req) => write!(f, "BitOp: {}", req),
                 BaseOperation::BfAdd(req) => write!(f, "BfAdd: {}", req),
                 BaseOperation::BfMAdd(req) => write!(f, "BfMAdd: {}", req),
                 BaseOperation::BfReserve(req) => write!(f, "BfReserve: {}", req),
@@ -183,6 +190,11 @@ impl fmt::Display for Request {
                 RedisOperation::RedisMset(req) => write!(f, "RedisMset: {}", req),
                 RedisOperation::RedisDel(req) => write!(f, "RedisDel: {}", req),
                 RedisOperation::RedisRename(req) => write!(f, "RedisRename: {}", req),
+                RedisOperation::RedisBitOp(req) => write!(f, "RedisBitOp: {}", req),
+                RedisOperation::RedisSInterStore(req) => write!(f, "RedisSInterStore: {}", req),
+                RedisOperation::RedisSUnionStore(req) => write!(f, "RedisSUnionStore: {}", req),
+                RedisOperation::RedisSDiffStore(req) => write!(f, "RedisSDiffStore: {}", req),
+                RedisOperation::RedisPFMerge(req) => write!(f, "RedisPFMerge: {}", req),
                 RedisOperation::RedisEval(req) => write!(f, "RedisEval: {}", req),
                 RedisOperation::RedisExec(req) => write!(f, "RedisExec: {}", req),
                 RedisOperation::RedisRenameNx(req) => write!(f, "RedisRenameNx: {}", req),

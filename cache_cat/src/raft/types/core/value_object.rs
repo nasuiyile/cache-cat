@@ -45,6 +45,21 @@ pub enum ValueObject {
 }
 
 impl ValueObject {
+    /// Copy mutable containers so a queued INSERT retains its computed value
+    /// when later commands mutate the live cache. Immutable bytes can be shared.
+    pub(crate) fn snapshot_clone(&self) -> Self {
+        match self {
+            Self::Int(value) => Self::Int(*value),
+            Self::String(value) => Self::String(value.clone()),
+            Self::List(value) => Self::List(Arc::new(Mutex::new(value.lock().clone()))),
+            Self::Hash(value) => Self::Hash(Arc::new(Mutex::new(value.lock().clone()))),
+            Self::ZSet(value) => Self::ZSet(Arc::new(Mutex::new(value.lock().clone()))),
+            Self::Set(value) => Self::Set(Arc::new(Mutex::new(value.lock().clone()))),
+            Self::Bloom(value) => Self::Bloom(Arc::new(Mutex::new(value.lock().clone()))),
+            Self::Stream(value) => Self::Stream(Arc::new(RwLock::new(value.read().clone()))),
+        }
+    }
+
     pub fn estimated_memory_usage(&self, samples: usize) -> usize {
         size_of::<Self>().saturating_add(self.estimated_heap_usage(samples))
     }

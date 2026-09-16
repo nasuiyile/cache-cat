@@ -7,7 +7,7 @@ use crate::raft::types::core::mocha::cas::ComputeCommand;
 use crate::raft::types::core::mocha::core::MyValue;
 use crate::raft::types::core::response_value::Value;
 use crate::raft::types::core::value_object::ValueObject;
-use crate::raft::types::entry::bae_operation::BaseOperation::{self, IncrBy};
+use crate::raft::types::entry::base_operation::BaseOperation::{self, IncrBy};
 use crate::raft::types::entry::request::Operation;
 use crate::utils::parse_i64;
 use async_trait::async_trait;

@@ -3,13 +3,12 @@ use crate::mocha::{EntrySnapshot, ExpirePolicy, MochaOperation};
 use crate::protocol::command::{Client, Command};
 use crate::protocol::raft_command::RaftCommand;
 use crate::raft::network::redis_server::RedisServer;
-use crate::raft::types::core::mocha::cas::MultiReadComputeCommand;
+use crate::raft::types::core::mocha::cas::{ComputedWrite, MultiReadComputeCommand};
 use crate::raft::types::core::mocha::core::MyValue;
 use crate::raft::types::core::response_value::Value;
 use crate::raft::types::core::structure::hll::{HllDecodeError, RedisHll};
 use crate::raft::types::core::value_object::ValueObject;
-use crate::raft::types::entry::bae_operation::BaseOperation;
-use crate::raft::types::entry::request::Operation;
+use crate::raft::types::entry::request::{Operation, RedisOperation};
 use async_trait::async_trait;
 use bytes::Bytes;
 use serde::{Deserialize, Serialize};
@@ -66,7 +65,7 @@ impl RaftCommand for PFMergeCommand {
     fn raft_request(&self, items: &[Value]) -> Result<Operation, ProtocolError> {
         let params = PFMergeParams::parse(items)?;
 
-        Ok(Operation::Base(BaseOperation::PFMerge(PFMergeReq {
+        Ok(Operation::Redis(RedisOperation::RedisPFMerge(PFMergeReq {
             key: params.key,
             keys: params.keys,
         })))
@@ -112,23 +111,15 @@ impl Display for PFMergeReq {
 }
 
 impl MultiReadComputeCommand for PFMergeReq {
-    fn write_key(&self) -> &Bytes {
-        &self.key
+    fn read_keys(&self) -> impl Iterator<Item = &Bytes> {
+        self.keys.iter()
     }
 
-    fn read_keys(&self) -> &[Bytes] {
-        &self.keys
-    }
-
-    fn into_base_op(self) -> BaseOperation {
-        BaseOperation::PFMerge(self)
-    }
-
-    fn mutate(
+    fn mutate_writes(
         self,
         read_entries: Vec<Option<EntrySnapshot<MyValue>>>,
         _write_clock: u64,
-    ) -> (MochaOperation<MyValue>, Value) {
+    ) -> (Vec<ComputedWrite>, Value) {
         debug_assert_eq!(read_entries.len(), self.keys.len());
 
         // PFMERGE preserves the destination TTL.
@@ -149,18 +140,18 @@ impl MultiReadComputeCommand for PFMergeReq {
                 ValueObject::String(raw) => match RedisHll::decode(raw.as_ref()) {
                     Ok(hll) => hll,
                     Err(HllDecodeError::NotHll) => {
-                        return (MochaOperation::Abort, invalid_hll());
+                        return (Vec::new(), invalid_hll());
                     }
                     Err(HllDecodeError::Corrupted) => {
-                        return (MochaOperation::Abort, corrupted_hll());
+                        return (Vec::new(), corrupted_hll());
                     }
                 },
                 ValueObject::Int(_) => {
-                    return (MochaOperation::Abort, invalid_hll());
+                    return (Vec::new(), invalid_hll());
                 }
                 _ => {
                     return (
-                        MochaOperation::Abort,
+                        Vec::new(),
                         CacheCatError::from(ProtocolError::WrongType).into(),
                     );
                 }
@@ -176,10 +167,13 @@ impl MultiReadComputeCommand for PFMergeReq {
         merged.invalidate_cache();
 
         (
-            MochaOperation::Insert {
-                value: MyValue::new(ValueObject::String(merged.into_bytes())),
-                expire,
-            },
+            vec![ComputedWrite {
+                key: self.key,
+                operation: MochaOperation::Insert {
+                    value: MyValue::new(ValueObject::String(merged.into_bytes())),
+                    expire,
+                },
+            }],
             Value::SimpleString(String::from("OK")),
         )
     }

@@ -4,7 +4,6 @@ use crate::protocol::bf::bf_loadchunk::BfLoadChunkReq;
 use crate::protocol::bf::bf_madd::BfMAddReq;
 use crate::protocol::bf::bf_reserve::BfReserveReq;
 use crate::protocol::bitmap::bitfield::BitFieldReq;
-use crate::protocol::bitmap::bitop::BitOpReq;
 use crate::protocol::bitmap::setbit::SetBitReq;
 use crate::protocol::hash::hdel::HDelReq;
 use crate::protocol::hash::hincrby::HIncrReq;
@@ -26,11 +25,8 @@ use crate::protocol::list::ltrim::LTrimReq;
 use crate::protocol::list::rpop::RPopReq;
 use crate::protocol::list::rpush::RPushReq;
 use crate::protocol::set::sadd::SAddReq;
-use crate::protocol::set::sdiffstore::SDiffStoreReq;
-use crate::protocol::set::sinterstore::SInterStoreReq;
 use crate::protocol::set::spop::SPopReq;
 use crate::protocol::set::srem::SRemReq;
-use crate::protocol::set::sunionstore::SUnionStoreReq;
 use crate::protocol::stream::xadd::XAddReq;
 use crate::protocol::stream::xgroup::XGroupReq;
 use crate::protocol::string::append::AppendReq;
@@ -39,7 +35,6 @@ use crate::protocol::string::decrby::DecrByReq;
 use crate::protocol::string::fadd::PfAddReq;
 use crate::protocol::string::incr::IncrReq;
 use crate::protocol::string::incrby::IncrByReq;
-use crate::protocol::string::pfmerge::PFMergeReq;
 use crate::protocol::string::set::SetReq;
 use crate::protocol::zset::zadd::ZAddReq;
 use crate::protocol::zset::zincrby::ZIncrByReq;
@@ -51,6 +46,8 @@ use serde::{Deserialize, Serialize};
 use std::fmt;
 use std::fmt::Display;
 
+/// Operations eligible for snapshot replay. Commands that read other keys to
+/// produce their writes belong to RedisOperation and first compute a write set.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum BaseOperation {
     // Just used to push the clock
@@ -72,9 +69,7 @@ pub enum BaseOperation {
     BitField(BitFieldReq),
     DecrBy(DecrByReq),
     Decr(DecrReq),
-    PFMerge(PFMergeReq),
     PfAdd(PfAddReq),
-    BitOp(BitOpReq),
     // list
     LPush(LPushReq),
     RPush(RPushReq),
@@ -99,9 +94,6 @@ pub enum BaseOperation {
     SRem(SRemReq),
     SPop(SPopReq),
     Unlink(UnlinkReq),
-    SInterStore(SInterStoreReq),
-    SDiffStore(SDiffStoreReq),
-    SUnionStore(SUnionStoreReq),
     //bf
     BfAdd(BfAddReq),
     BfMAdd(BfMAddReq),

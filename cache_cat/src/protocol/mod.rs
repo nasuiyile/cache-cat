@@ -21,3 +21,6 @@ pub mod stream;
 
 /// Special value indicating no expiration (0 means never expire)
 pub const NO_EXPIRATION: u64 = 0;
+
+#[cfg(test)]
+mod multi_compute_tests;

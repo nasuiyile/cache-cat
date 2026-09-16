@@ -3,12 +3,11 @@ use crate::mocha::{EntrySnapshot, ExpirePolicy, MochaOperation};
 use crate::protocol::command::{Client, Command};
 use crate::protocol::raft_command::RaftCommand;
 use crate::raft::network::redis_server::RedisServer;
-use crate::raft::types::core::mocha::cas::MultiReadComputeCommand;
+use crate::raft::types::core::mocha::cas::{ComputedWrite, MultiReadComputeCommand};
 use crate::raft::types::core::mocha::core::MyValue;
 use crate::raft::types::core::response_value::Value;
 use crate::raft::types::core::value_object::ValueObject;
-use crate::raft::types::entry::bae_operation::BaseOperation;
-use crate::raft::types::entry::request::Operation;
+use crate::raft::types::entry::request::{Operation, RedisOperation};
 use async_trait::async_trait;
 use bytes::Bytes;
 use parking_lot::Mutex;
@@ -54,7 +53,7 @@ impl SUnionStoreCommand {
 impl RaftCommand for SUnionStoreCommand {
     fn raft_request(&self, items: &[Value]) -> Result<Operation, ProtocolError> {
         let params = Self::parse(items)?;
-        Ok(Operation::Base(BaseOperation::SUnionStore(
+        Ok(Operation::Redis(RedisOperation::RedisSUnionStore(
             SUnionStoreReq {
                 key: params.key,
                 keys: params.keys,
@@ -98,23 +97,15 @@ impl Display for SUnionStoreReq {
 }
 
 impl MultiReadComputeCommand for SUnionStoreReq {
-    fn write_key(&self) -> &Bytes {
-        &self.key
+    fn read_keys(&self) -> impl Iterator<Item = &Bytes> {
+        self.keys.iter()
     }
 
-    fn read_keys(&self) -> &[Bytes] {
-        &self.keys
-    }
-
-    fn into_base_op(self) -> BaseOperation {
-        BaseOperation::SUnionStore(self)
-    }
-
-    fn mutate(
+    fn mutate_writes(
         self,
         read_entries: Vec<Option<EntrySnapshot<MyValue>>>,
         _write_clock: u64,
-    ) -> (MochaOperation<MyValue>, Value) {
+    ) -> (Vec<ComputedWrite>, Value) {
         let mut result: HashSet<Bytes> = Default::default();
 
         for entry in read_entries {
@@ -124,7 +115,7 @@ impl MultiReadComputeCommand for SUnionStoreReq {
 
             let ValueObject::Set(data) = &snapshot.value.data else {
                 return (
-                    MochaOperation::Abort,
+                    Vec::new(),
                     CacheCatError::from(ProtocolError::WrongType).into(),
                 );
             };
@@ -133,16 +124,25 @@ impl MultiReadComputeCommand for SUnionStoreReq {
         }
 
         if result.is_empty() {
-            (MochaOperation::Remove, Value::Integer(0))
+            (
+                vec![ComputedWrite {
+                    key: self.key,
+                    operation: MochaOperation::Remove,
+                }],
+                Value::Integer(0),
+            )
         } else {
             let cardinality = result.len() as i64;
             let value = MyValue::new(ValueObject::Set(Arc::new(Mutex::new(result))));
 
             (
-                MochaOperation::Insert {
-                    value,
-                    expire: ExpirePolicy::Persistent,
-                },
+                vec![ComputedWrite {
+                    key: self.key,
+                    operation: MochaOperation::Insert {
+                        value,
+                        expire: ExpirePolicy::Persistent,
+                    },
+                }],
                 Value::Integer(cardinality),
             )
         }

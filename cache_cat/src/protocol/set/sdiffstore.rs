@@ -3,12 +3,11 @@ use crate::mocha::{EntrySnapshot, ExpirePolicy, MochaOperation};
 use crate::protocol::command::{Client, Command};
 use crate::protocol::raft_command::RaftCommand;
 use crate::raft::network::redis_server::RedisServer;
-use crate::raft::types::core::mocha::cas::MultiReadComputeCommand;
+use crate::raft::types::core::mocha::cas::{ComputedWrite, MultiReadComputeCommand};
 use crate::raft::types::core::mocha::core::MyValue;
 use crate::raft::types::core::response_value::Value;
 use crate::raft::types::core::value_object::ValueObject;
-use crate::raft::types::entry::bae_operation::BaseOperation;
-use crate::raft::types::entry::request::Operation;
+use crate::raft::types::entry::request::{Operation, RedisOperation};
 use async_trait::async_trait;
 use bytes::Bytes;
 use parking_lot::Mutex;
@@ -54,7 +53,7 @@ impl SDiffStoreCommand {
 impl RaftCommand for SDiffStoreCommand {
     fn raft_request(&self, items: &[Value]) -> Result<Operation, ProtocolError> {
         let params = Self::parse(items)?;
-        Ok(Operation::Base(BaseOperation::SDiffStore(SDiffStoreReq {
+        Ok(Operation::Redis(RedisOperation::RedisSDiffStore(SDiffStoreReq {
             key: params.key,
             keys: params.keys,
         })))
@@ -96,30 +95,22 @@ impl Display for SDiffStoreReq {
 }
 
 impl MultiReadComputeCommand for SDiffStoreReq {
-    fn write_key(&self) -> &Bytes {
-        &self.key
+    fn read_keys(&self) -> impl Iterator<Item = &Bytes> {
+        self.keys.iter()
     }
 
-    fn read_keys(&self) -> &[Bytes] {
-        &self.keys
-    }
-
-    fn into_base_op(self) -> BaseOperation {
-        BaseOperation::SDiffStore(self)
-    }
-
-    fn mutate(
+    fn mutate_writes(
         self,
         read_entries: Vec<Option<EntrySnapshot<MyValue>>>,
         _write_clock: u64,
-    ) -> (MochaOperation<MyValue>, Value) {
+    ) -> (Vec<ComputedWrite>, Value) {
         let mut entries = read_entries.into_iter();
 
         let mut diffsection: Option<HashSet<Bytes>> = if let Some(entry) = entries.next() {
             if let Some(snapshot) = entry {
                 let ValueObject::Set(data) = &snapshot.value.data else {
                     return (
-                        MochaOperation::Abort,
+                        Vec::new(),
                         CacheCatError::from(ProtocolError::WrongType).into(),
                     );
                 };
@@ -130,7 +121,7 @@ impl MultiReadComputeCommand for SDiffStoreReq {
             }
         } else {
             return (
-                MochaOperation::Abort,
+                Vec::new(),
                 CacheCatError::from(ProtocolError::WrongArgCount(
                     "wrong number of arguments for command",
                 ))
@@ -145,7 +136,7 @@ impl MultiReadComputeCommand for SDiffStoreReq {
 
             let ValueObject::Set(data) = &snapshot.value.data else {
                 return (
-                    MochaOperation::Abort,
+                    Vec::new(),
                     CacheCatError::from(ProtocolError::WrongType).into(),
                 );
             };
@@ -165,14 +156,23 @@ impl MultiReadComputeCommand for SDiffStoreReq {
             let value = MyValue::new(ValueObject::Set(Arc::new(Mutex::new(result))));
 
             (
-                MochaOperation::Insert {
-                    value,
-                    expire: ExpirePolicy::Persistent,
-                },
+                vec![ComputedWrite {
+                    key: self.key,
+                    operation: MochaOperation::Insert {
+                        value,
+                        expire: ExpirePolicy::Persistent,
+                    },
+                }],
                 Value::Integer(cardinality),
             )
         } else {
-            (MochaOperation::Remove, Value::Integer(0))
+            (
+                vec![ComputedWrite {
+                    key: self.key,
+                    operation: MochaOperation::Remove,
+                }],
+                Value::Integer(0),
+            )
         }
     }
 }

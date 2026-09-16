@@ -12,7 +12,7 @@ use crate::protocol::command::{Client, Command};
 use crate::protocol::raft_command::RaftCommand;
 use crate::raft::network::redis_server::RedisServer;
 use crate::raft::types::core::response_value::Value;
-use crate::raft::types::entry::bae_operation::BaseOperation::Del;
+use crate::raft::types::entry::base_operation::BaseOperation::Del;
 use crate::raft::types::entry::request::Operation;
 use crate::raft::types::entry::request::RedisOperation::RedisDel;
 use async_trait::async_trait;

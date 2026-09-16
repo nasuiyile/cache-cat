@@ -5,6 +5,7 @@ pub mod exists;
 pub mod expire;
 pub mod flushall;
 pub mod flushdb;
+mod insert;
 pub mod keys;
 pub mod persist;
 pub mod pexpire;

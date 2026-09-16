@@ -1,7 +1,7 @@
 use crate::raft::types::core::mocha::core::{MyCache, Update};
 use crate::raft::types::core::response_value::Value;
 use crate::raft::types::core::structure::stream::AddId;
-use crate::raft::types::entry::bae_operation::BaseOperation;
+use crate::raft::types::entry::base_operation::BaseOperation;
 use crate::raft::types::entry::read_operation::ReadOperation;
 use crate::raft::types::entry::request::{Operation, RedisOperation};
 
@@ -128,11 +128,6 @@ pub fn base_request(
         BaseOperation::ZIncrBy(param) => my_cache.z_incr_by(param, update),
         BaseOperation::HMSet(param) => my_cache.h_mset(param, update),
         BaseOperation::PfAdd(param) => my_cache.p_f_add(param, update),
-        BaseOperation::SInterStore(param) => my_cache.s_inter_store(param, update),
-        BaseOperation::SUnionStore(param) => my_cache.s_union_store(param, update),
-        BaseOperation::SDiffStore(param) => my_cache.s_diff_store(param, update),
-        BaseOperation::PFMerge(param) => my_cache.p_f_merge(param, update),
-        BaseOperation::BitOp(param) => my_cache.bit_op(param, update),
         BaseOperation::BfAdd(param) => my_cache.bf_add(param, update),
         BaseOperation::BfMAdd(param) => my_cache.bf_madd(param, update),
         BaseOperation::BfReserve(param) => my_cache.bf_reserve(param, update),
@@ -160,9 +155,34 @@ pub fn do_request(
             RedisOperation::RedisPSetEx(param) => my_cache.redis_psetex(param, update),
             RedisOperation::RedisGetSet(param) => my_cache.redis_get_set(param, update),
             RedisOperation::RedisMset(param) => my_cache.redis_mset(param, update, external),
-            RedisOperation::RedisRename(param) => my_cache.redis_rename(param, update, external),
+            RedisOperation::RedisBitOp(param) => my_cache.execute_multi_read_compute(param, update),
+            RedisOperation::RedisSInterStore(param) => {
+                my_cache.execute_multi_read_compute(param, update)
+            }
+            RedisOperation::RedisSUnionStore(param) => {
+                my_cache.execute_multi_read_compute(param, update)
+            }
+            RedisOperation::RedisSDiffStore(param) => {
+                my_cache.execute_multi_read_compute(param, update)
+            }
+            RedisOperation::RedisPFMerge(param) => {
+                my_cache.execute_multi_read_compute(param, update)
+            }
+            RedisOperation::RedisRename(param) => {
+                let _lock = if external {
+                    Some(my_cache.read_lock.write())
+                } else {
+                    None
+                };
+                my_cache.execute_multi_read_compute(param, update)
+            }
             RedisOperation::RedisRenameNx(param) => {
-                my_cache.redis_rename_nx(param, update, external)
+                let _lock = if external {
+                    Some(my_cache.read_lock.write())
+                } else {
+                    None
+                };
+                my_cache.execute_multi_read_compute(param, update)
             }
             RedisOperation::RedisEval(param) => {
                 let _exclusive_lock = if external {

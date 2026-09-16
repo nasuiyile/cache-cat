@@ -34,7 +34,7 @@ Drawbacks of the Zookeeper approach (the solution below):
 
 ## Snapshot Strategy
 
-> The overall idea is similar to Zookeeper: converting all operations into CAS operations. Corresponds to Dragonflydb's Relaxed snapshot strategy.
+> The following is Cache-cat's own snapshot strategy; the overall idea is similar to Zookeeper — converting all operations into CAS operations. It corresponds to Dragonflydb's Relaxed snapshot strategy. Zookeeper's approach has a drawback: Raft's snapshot semantics require the snapshot to be an instantaneous snapshot at a single point in time.
 
 Each value in the map can be treated as an atomic access unit. Any operation on this value is atomic and supports concurrent reads and writes.
 
@@ -46,22 +46,31 @@ Additionally, each value maintains a version number internally (u32 type).
 
 1. When a new batch of operations arrives, acquire the meta_data lock.
 2. Update `last_applied_log_id`.
-3. If the current snapshot state is `false`, directly write the data to cache_map and finish.
-4. If the current snapshot state is `true`: get the version number of the original data. If there is no old version number, the version is considered 0. Increment the version number by 1, write to cache_map. Finally, push the old version number and the current operation to a queue for temporary storage. (Convert all write operations into CAS operations.)
+3. If the current snapshot state is `End`, write the data directly to cache_map.
+4. If the current snapshot state is `Start`: get the version number of the original data (treated as 0 if there is no old version). Increment the version number by 1 and write it to cache_map. Finally, push the old version number and the current operation onto a queue for temporary storage. (This turns every write operation into a CAS operation.)
+5. If the current snapshot state is `Tail`, apply the Raft log through the normal path without writing it to the snapshot's incremental queue. This log sits after the snapshot's recorded `last_applied_log_id`, and is replayed from the Raft log during recovery.
 
 **Snapshot Thread**
 
-Acquire the meta_data lock, mark the snapshot as started, and save the meta_data metadata. Release the lock.
+Acquire the meta_data lock, mark the snapshot state as `Start`, then release the lock. This records the snapshot state, but the final `last_applied_log_id` is only determined once the state enters `Tail`.
 
 Perform the snapshot operation: iterate over all data and write it to disk.
 
-Acquire the meta_data lock, mark the snapshot as finished. Theoretically, the lock is acquired here, so there will be no close-and-drain race. Read all data from the deletion queue and write it to disk.
+The snapshot state has three phases:
+
+- `Start`: the snapshot thread is iterating over the full dataset. Writes applied by the business thread must update memory at the same time, and push the operation — tagged with the old version number, database number, and write logical clock — onto the incremental queue.
+- `Tail`: the full dataset traversal is complete. The snapshot thread acquires the `meta_data` lock, and under that lock switches the state to `Tail`, atomically drains and clears the incremental queue accumulated during the `Start` phase, and records the `last_applied_log_id` at this moment. From the switch to `Tail` onward, new Raft logs no longer go into the snapshot's incremental queue and are instead applied through the normal path; these logs are numbered after the snapshot's recorded `last_applied_log_id`, and are replayed from the Raft log during recovery.
+- `End`: once the incremental queue has been written to the snapshot file, and the file has been flushed to disk and has replaced the current snapshot file, the state switches to `End`.
+
+Draining the queue and switching the state during the `Tail` phase must happen under the same `meta_data` lock, to avoid an operation being incorrectly added to the snapshot's queue after it has already been drained. Raft logs produced during the `Tail` phase can proceed concurrently with flushing the snapshot file to disk, but must not be treated as part of the snapshot's incremental queue.
 
 **Recovery Operation**
 
 Read the full snapshot data and restore it to the state machine. (Pause external access during this time.)
 
-Read the incremental data from the queue and perform CAS operations on each data item. If the current data's version number matches the version number in the queue, apply the operation.
+Read the incremental data from the queue and perform a CAS operation on each item. Apply the operation only if the current data's version number matches the version number recorded in the queue.
+
+The `last_applied_log_id` recorded in the snapshot is the log position at the moment the state entered `Tail`. After installing the snapshot, first replay the incremental queue saved during the `Start` phase in CAS order; Raft then continues applying the log from that position onward, corresponding to the writes from the `Tail` phase and afterward.
 
 Why is this correct? The snapshot thread and the business thread run concurrently. Therefore, when the snapshot thread is executing the snapshot, two types of data are preserved — old and new (each data item is atomic).
 
@@ -74,6 +83,21 @@ The snapshot thread briefly locks the state machine at the start and end. The fu
 Existing issues:
 
 Each operation needs to be deserialized, and custom instructions must be provided for each operation.
+
+## Multi-key Operations
+
+The approach above still doesn't solve one problem: for commands like SINTERSTORE or SUNIONSTORE, we cannot guarantee that all the keys read in a batch are at the same version.
+
+Suppose data A is at version v1 and B is at version v1.
+
+1. The snapshot records B at v1.
+2. You read A and B, and modify C (then push this onto the execution queue).
+3. A subsequent write modifies A to v2.
+4. The snapshot records A at v2.
+
+If the snapshot were to simply replay your operation at this point, it would find that neither of the two versions the operation depends on is the version currently in effect.
+
+Therefore, for this kind of command, the snapshot logic treats it as multiple commands; from Raft's perspective it remains a single command, to preserve the atomicity of the command. But for the snapshot, multiple commands need to be treated as a single command, to preserve the atomicity of the snapshot.
 
 ## Read-Write Logical Clock Compatibility
 

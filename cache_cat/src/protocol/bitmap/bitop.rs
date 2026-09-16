@@ -3,12 +3,11 @@ use crate::mocha::{EntrySnapshot, ExpirePolicy, MochaOperation};
 use crate::protocol::command::{Client, Command};
 use crate::protocol::raft_command::RaftCommand;
 use crate::raft::network::redis_server::RedisServer;
-use crate::raft::types::core::mocha::cas::MultiReadComputeCommand;
+use crate::raft::types::core::mocha::cas::{ComputedWrite, MultiReadComputeCommand};
 use crate::raft::types::core::mocha::core::MyValue;
 use crate::raft::types::core::response_value::Value;
 use crate::raft::types::core::value_object::ValueObject;
-use crate::raft::types::entry::bae_operation::BaseOperation;
-use crate::raft::types::entry::request::Operation;
+use crate::raft::types::entry::request::{Operation, RedisOperation};
 use async_trait::async_trait;
 use bytes::Bytes;
 use serde::{Deserialize, Serialize};
@@ -142,7 +141,7 @@ impl RaftCommand for BitOpCommand {
     fn raft_request(&self, items: &[Value]) -> Result<Operation, ProtocolError> {
         let params = Self::parse(items)?;
 
-        Ok(Operation::Base(BaseOperation::BitOp(BitOpReq {
+        Ok(Operation::Redis(RedisOperation::RedisBitOp(BitOpReq {
             key: params.key,
             keys: params.keys,
             operation: params.operation,
@@ -234,19 +233,12 @@ impl BitOpReq {
     fn compute(&self, sources: &[Bytes], max_len: usize) -> Vec<u8> {
         match self.operation {
             BitOp::And => Self::compute_and(sources, max_len),
-
             BitOp::Or => Self::compute_or(sources, max_len),
-
             BitOp::Xor => Self::compute_xor(sources, max_len),
-
             BitOp::Not => Self::compute_not(sources, max_len),
-
             BitOp::Diff => Self::compute_diff(sources, max_len),
-
             BitOp::Diff1 => Self::compute_diff1(sources, max_len),
-
             BitOp::AndOr => Self::compute_andor(sources, max_len),
-
             BitOp::One => Self::compute_one(sources, max_len),
         }
     }
@@ -259,7 +251,6 @@ impl BitOpReq {
     /// the result is zero.
     fn compute_and(sources: &[Bytes], max_len: usize) -> Vec<u8> {
         let mut result = vec![0xff; max_len];
-
         for source in sources {
             for (index, output) in result.iter_mut().enumerate() {
                 *output &= Self::byte_at(source, index);
@@ -425,107 +416,50 @@ impl BitOpReq {
 }
 
 impl MultiReadComputeCommand for BitOpReq {
-    fn write_key(&self) -> &Bytes {
-        &self.key
+    fn read_keys(&self) -> impl Iterator<Item = &Bytes> {
+        self.keys.iter()
     }
 
-    fn read_keys(&self) -> &[Bytes] {
-        &self.keys
-    }
-
-    fn into_base_op(self) -> BaseOperation {
-        BaseOperation::BitOp(self)
-    }
-
-    fn mutate(
+    fn mutate_writes(
         self,
         read_entries: Vec<Option<EntrySnapshot<MyValue>>>,
         _write_clock: u64,
-    ) -> (MochaOperation<MyValue>, Value) {
-        //
-        // First decode and validate ALL source keys.
-        //
-        // This is important:
-        //
-        // BITOP must return WRONGTYPE if any existing source key isn't a
-        // Redis String.
-        //
-        // Missing keys are represented by an empty byte string here.
-        // Later byte_at() automatically implements Redis' zero-padding rule.
-        //
+    ) -> (Vec<ComputedWrite>, Value) {
         let mut sources = Vec::with_capacity(read_entries.len());
-
         for entry in read_entries {
             let Some(snapshot) = entry else {
-                //
-                // Redis:
-                //
-                // A non-existent source key behaves like an infinitely
-                // zero-padded empty string, constrained by max_len.
-                //
                 sources.push(Bytes::new());
                 continue;
             };
-
             let value = match Self::value_to_bytes(&snapshot.value.data) {
                 Ok(value) => value,
-
                 Err(error) => {
-                    return (MochaOperation::Abort, CacheCatError::from(error).into());
+                    return (Vec::new(), CacheCatError::from(error).into());
                 }
             };
-
             sources.push(value);
         }
-
-        //
-        // Redis BITOP result size is the size of the longest input string.
-        //
         let max_len = sources.iter().map(Bytes::len).max().unwrap_or(0);
-
-        //
-        // Redis doesn't retain an empty destination value for BITOP when all
-        // source strings are empty/missing.
-        //
-        // It deletes the destination and returns 0.
-        //
         if max_len == 0 {
-            return (MochaOperation::Remove, Value::Integer(0));
+            return (
+                vec![ComputedWrite {
+                    key: self.key,
+                    operation: MochaOperation::Remove,
+                }],
+                Value::Integer(0),
+            );
         }
-
         let result = self.compute(&sources, max_len);
-
         debug_assert_eq!(result.len(), max_len);
-
-        //
-        // Important:
-        //
-        // Do NOT remove destination merely because all result bytes are zero.
-        //
-        // For example:
-        //
-        //   SET a "\xff"
-        //   SET b "\x00"
-        //   BITOP AND dst a b
-        //
-        // dst must exist and contain one byte 0x00.
-        //
-        // Only max_len == 0 results in deletion.
-        //
         let value = MyValue::new(ValueObject::String(Bytes::from(result)));
-
         (
-            MochaOperation::Insert {
-                value,
-
-                //
-                // BITOP overwrites destination, so previous TTL is discarded.
-                //
-                expire: ExpirePolicy::Persistent,
-            },
-            //
-            // Redis returns the destination string length in BYTES.
-            //
+            vec![ComputedWrite {
+                key: self.key,
+                operation: MochaOperation::Insert {
+                    value,
+                    expire: ExpirePolicy::Persistent,
+                },
+            }],
             Value::Integer(max_len as i64),
         )
     }

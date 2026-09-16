@@ -6,9 +6,12 @@
 //! Returns an error if the source key does not exist.
 
 use crate::error::{CacheCatError, ProtocolError};
+use crate::mocha::{EntrySnapshot, MochaOperation};
 use crate::protocol::command::{Client, Command};
 use crate::protocol::raft_command::RaftCommand;
 use crate::raft::network::redis_server::RedisServer;
+use crate::raft::types::core::mocha::cas::{ComputedWrite, MultiReadComputeCommand};
+use crate::raft::types::core::mocha::core::MyValue;
 use crate::raft::types::core::response_value::Value;
 use crate::raft::types::entry::request::{Operation, RedisOperation};
 use async_trait::async_trait;
@@ -21,6 +24,44 @@ use std::fmt::{Display, Formatter};
 pub struct RenameParams {
     pub key: Bytes,
     pub new_key: Bytes,
+}
+
+impl MultiReadComputeCommand for RenameParams {
+    fn read_keys(&self) -> impl Iterator<Item = &Bytes> {
+        std::iter::once(&self.key)
+    }
+
+    fn mutate_writes(
+        self,
+        entries: Vec<Option<EntrySnapshot<MyValue>>>,
+        _: u64,
+    ) -> (Vec<ComputedWrite>, Value) {
+        let key = self.key;
+        let new_key = self.new_key;
+        let Some(source) = entries.into_iter().next().flatten() else {
+            return (Vec::new(), Value::Error("no such key".into()));
+        };
+        if key == new_key {
+            return (Vec::new(), Value::ok());
+        }
+        let expire = source.get_expire_policy();
+        (
+            vec![
+                ComputedWrite {
+                    key,
+                    operation: MochaOperation::Remove,
+                },
+                ComputedWrite {
+                    key: new_key,
+                    operation: MochaOperation::Insert {
+                        value: source.value,
+                        expire,
+                    },
+                },
+            ],
+            Value::ok(),
+        )
+    }
 }
 
 impl RenameParams {

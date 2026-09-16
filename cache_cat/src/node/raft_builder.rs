@@ -3,7 +3,7 @@ use crate::error::Result;
 use crate::node::parsed_config::ParsedConfig;
 use crate::node::raft_node::RaftNode;
 use crate::raft::application::cluster::NodeState;
-use crate::raft::types::entry::bae_operation::BaseOperation;
+use crate::raft::types::entry::base_operation::BaseOperation;
 use crate::raft::types::entry::request::{Operation, Request};
 use crate::utils::times::time_gap;
 use std::sync::Arc;
