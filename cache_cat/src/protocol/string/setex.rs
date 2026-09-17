@@ -47,7 +47,7 @@ impl SetExCommand {
 
         let seconds = items[2].try_parse_u64()?;
 
-        let value = items[1]
+        let value = items[3]
             .string_bytes_clone()
             .ok_or(ProtocolError::InvalidArgument("value"))?;
 

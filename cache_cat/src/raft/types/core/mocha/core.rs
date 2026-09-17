@@ -207,7 +207,10 @@ pub struct Update<'a> {
 }
 
 pub enum UpdateType<'a> {
+    //正常运行
     None,
+    //进行快照
     Snapshot(&'a mut Vec<AtomicRequest>),
+    //还原操作
     CAS(u32),
 }

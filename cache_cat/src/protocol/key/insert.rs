@@ -23,20 +23,16 @@ impl ComputeCommand for InsertReq {
 
     fn mutate(
         self,
-        entry: EntrySnapshot<MyValue>,
+        _entry: EntrySnapshot<MyValue>,
         _write_clock: u64,
     ) -> (MochaOperation<MyValue>, Value) {
-        // 版本递增
-        let new_version = entry.value.version + 1;
         let expire = if self.expires_at == 0 {
             ExpirePolicy::Persistent
         } else {
             ExpirePolicy::Absolute(self.expires_at)
         };
-        let new_value = MyValue {
-            version: new_version,
-            data: self.value,
-        };
+        // Version assignment is centralized in MyCache::execute_compute.
+        let new_value = MyValue::new(self.value);
         (
             MochaOperation::Insert {
                 value: new_value,

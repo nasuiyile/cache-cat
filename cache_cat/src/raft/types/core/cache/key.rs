@@ -93,7 +93,7 @@ impl MyCache {
             UpdateType::Snapshot(queue) => {
                 // 计算 version
                 let version = if let Some(entry) = cache.get(&del_req.key) {
-                    entry.version + 1
+                    entry.version.wrapping_add(1)
                 } else {
                     1
                 };
@@ -113,7 +113,7 @@ impl MyCache {
             }
             UpdateType::CAS(cas_version) => {
                 if let Some(entry) = cache.get(&del_req.key)
-                    && entry.version == *cas_version - 1
+                    && entry.version == cas_version.wrapping_sub(1)
                 {
                     cache.remove(&del_req.key);
                     return Value::Integer(1);
@@ -142,7 +142,7 @@ impl MyCache {
             UpdateType::Snapshot(queue) => {
                 // 计算 version
                 let version = if let Some(entry) = cache.get(&del_req.key) {
-                    entry.version + 1
+                    entry.version.wrapping_add(1)
                 } else {
                     1
                 };
@@ -162,7 +162,7 @@ impl MyCache {
             }
             UpdateType::CAS(cas_version) => {
                 if let Some(entry) = cache.get(&del_req.key)
-                    && entry.version == *cas_version - 1
+                    && entry.version == cas_version.wrapping_sub(1)
                 {
                     cache.remove(&del_req.key);
                     return Value::Integer(1);

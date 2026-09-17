@@ -470,12 +470,10 @@ fn normal_rename_moves_existing_container_without_cloning_its_contents() {
             panic!("destination must be a set");
         };
         assert!(Arc::ptr_eq(&source_set, &dest_set), "{command}");
-        assert!(
-            cache.databases[DB as usize]
-                .mocha
-                .get_entry(b"source".as_slice())
-                .is_none()
-        );
+        assert!(cache.databases[DB as usize]
+            .mocha
+            .get_entry(b"source".as_slice())
+            .is_none());
     }
 }
 
@@ -517,4 +515,37 @@ fn computed_ttl_is_recorded_as_an_absolute_expiration() {
                 .is_none()
         );
     }
+}
+
+#[test]
+fn snapshot_replays_collection_removal_with_versioned_cas() {
+    let cache = MyCache::new(2).unwrap();
+    apply(&cache, request(&["SADD", "set", "member"]));
+    // Advance the value version while retaining the same logical member.
+    apply(&cache, request(&["SADD", "set", "member"]));
+    apply(&cache, request(&["SADD", "set", "member"]));
+
+    let (response, queue) = snapshot(&cache, &["SREM", "set", "member"]);
+    assert_eq!(response.encode(), b":1\r\n");
+    assert_eq!(queue.len(), 1);
+    assert_eq!(queue[0].version, 4);
+    assert!(matches!(&queue[0].request, BaseOperation::SRem(_)));
+
+    let restored = MyCache::new(2).unwrap();
+    apply(&restored, request(&["SADD", "set", "member"]));
+    apply(&restored, request(&["SADD", "set", "member"]));
+    apply(&restored, request(&["SADD", "set", "member"]));
+    for atomic in &queue {
+        let mut update_type = UpdateType::CAS(atomic.version);
+        let mut update = Update {
+            db_number: atomic.db_number,
+            write_clock: restored.set_write_clock(atomic.write_clock),
+            update_type: &mut update_type,
+        };
+        base_request(&restored, atomic.request.clone(), &mut update);
+    }
+    assert!(restored.databases[DB as usize]
+        .mocha
+        .get_entry(b"set".as_slice())
+        .is_none());
 }

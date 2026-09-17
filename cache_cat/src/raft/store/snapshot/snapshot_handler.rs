@@ -88,7 +88,10 @@ where
     let result = bincode2::serialize(&cache_cat_snapshot_meta)
         .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
     if result.len() + 4 > PLACEHOLDER_LENGTH {
-        return Err(io::Error::new(io::ErrorKind::InvalidData, "snapshot metadata too large"));
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "snapshot metadata too large",
+        ));
     }
     drop(raft_meta_data);
     //回填数据
@@ -97,10 +100,9 @@ where
     writer.write_all(&result).await?;
     writer.seek(SeekFrom::End(0)).await?;
     write_operation_queue_to_writer(&mut writer, &pending).await?;
-
     writer.flush().await?;
     writer.get_ref().sync_all().await?;
-    // 通过 rename 原子替换目标文件 即便是windows tokio也能实现类似的原子替换 实现更新文件
+    // 在现在版本的rust中，windows下rename最终会替换现有文件，因此没必要先remove
     fs::rename(&temp_path, &final_path).await?;
     raft_meta.lock().await.snapshot_state = End;
     Ok(())
@@ -137,7 +139,10 @@ where
 
     let meta_len = reader.read_u32().await? as usize;
     if meta_len > PLACEHOLDER_LENGTH - 4 {
-        return Err(io::Error::new(io::ErrorKind::InvalidData, "snapshot metadata length exceeds placeholder"));
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "snapshot metadata length exceeds placeholder",
+        ));
     }
     let mut meta_buf = vec![0u8; meta_len];
     reader.read_exact(&mut meta_buf).await?;
@@ -201,16 +206,7 @@ where
 {
     let mut list = Vec::new();
     loop {
-        let opt_len = match reader.read_u64().await {
-            Ok(v) => v as usize,
-            Err(e) => {
-                if e.kind() == io::ErrorKind::UnexpectedEof {
-                    break;
-                } else {
-                    return Err(e);
-                }
-            }
-        };
+        let opt_len = reader.read_u64().await? as usize;
         if opt_len == 0 {
             break;
         }

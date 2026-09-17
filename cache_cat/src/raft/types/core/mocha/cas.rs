@@ -129,32 +129,46 @@ impl MyCache {
             let cmd_copy = cmd.clone();
             let (new_obj, res) = cmd.init();
             let mut inserted = false;
-            if let MochaOperation::Insert { value, expire } = new_obj {
+            if let MochaOperation::Insert { mut value, expire } = new_obj {
+                // The executor owns version assignment. `init` only computes
+                // the initial payload; its version field is not authoritative.
+                value.version = 1;
                 cache.insert_entry(key.clone(), value, expire);
                 inserted = true;
             }
-            if let UpdateType::Snapshot(queue) = update.update_type {
-                queue.push(AtomicRequest {
-                    request: cmd_copy.into_base_op(),
-                    version: 1,
-                    write_clock: update.write_clock,
-                    db_number: update.db_number,
-                });
-            }
-            if !inserted && matches!(res, Value::Error(_)) {
-                return res;
+            if inserted {
+                if let UpdateType::Snapshot(queue) = update.update_type {
+                    queue.push(AtomicRequest {
+                        request: cmd_copy.into_base_op(),
+                        version: 1,
+                        write_clock: update.write_clock,
+                        db_number: update.db_number,
+                    });
+                }
             }
             return res;
         }
         let entry = option.expect("checked above");
+        let entry_for_mutate = if matches!(update.update_type, UpdateType::Snapshot(_)) {
+            EntrySnapshot {
+                value: MyValue {
+                    version: entry.value.version,
+                    data: entry.value.data.snapshot_clone(),
+                },
+                expire_at: entry.expire_at,
+            }
+        } else {
+            entry.clone()
+        };
         let return_value;
 
         match update.update_type {
             UpdateType::None => {
-                let (changed, res) = cmd.mutate(entry, update.write_clock);
+                let (changed, res) = cmd.mutate(entry_for_mutate.clone(), update.write_clock);
                 return_value = res;
                 match changed {
-                    MochaOperation::Insert { value, expire } => {
+                    MochaOperation::Insert { mut value, expire } => {
+                        value.version = entry.value.version.wrapping_add(1);
                         cache.insert_entry(key.clone(), value, expire);
                     }
                     MochaOperation::Remove => {
@@ -165,13 +179,16 @@ impl MyCache {
             }
             UpdateType::Snapshot(queue) => {
                 let cmd_copy = cmd.clone();
-                let mut next_version = 1;
-                let (changed, res) = cmd.mutate(entry, update.write_clock);
+                // Versions are compared for equality; crossing u32::MAX is
+                // valid as long as one snapshot cannot span a full cycle.
+                let next_version = entry.value.version.wrapping_add(1);
+                let (changed, res) = cmd.mutate(entry_for_mutate.clone(), update.write_clock);
                 return_value = res;
+                let should_enqueue = !matches!(&changed, MochaOperation::Abort);
                 match changed {
                     MochaOperation::Insert { value, expire } => {
-                        //版本号为当前数据的版本号 +1
-                        next_version = value.version;
+                        let mut value = value;
+                        value.version = next_version;
                         cache.insert_entry(key.clone(), value, expire);
                     }
                     MochaOperation::Remove => {
@@ -180,24 +197,27 @@ impl MyCache {
                     MochaOperation::Abort => {}
                 }
 
-                queue.push(AtomicRequest {
-                    request: cmd_copy.into_base_op(),
-                    version: next_version,
-                    write_clock: update.write_clock,
-                    db_number: update.db_number,
-                });
+                if should_enqueue {
+                    queue.push(AtomicRequest {
+                        request: cmd_copy.into_base_op(),
+                        version: next_version,
+                        write_clock: update.write_clock,
+                        db_number: update.db_number,
+                    });
+                }
             }
             UpdateType::CAS(cas_version) => {
-                let expected_version = cas_version.saturating_sub(1);
+                let expected_version = cas_version.wrapping_sub(1);
                 if entry.value.version != expected_version {
                     // The snapshot already contains this write (or a later
                     // one), so replay is intentionally a no-op.
                     return Value::Null;
                 }
-                let (changed, res) = cmd.mutate(entry, update.write_clock);
+                let (changed, res) = cmd.mutate(entry_for_mutate, update.write_clock);
                 return_value = res;
                 match changed {
-                    MochaOperation::Insert { value, expire } => {
+                    MochaOperation::Insert { mut value, expire } => {
+                        value.version = entry.value.version.wrapping_add(1);
                         cache.insert_entry(key.clone(), value, expire);
                     }
                     MochaOperation::Remove => {

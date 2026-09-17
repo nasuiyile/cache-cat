@@ -1,5 +1,4 @@
 use crate::error::ProtocolError;
-use crate::protocol::NO_EXPIRATION;
 use crate::protocol::string::append::AppendReq;
 use crate::protocol::string::decr::DecrReq;
 use crate::protocol::string::decrby::DecrByReq;
@@ -12,6 +11,7 @@ use crate::protocol::string::psetex::PSetExParams;
 use crate::protocol::string::set::{Expiration, SetMode, SetParams, SetReq};
 use crate::protocol::string::setex::SetExParams;
 use crate::protocol::string::setnx::SetNxParams;
+use crate::protocol::NO_EXPIRATION;
 use crate::raft::types::core::mocha::core::{MyCache, Update};
 use crate::raft::types::core::response_value::Value;
 use crate::raft::types::core::value_object::ValueObject;
@@ -191,7 +191,9 @@ impl MyCache {
         // The latest write logic time
         let now = update.write_clock;
 
-        let expires_at = now + params.expiration * 1000;
+        // SetExParams stores the parsed duration in milliseconds, matching
+        // PSETEX and the logical clock units used by the cache.
+        let expires_at = now + params.expiration;
 
         let set = SetReq {
             key: params.key,

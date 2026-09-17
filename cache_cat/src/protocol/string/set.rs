@@ -236,10 +236,9 @@ impl ComputeCommand for SetReq {
 
     fn mutate(
         self,
-        entry: EntrySnapshot<MyValue>,
+        _entry: EntrySnapshot<MyValue>,
         _write_clock: u64,
     ) -> (MochaOperation<MyValue>, Value) {
-        let new_version = entry.value.version + 1;
         let data = match parse_i64(&self.value) {
             None => ValueObject::String(self.value.clone()),
             Some(v) => ValueObject::Int(v),
@@ -249,10 +248,7 @@ impl ComputeCommand for SetReq {
         } else {
             ExpirePolicy::Absolute(self.ex_time)
         };
-        let new_value = MyValue {
-            version: new_version,
-            data,
-        };
+        let new_value = MyValue::new(data);
         (
             MochaOperation::Insert {
                 value: new_value,
