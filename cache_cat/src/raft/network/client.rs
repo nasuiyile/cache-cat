@@ -20,7 +20,7 @@ use std::task::{Context, Poll};
 use std::time::Duration;
 use tokio::io::{AsyncRead, AsyncWrite, AsyncWriteExt};
 use tokio::net::TcpStream;
-use tokio::sync::{RwLock, mpsc};
+use tokio::sync::{Notify, RwLock, mpsc};
 use tokio::time::timeout;
 use tokio_rustls::TlsConnector;
 use tokio_util::codec::Framed;
@@ -59,6 +59,8 @@ impl Default for Slot {
 /// 槽位表，使用 CachePadded 防止多核竞争下的伪共享
 struct SlotTable {
     slots: Vec<CachePadded<Slot>>,
+    closed: AtomicBool,
+    closed_notify: Notify,
 }
 
 impl SlotTable {
@@ -67,22 +69,39 @@ impl SlotTable {
         for _ in 0..MAX_PENDING {
             slots.push(CachePadded::new(Slot::default()));
         }
-        Self { slots }
+        Self {
+            slots,
+            closed: AtomicBool::new(false),
+            closed_notify: Notify::new(),
+        }
+    }
+
+    async fn wait_closed(&self) {
+        let notified = self.closed_notify.notified();
+        tokio::pin!(notified);
+        notified.as_mut().enable();
+        if !self.closed.load(Ordering::Acquire) {
+            notified.await;
+        }
     }
 
     /// 连接断开时，唤醒所有正在等待的请求
     fn fail_all_pending(&self, reason: &str) {
+        if self.closed.swap(true, Ordering::AcqRel) {
+            return;
+        }
+        self.closed_notify.notify_waiters();
         let reason = reason.to_string();
         for slot in &self.slots {
-            if slot.occupied.swap(false, Ordering::AcqRel) {
+            if slot.occupied.load(Ordering::Acquire) {
                 {
-                    let mut d = slot.data.lock();
-                    *d = None;
+                    let data = slot.data.lock();
+                    // A received response remains valid even if EOF follows it.
+                    if data.is_none() {
+                        *slot.error.lock() = Some(reason.clone());
+                    }
                 }
-                {
-                    let mut e = slot.error.lock();
-                    *e = Some(reason.clone());
-                }
+                // The ResponseFuture owns this slot until it is dropped.
                 slot.waker.wake();
             }
         }
@@ -273,48 +292,61 @@ impl RpcClient {
 
         // 写任务：任何写失败都说明连接不可用了
         tokio::spawn(async move {
-            while let Some(req) = rx_writer.recv().await {
-                if let Err(e) = sink.send(Bytes::from(req)).await {
-                    tracing::error!("rpc write failed: {}", e);   // 复现时这里会打出 "frame size too big"
-                    break;
+            let write = async {
+                while let Some(req) = rx_writer.recv().await {
+                    if let Err(e) = sink.send(Bytes::from(req)).await {
+                        tracing::error!("rpc write failed: {}", e);
+                        break;
+                    }
                 }
+            };
+            tokio::select! {
+                _ = table_writer.wait_closed() => {},
+                _ = write => {},
             }
             table_writer.fail_all_pending("connection closed while writing");
         });
 
         // 读任务：连接断开时唤醒所有等待中的请求
         tokio::spawn(async move {
-            while let Some(frame_res) = stream.next().await {
-                let mut frame = match frame_res {
-                    Ok(frame) => frame,
-                    Err(_) => break,
-                };
+            let read = async {
+                while let Some(frame_res) = stream.next().await {
+                    let mut frame = match frame_res {
+                        Ok(frame) => frame,
+                        Err(_) => break,
+                    };
 
-                if frame.len() < 4 {
-                    continue;
-                }
-
-                let request_id = u32::from_be_bytes([frame[0], frame[1], frame[2], frame[3]]);
-                let body = frame.split_off(4).freeze();
-
-                let idx = (request_id & INDEX_MASK) as usize;
-                let slot = &table_reader.slots[idx];
-                // 校验 generation 是否匹配，防止串号。
-                let delivered = {
-                    let mut guard = slot.data.lock();
-                    if slot.generation.load(Ordering::Acquire) == request_id {
-                        *slot.error.lock() = None;
-                        *guard = Some(body);
-                        true
-                    } else {
-                        false
+                    if frame.len() < 4 {
+                        continue;
                     }
-                };
-                if delivered {
-                    slot.waker.wake();
-                }
-            }
 
+                    let request_id = u32::from_be_bytes([frame[0], frame[1], frame[2], frame[3]]);
+                    let body = frame.split_off(4).freeze();
+
+                    let idx = (request_id & INDEX_MASK) as usize;
+                    let slot = &table_reader.slots[idx];
+                    // 校验 generation 是否匹配，防止串号。
+                    let delivered = {
+                        let mut guard = slot.data.lock();
+                        if slot.occupied.load(Ordering::Acquire)
+                            && slot.generation.load(Ordering::Acquire) == request_id
+                        {
+                            *slot.error.lock() = None;
+                            *guard = Some(body);
+                            true
+                        } else {
+                            false
+                        }
+                    };
+                    if delivered {
+                        slot.waker.wake();
+                    }
+                }
+            };
+            tokio::select! {
+                _ = table_reader.wait_closed() => {},
+                _ = read => {},
+            }
             table_reader.fail_all_pending("connection closed while reading");
         });
 
@@ -345,6 +377,11 @@ impl RpcClient {
         func_id: u32,
         req_buf: BytesMut,
     ) -> Result<Bytes, RPCError<TypeConfig>> {
+        if self.slot_table.closed.load(Ordering::Acquire) {
+            return Err(RPCError::Network(NetworkError::from_string(
+                "connection closed",
+            )));
+        }
         let request_id = self.next_request_id.fetch_add(1, Ordering::Relaxed);
         let idx = (request_id & INDEX_MASK) as usize;
         let slot = &self.slot_table.slots[idx];
@@ -355,6 +392,8 @@ impl RpcClient {
                 "too many requests",
             )));
         }
+        // Own the slot before the first await, including waiting for queue space.
+        let waiter = ResponseFuture { slot };
 
         // 初始化槽位状态（与读任务的 generation 校验在同一把锁下完成）
         {
@@ -362,6 +401,12 @@ impl RpcClient {
             slot.generation.store(request_id, Ordering::Release);
             *guard = None;
             *slot.error.lock() = None;
+        }
+        // Closure may have raced with acquiring or initializing this slot.
+        if self.slot_table.closed.load(Ordering::Acquire) {
+            return Err(RPCError::Network(NetworkError::from_string(
+                "connection closed",
+            )));
         }
 
         // 序列化帧：request_id + func_id + body
@@ -372,12 +417,10 @@ impl RpcClient {
 
         // 发送
         if let Err(e) = self.tx_writer.send(buf).await {
-            slot.occupied.store(false, Ordering::Release);
             return Err(RPCError::Network(NetworkError::new(&e)));
         }
 
         // 等待响应
-        let waiter = ResponseFuture { slot };
         let response_bytes = waiter.await?;
         Ok(response_bytes)
     }
@@ -434,5 +477,116 @@ impl<'a> Future for ResponseFuture<'a> {
         }
 
         Poll::Pending
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use futures::poll;
+    use tokio::io::AsyncReadExt;
+
+    #[tokio::test]
+    async fn cancelling_a_queued_send_releases_its_slot() {
+        let (tx_writer, _rx_writer) = mpsc::channel(1);
+        tx_writer.send(BytesMut::new()).await.unwrap();
+        let client = RpcClient {
+            tx_writer,
+            slot_table: Arc::new(SlotTable::new()),
+            next_request_id: Arc::new(AtomicU32::new(1)),
+        };
+        let mut call = Box::pin(client.call_serialized(1, BytesMut::new()));
+        assert!(poll!(call.as_mut()).is_pending());
+        assert!(client.slot_table.slots[1].occupied.load(Ordering::Acquire));
+        drop(call);
+        assert!(!client.slot_table.slots[1].occupied.load(Ordering::Acquire));
+    }
+
+    #[tokio::test]
+    async fn calls_after_read_eof_fail_without_hanging() {
+        let (stream, mut peer) = tokio::io::duplex(1024);
+        let client = RpcClient::initialize_framed(stream).await.unwrap();
+        assert_eq!(peer.read_u8().await.unwrap(), 0);
+        let mut first = Box::pin(client.call::<_, ()>(1, ()));
+        assert!(poll!(first.as_mut()).is_pending());
+        peer.shutdown().await.unwrap();
+        assert!(
+            timeout(Duration::from_secs(2), first)
+                .await
+                .unwrap()
+                .is_err()
+        );
+        assert!(
+            timeout(Duration::from_secs(2), client.call::<_, ()>(1, ()))
+                .await
+                .expect("request hung after the response stream closed")
+                .is_err()
+        );
+    }
+
+    #[tokio::test]
+    async fn disconnect_preserves_a_response_already_received() {
+        let table = SlotTable::new();
+        let slot = &table.slots[1];
+        slot.occupied.store(true, Ordering::Release);
+        *slot.data.lock() = Some(Bytes::from_static(b"response"));
+        let response = ResponseFuture { slot };
+        table.fail_all_pending("connection closed");
+        assert!(
+            slot.occupied.load(Ordering::Acquire),
+            "only the owner may release a response slot"
+        );
+        assert_eq!(response.await.unwrap(), Bytes::from_static(b"response"));
+        assert!(!slot.occupied.load(Ordering::Acquire));
+    }
+
+    #[tokio::test]
+    async fn dropping_the_last_client_closes_the_connection() {
+        let (stream, mut peer) = tokio::io::duplex(1024);
+        let client = RpcClient::initialize_framed(stream).await.unwrap();
+        assert_eq!(peer.read_u8().await.unwrap(), 0);
+        drop(client);
+        let mut byte = [0];
+        assert_eq!(
+            timeout(Duration::from_secs(2), peer.read(&mut byte))
+                .await
+                .expect("reader task kept the connection alive")
+                .unwrap(),
+            0
+        );
+    }
+
+    #[tokio::test]
+    async fn concurrent_calls_match_out_of_order_responses() {
+        let (stream, mut peer) = tokio::io::duplex(1024);
+        let client = RpcClient::initialize_framed(stream).await.unwrap();
+        assert_eq!(peer.read_u8().await.unwrap(), 0);
+        let peer = tokio::spawn(async move {
+            let mut framed = Framed::new(peer, crate::raft::network::new_length_codec());
+            let first = framed.next().await.unwrap().unwrap();
+            let second = framed.next().await.unwrap().unwrap();
+            for request in [second, first] {
+                let value: u32 = bincode2::deserialize(&request[8..]).unwrap();
+                let mut response = BytesMut::new();
+                response.extend_from_slice(&request[..4]);
+                response.extend_from_slice(
+                    &bincode2::serialize(&Ok::<u32, String>(value + 1)).unwrap(),
+                );
+                framed.send(response.freeze()).await.unwrap();
+            }
+            // Closing immediately must not discard either complete response.
+            framed.close().await.unwrap();
+        });
+        let (first, second) = timeout(Duration::from_secs(2), async {
+            tokio::join!(
+                client.call::<_, u32>(1, 10u32),
+                client.call::<_, u32>(1, 20u32)
+            )
+        })
+        .await
+        .unwrap();
+        assert_eq!(first.unwrap(), 11);
+        assert_eq!(second.unwrap(), 21);
+        peer.await.unwrap();
     }
 }

@@ -1,14 +1,14 @@
 use crate::error::{CacheCatError, Error};
 use crate::node::parsed_config::ParsedConfig;
 use crate::raft::network::connection::Connection;
-use crate::raft::network::external_handler::{write, HANDLER_TABLE};
+use crate::raft::network::external_handler::{HANDLER_TABLE, write};
 use crate::raft::network::redis_server::RedisServer;
 use crate::raft::store::snapshot::snapshot_handler::get_snapshot_file_name;
 use crate::raft::types::entry::request::Request;
 use crate::raft::types::raft_types::CacheCatApp;
 use bytes::{Buf, BufMut, Bytes, BytesMut};
-use futures::stream::FuturesOrdered;
 use futures::FutureExt;
+use futures::stream::FuturesOrdered;
 use futures::{SinkExt, StreamExt};
 use std::net::SocketAddr;
 use std::result::Result as StdResult;
@@ -59,13 +59,6 @@ impl Server {
         self,
         mut shutdown_rx: tokio::sync::broadcast::Receiver<()>,
     ) -> std::io::Result<()> {
-        tokio::spawn(async move {
-            Arc::new(self.redis_server)
-                .start_redis_server()
-                .await
-                .expect("Redis : panic message");
-        });
-
         let listener = match TcpListener::bind(self.addr.clone()).await {
             Ok(l) => l,
             Err(err) => {
@@ -74,11 +67,25 @@ impl Server {
                 return Err(err);
             }
         };
+        let redis_server = Arc::new(self.redis_server);
+        let redis_listeners = match redis_server.bind_listeners().await {
+            Ok(listeners) => listeners,
+            Err(err) => {
+                let _ = self
+                    .startup_tx
+                    .send(Err(format!("Failed to bind Redis server: {}", err)));
+                return Err(err);
+            }
+        };
         let _ = self.startup_tx.send(Ok(()));
         println!("Listening on: {}", listener.local_addr()?);
 
+        // Keep the Redis listeners owned by this service, including shutdown.
+        let redis = redis_server.serve(redis_listeners);
+        tokio::pin!(redis);
         loop {
             tokio::select! {
+                result = &mut redis => return result,
                 res = listener.accept() => {
                     match res {
                         Ok((socket, peer_addr)) => {

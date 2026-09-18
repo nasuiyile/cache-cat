@@ -10,6 +10,7 @@ use bytes::BytesMut;
 use std::net::SocketAddr;
 use std::sync::Arc;
 use tokio::net::TcpListener;
+use tokio_rustls::TlsAcceptor;
 use tokio_util::codec::{Decoder, Encoder};
 use tracing::{error, info};
 
@@ -20,6 +21,11 @@ pub struct RedisServer {
     pub tls_addr: Option<String>,
     pub cmd_factory: Arc<CommandFactory>,
     pub broadcast: Arc<PubSub>,
+}
+
+pub(super) struct RedisListeners {
+    tcp: TcpListener,
+    tls: Option<(TcpListener, TlsAcceptor)>,
 }
 
 pub struct RespCodec {
@@ -105,13 +111,19 @@ impl RedisServer {
         // let framed = Framed::new(stream, RespCodec::new());
         let auth = self.app.config.password.is_none();
         let client = Client::new(client_id, connection, auth);
-        self.cmd_factory.process_connection(&self, client).await?;
+        let result = self.cmd_factory.process_connection(&self, client).await;
         self.app.pubsub.remove_client(client_id).await;
         info!("Connection handler ended for {}", peer_addr);
-        Ok(())
+        result
     }
 
     pub async fn start_redis_server(self: Arc<Self>) -> std::io::Result<()> {
+        let listeners = self.bind_listeners().await?;
+        self.serve(listeners).await
+    }
+
+    // Bind every configured listener before reporting a successful startup.
+    pub(super) async fn bind_listeners(&self) -> std::io::Result<RedisListeners> {
         let listener = TcpListener::bind(&self.redis_addr).await?;
         info!("Redis server listening on {}", self.redis_addr);
         let tls_acceptor = self.app.tls_context.acceptor_for_client();
@@ -124,6 +136,17 @@ impl RedisServer {
                 None
             };
 
+        Ok(RedisListeners {
+            tcp: listener,
+            tls: tls_listener,
+        })
+    }
+
+    pub(super) async fn serve(self: Arc<Self>, listeners: RedisListeners) -> std::io::Result<()> {
+        let RedisListeners {
+            tcp: listener,
+            tls: tls_listener,
+        } = listeners;
         let mut client_id: u64 = 0;
 
         loop {
@@ -207,5 +230,178 @@ impl RedisServer {
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::cfg::config::Config;
+    use crate::node::raft_node::RaftNode;
+    use crate::raft::network::rpc::Server;
+    use bytes::Bytes;
+    use futures::{SinkExt, StreamExt};
+    use std::time::Duration;
+    use tokio::io::AsyncWriteExt;
+    use tokio::net::TcpStream;
+    use tokio::sync::{broadcast, oneshot};
+    use tokio::time::timeout;
+    use tokio_util::codec::Framed;
+
+    async fn test_node() -> (tempfile::TempDir, RaftNode, broadcast::Sender<()>) {
+        let dir = tempfile::tempdir().unwrap();
+        let mut config = Config::default();
+        config.raft.log_path = dir.path().to_str().unwrap().to_owned();
+        config.raft.address = "127.0.0.1:0".into();
+        config.redis.databases = 1;
+        let config = ParsedConfig::from(&config).unwrap();
+        let (shutdown_tx, _) = broadcast::channel(1);
+        let node = RaftNode::create(config, shutdown_tx.clone()).await.unwrap();
+        (dir, node, shutdown_tx)
+    }
+
+    fn command(parts: &[&'static [u8]]) -> Value {
+        Value::Array(Some(
+            parts
+                .iter()
+                .map(|part| Value::BulkString(Some(Bytes::from_static(part))))
+                .collect(),
+        ))
+    }
+
+    #[tokio::test]
+    async fn disconnect_cleans_up_subscriptions_even_on_read_error() {
+        let (_dir, node, _) = test_node().await;
+        let server = Arc::new(
+            RedisServer::new(node.app.clone(), "127.0.0.1:0".into(), &node.app.config).unwrap(),
+        );
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let socket = TcpStream::connect(listener.local_addr().unwrap())
+            .await
+            .unwrap();
+        let (connection, addr) = listener.accept().await.unwrap();
+        let handler = tokio::spawn(
+            server
+                .clone()
+                .handle_connection_pipeline(connection, addr, 1),
+        );
+        let mut client = Framed::new(socket, RespCodec::new());
+        for parts in [
+            [b"SUBSCRIBE".as_slice(), b"channel".as_slice()],
+            [b"PSUBSCRIBE".as_slice(), b"pattern*".as_slice()],
+        ] {
+            client.send(command(&parts)).await.unwrap();
+            timeout(Duration::from_secs(2), client.next())
+                .await
+                .unwrap()
+                .unwrap()
+                .unwrap();
+        }
+        assert_eq!(server.broadcast.client_subscription_count(1).await, 1);
+        assert_eq!(server.broadcast.client_pattern_count(1).await, 1);
+
+        // EOF in an incomplete frame makes Framed report a read error.
+        client
+            .get_mut()
+            .write_all(b"*2\r\n$9\r\nSUBSCRIBE\r\n$")
+            .await
+            .unwrap();
+        client.get_mut().shutdown().await.unwrap();
+        let result = timeout(Duration::from_secs(2), handler)
+            .await
+            .unwrap()
+            .unwrap();
+        node.app.cluster.shutdown().await.unwrap();
+        assert!(result.is_err());
+        assert_eq!(server.broadcast.client_subscription_count(1).await, 0);
+        assert_eq!(server.broadcast.client_pattern_count(1).await, 0);
+        assert!(
+            matches!(server.broadcast.pubsub_channels(None).await, Value::Array(Some(channels)) if channels.is_empty())
+        );
+        assert!(matches!(
+            server.broadcast.pubsub_numpat().await,
+            Value::Integer(0)
+        ));
+    }
+
+    #[tokio::test]
+    async fn redis_bind_failure_is_reported_as_startup_failure() {
+        let (_dir, node, shutdown_tx) = test_node().await;
+        let occupied = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let (startup_tx, startup_rx) = oneshot::channel();
+        let server = Server::new(
+            node.app.clone(),
+            "127.0.0.1:0".into(),
+            startup_tx,
+            occupied.local_addr().unwrap().to_string(),
+            &node.app.config,
+        )
+        .unwrap();
+        let handle = tokio::spawn(server.start_server(shutdown_tx.subscribe()));
+        let startup = timeout(Duration::from_secs(2), startup_rx)
+            .await
+            .unwrap()
+            .unwrap();
+        let _ = shutdown_tx.send(());
+        let result = timeout(Duration::from_secs(2), handle)
+            .await
+            .unwrap()
+            .unwrap();
+        node.app.cluster.shutdown().await.unwrap();
+        assert!(
+            startup.is_err(),
+            "Redis bind failure was reported as successful startup"
+        );
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn server_shutdown_releases_redis_listener() {
+        let (_dir, node, shutdown_tx) = test_node().await;
+        let reservation = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let redis_addr = reservation.local_addr().unwrap();
+        drop(reservation);
+        let (startup_tx, startup_rx) = oneshot::channel();
+        let server = Server::new(
+            node.app.clone(),
+            "127.0.0.1:0".into(),
+            startup_tx,
+            redis_addr.to_string(),
+            &node.app.config,
+        )
+        .unwrap();
+        let handle = tokio::spawn(server.start_server(shutdown_tx.subscribe()));
+        timeout(Duration::from_secs(2), startup_rx)
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap();
+        let socket = TcpStream::connect(redis_addr).await.unwrap();
+        let mut client = Framed::new(socket, RespCodec::new());
+        client.send(command(&[b"PING"])).await.unwrap();
+        assert!(
+            matches!(timeout(Duration::from_secs(2), client.next()).await.unwrap().unwrap().unwrap(), Value::SimpleString(s) if s == "PONG")
+        );
+        client.send(command(&[b"QUIT"])).await.unwrap();
+        assert!(
+            matches!(timeout(Duration::from_secs(2), client.next()).await.unwrap().unwrap().unwrap(), Value::SimpleString(s) if s == "OK")
+        );
+        assert!(
+            timeout(Duration::from_secs(2), client.next())
+                .await
+                .unwrap()
+                .is_none()
+        );
+        drop(client);
+        shutdown_tx.send(()).unwrap();
+        timeout(Duration::from_secs(2), handle)
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap();
+        node.app.cluster.shutdown().await.unwrap();
+        let _rebound = TcpListener::bind(redis_addr)
+            .await
+            .expect("Redis listener survived service shutdown");
     }
 }
