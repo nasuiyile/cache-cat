@@ -10,3 +10,4 @@ pub(crate) use list::lrange;
 pub(crate) use times::now_ms;
 
 pub(crate) use number::parse_i64;
+pub(crate) use number::parse_f64;

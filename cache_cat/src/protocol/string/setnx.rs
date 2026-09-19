@@ -46,11 +46,36 @@ impl SetNxCommand {
             .string_bytes_clone()
             .ok_or(ProtocolError::InvalidArgument("key"))?;
 
-        let value = items[1]
+        let value = items[2]
             .string_bytes_clone()
             .ok_or(ProtocolError::InvalidArgument("value"))?;
 
         Ok(SetNxParams { key, value })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn bulk(value: &'static [u8]) -> Value {
+        Value::BulkString(Some(Bytes::from_static(value)))
+    }
+
+    #[test]
+    fn parse_uses_the_value_argument() {
+        let params = SetNxCommand::parse(&[bulk(b"SETNX"), bulk(b"key"), bulk(b"value")])
+            .expect("valid SETNX arguments");
+
+        assert_eq!(params.key, Bytes::from_static(b"key"));
+        assert_eq!(params.value, Bytes::from_static(b"value"));
+    }
+
+    #[test]
+    fn parse_rejects_non_string_value() {
+        let result = SetNxCommand::parse(&[bulk(b"SETNX"), bulk(b"key"), Value::Integer(1)]);
+
+        assert_eq!(result, Err(ProtocolError::InvalidArgument("value")));
     }
 }
 

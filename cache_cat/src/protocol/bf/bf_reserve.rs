@@ -14,7 +14,7 @@ use crate::raft::types::core::response_value::Value;
 use crate::raft::types::core::value_object::ValueObject;
 use crate::raft::types::entry::base_operation::BaseOperation;
 use crate::raft::types::entry::request::Operation;
-use crate::utils::parse_i64;
+use crate::utils::{parse_f64, parse_i64};
 
 use async_trait::async_trait;
 use bytes::Bytes;
@@ -343,10 +343,4 @@ impl ComputeCommand for BfReserveReq {
             Value::SimpleString("OK".to_string()),
         )
     }
-}
-
-#[inline]
-fn parse_f64(bytes: &[u8]) -> Option<f64> {
-    let value = std::str::from_utf8(bytes).ok()?;
-    value.parse::<f64>().ok()
 }

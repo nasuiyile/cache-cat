@@ -1,4 +1,5 @@
 use crate::error::{CacheCatError, ProtocolError};
+use super::arg;
 use crate::mocha::EntrySnapshot;
 use crate::protocol::command::{Client, Command};
 use crate::protocol::raft_command::{RaftCommand, ReadRaftCommand};
@@ -38,11 +39,6 @@ impl fmt::Display for XReadGroupParams {
             self.no_ack
         )
     }
-}
-
-fn arg(v: &Value) -> Result<Bytes, ProtocolError> {
-    v.string_bytes_clone()
-        .ok_or(ProtocolError::InvalidArgument("argument"))
 }
 
 impl XReadGroupParams {

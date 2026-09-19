@@ -1,5 +1,6 @@
 use std::fmt;
 use std::fmt::Formatter;
+use super::arg;
 use crate::error::{CacheCatError, ProtocolError};
 use crate::mocha::{EntrySnapshot, ExpirePolicy, MochaOperation};
 use crate::protocol::command::{Client, Command};
@@ -140,10 +141,6 @@ impl fmt::Display for XGroupReq {
     }
 }
 
-fn arg(v: &Value) -> Result<Bytes, ProtocolError> {
-    v.string_bytes_clone()
-        .ok_or(ProtocolError::InvalidArgument("argument"))
-}
 fn parse_id(v: &Value) -> Result<GroupStart, ProtocolError> {
     let s = String::from_utf8_lossy(&arg(v)?).to_string();
     GroupStart::from_str(&s).map_err(|_| ProtocolError::InvalidArgument("id"))

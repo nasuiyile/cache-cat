@@ -214,7 +214,6 @@ impl RaftCommandFactory {
         factory.register("KEYS", KeysCommand);
         factory.register("ZSCORE", ZScoreCommand);
         factory.register("ZCARD", ZCardCommand);
-        factory.register("ZSCORE", ZScoreCommand);
         factory.register("ZRANK", ZRankCommand);
         factory.register("ZPOPMIN", ZPopMinCommand);
         factory.register("UNLINK", UnlinkCommand);

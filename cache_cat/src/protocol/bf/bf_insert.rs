@@ -1,12 +1,13 @@
 use crate::error::{CacheCatError, ProtocolError};
 use crate::mocha::{EntrySnapshot, ExpirePolicy, MochaOperation};
+use crate::protocol::bf::add_items;
 use crate::protocol::bf::error::{BloomOperation, NOT_FOUND, from_engine};
 use crate::protocol::command::{Client, Command};
 use crate::protocol::raft_command::RaftCommand;
 use crate::raft::network::redis_server::RedisServer;
 use crate::raft::types::core::mocha::bloom_filter::{
     BLOOM_CAPACITY_MAX, BLOOM_CAPACITY_MIN, BLOOM_ERROR_RATE_CAP, BLOOM_EXPANSION_MAX,
-    BLOOM_EXPANSION_MIN, BloomError, BloomObject, DEFAULT_BLOOM_CAPACITY, DEFAULT_BLOOM_ERROR_RATE,
+    BLOOM_EXPANSION_MIN, BloomObject, DEFAULT_BLOOM_CAPACITY, DEFAULT_BLOOM_ERROR_RATE,
     DEFAULT_BLOOM_EXPANSION,
 };
 use crate::raft::types::core::mocha::cas::ComputeCommand;
@@ -15,7 +16,7 @@ use crate::raft::types::core::response_value::Value;
 use crate::raft::types::core::value_object::ValueObject;
 use crate::raft::types::entry::base_operation::BaseOperation;
 use crate::raft::types::entry::request::Operation;
-use crate::utils::parse_i64;
+use crate::utils::{parse_f64, parse_i64};
 use async_trait::async_trait;
 use bytes::Bytes;
 use parking_lot::Mutex;
@@ -287,35 +288,6 @@ impl ComputeCommand for BfInsertReq {
             Value::Array(Some(results)),
         )
     }
-}
-
-fn add_items(bloom: &mut BloomObject, items: &[Bytes]) -> (Vec<Value>, bool) {
-    let mut results = Vec::with_capacity(items.len());
-    let mut mutated = false;
-    for item in items {
-        match bloom.add(item) {
-            Ok(true) => {
-                mutated = true;
-                results.push(Value::Boolean(true));
-            }
-            Ok(false) => {
-                results.push(Value::Boolean(false));
-            }
-            Err(error) => {
-                let is_full = matches!(error, BloomError::Full);
-                results.push(from_engine(error, BloomOperation::Insert).into());
-                if is_full {
-                    break;
-                }
-            }
-        }
-    }
-
-    (results, mutated)
-}
-
-fn parse_f64(bytes: &[u8]) -> Option<f64> {
-    std::str::from_utf8(bytes).ok()?.parse().ok()
 }
 
 #[cfg(test)]

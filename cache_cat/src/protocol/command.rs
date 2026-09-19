@@ -376,7 +376,6 @@ impl CommandFactory {
         factory.register("ZREM", ZRemCommand);
         factory.register("ZSCORE", ZScoreCommand);
         factory.register("ZCARD", ZCardCommand);
-        factory.register("ZSCORE", ZScoreCommand);
         factory.register("ZRANK", ZRankCommand);
         factory.register("ZPOPMIN", ZPopMinCommand);
         factory.register("ZREVRANK", ZRevRankCommand);
@@ -413,7 +412,6 @@ impl CommandFactory {
         factory.register("BF.EXISTS", BfExistsCommand);
         factory.register("BF.MADD", BfMAddCommand);
         factory.register("BF.MEXISTS", BfMExistsCommand);
-        factory.register("BF.RESERVE", BfReserveCommand);
         factory.register("BF.RESERVE", BfReserveCommand);
         factory.register("BF.INFO", BfInfoCommand);
         factory.register("BF.INSERT", BfInsertCommand);

@@ -1,5 +1,6 @@
 use crate::error::{CacheCatError, ProtocolError};
 use crate::mocha::{EntrySnapshot, ExpirePolicy, MochaOperation};
+use crate::protocol::bf::add_items;
 use crate::protocol::bf::error::{BloomOperation, from_engine};
 use crate::protocol::command::{Client, Command};
 use crate::protocol::raft_command::RaftCommand;
@@ -155,31 +156,4 @@ impl ComputeCommand for BfMAddReq {
             Value::Array(Some(replies)),
         )
     }
-}
-
-fn add_items(bloom: &mut BloomObject, items: &[Bytes]) -> (Vec<Value>, bool) {
-    let mut replies = Vec::with_capacity(items.len());
-    let mut mutated = false;
-    for item in items {
-        match bloom.add(item) {
-            Ok(true) => {
-                mutated = true;
-                replies.push(Value::Boolean(true));
-            }
-            Ok(false) => {
-                replies.push(Value::Boolean(false));
-            }
-            Err(error) => {
-                let is_full = matches!(
-                    error,
-                    crate::raft::types::core::mocha::bloom_filter::BloomError::Full
-                );
-                replies.push(from_engine(error, BloomOperation::Insert).into());
-                if is_full {
-                    break;
-                }
-            }
-        }
-    }
-    (replies, mutated)
 }
