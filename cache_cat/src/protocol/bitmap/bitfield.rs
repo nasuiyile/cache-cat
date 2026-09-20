@@ -455,11 +455,43 @@ fn write_bitfield(bytes: &mut BytesMut, encoding: BitFieldEncoding, offset: u64,
     }
 }
 
-/// 假设 response_value::Value 中的 RESP Null 变体叫做 `Null`。
-/// 如果项目中叫做 Nil、NullBulkString 等，只需要改这一行。
+/// OVERFLOW FAIL uses a null bulk string in RESP2.
 #[inline]
 fn null_value() -> Value {
-    Value::Array(None)
+    Value::BulkString(None)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn overflow_fail_returns_null_bulk_and_preserves_field() {
+        let req = BitFieldReq {
+            key: Bytes::from_static(b"key"),
+            operations: vec![
+                BitFieldSubCommand::Set {
+                    encoding: BitFieldEncoding::unsigned(8),
+                    offset: 0,
+                    value: 255,
+                    overflow: BitFieldOverflow::Wrap,
+                },
+                BitFieldSubCommand::IncrBy {
+                    encoding: BitFieldEncoding::unsigned(8),
+                    offset: 0,
+                    increment: 1,
+                    overflow: BitFieldOverflow::Fail,
+                },
+                BitFieldSubCommand::Get {
+                    encoding: BitFieldEncoding::unsigned(8),
+                    offset: 0,
+                },
+            ],
+        };
+        let (_, reply) = req.init();
+        assert_eq!(reply.encode_proto(2), b"*3\r\n:0\r\n$-1\r\n:255\r\n");
+        assert_eq!(reply.encode_proto(3), b"*3\r\n:0\r\n_\r\n:255\r\n");
+    }
 }
 
 impl ComputeCommand for BitFieldReq {

@@ -1,4 +1,4 @@
-use crate::error::CacheCatError;
+use crate::error::{CacheCatError, ProtocolError};
 use crate::protocol::command::{Client, SubCommand};
 use crate::raft::network::connection::Connection;
 use crate::raft::network::redis_server::{RedisServer, RespCodec};
@@ -40,9 +40,12 @@ impl SubCommand for ClientInfoCommand {
     async fn execute(
         &self,
         client: &mut Client,
-        _items: &[Value],
+        items: &[Value],
         server: &RedisServer,
     ) -> Result<Value, CacheCatError> {
+        if items.len() != 2 {
+            return Err(ProtocolError::WrongArgCount("client|info").into());
+        }
         let mut map: HashMap<String, String> = HashMap::new();
         map.insert("id".to_string(), client.id.to_string());
         let client_addr = client.framed.get_ref().as_stream().peer_addr()?.to_string();
@@ -88,8 +91,12 @@ impl SubCommand for ClientInfoCommand {
         let psub = server.broadcast.client_pattern_count(client.id).await;
         map.insert("psub".to_string(), psub.to_string());
 
-        let res = map_to_string(&map);
+        let mut res = map_to_string(&map);
+        res.push('\n');
 
-        Ok(Value::BulkString(Some(res.into())))
+        Ok(Value::VerbatimString {
+            format: "txt".into(),
+            data: res.into(),
+        })
     }
 }

@@ -66,11 +66,36 @@ impl GetBitCommand {
             .string_bytes_clone()
             .ok_or(ProtocolError::InvalidArgument("getbit"))?;
 
-        let offset = items[2].parse_u64().ok_or(ProtocolError::response(
-            "ERR bit offset is not an integer or out of range",
-        ))?;
+        let offset = items[2]
+            .parse_u64()
+            .filter(|offset| *offset <= u32::MAX as u64)
+            .ok_or(ProtocolError::response(
+                "ERR bit offset is not an integer or out of range",
+            ))?;
 
         Ok(GetBitParams { key, offset })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn rejects_offsets_beyond_redis_string_limit() {
+        let mut items = vec![
+            Value::SimpleString("GETBIT".into()),
+            Value::SimpleString("key".into()),
+            Value::SimpleString("4294967295".into()),
+        ];
+        assert!(GetBitCommand::parse_args(&items).is_ok());
+        for offset in ["4294967296", "18446744073709551615", "-1"] {
+            items[2] = Value::SimpleString(offset.into());
+            assert_eq!(
+                GetBitCommand::parse_args(&items).unwrap_err().to_string(),
+                "ERR bit offset is not an integer or out of range"
+            );
+        }
     }
 }
 

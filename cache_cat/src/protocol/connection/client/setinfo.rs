@@ -23,7 +23,7 @@ impl SubCommand for SetInfoCommand {
             .ok_or(ProtocolError::InvalidArgument("field"))?
             .to_uppercase();
 
-        let value = items[2]
+        let value = items[3]
             .as_str_lossy()
             .ok_or(ProtocolError::InvalidArgument("value"))?
             .into_owned();

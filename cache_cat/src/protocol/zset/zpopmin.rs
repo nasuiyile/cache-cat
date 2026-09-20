@@ -112,7 +112,14 @@ impl ComputeCommand for ZPopMinReq {
     ) -> (MochaOperation<MyValue>, Value) {
         match &entry.value.data {
             ValueObject::ZSet(zset) => {
-                let popped = zset.lock().zpop_min(self.count);
+                if self.count == Some(0) {
+                    return (MochaOperation::Abort, Value::Array(Some(Vec::new())));
+                }
+                let (popped, is_empty) = {
+                    let mut zset = zset.lock();
+                    let popped = zset.zpop_min(self.count);
+                    (popped, zset.is_empty())
+                };
 
                 // Mirror Redis genericZpopCommand:
                 // - without COUNT: flat [member, score] array in both
@@ -130,6 +137,9 @@ impl ComputeCommand for ZPopMinReq {
                     Some(_) => Value::MemberScores(popped),
                 };
 
+                if is_empty {
+                    return (MochaOperation::Remove, response);
+                }
                 (
                     MochaOperation::Insert {
                         value: entry.value.clone(),
@@ -139,10 +149,7 @@ impl ComputeCommand for ZPopMinReq {
                 )
             }
 
-            _ => (
-                MochaOperation::Abort,
-                ProtocolError::WrongType.into(),
-            ),
+            _ => (MochaOperation::Abort, ProtocolError::WrongType.into()),
         }
     }
 
@@ -150,5 +157,52 @@ impl ComputeCommand for ZPopMinReq {
     fn init(self) -> (MochaOperation<MyValue>, Value) {
         // Missing key: empty array reply, like Redis shared.emptyarray.
         (MochaOperation::Abort, Value::Array(Some(Vec::new())))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::mocha::ExpirePolicy;
+    use crate::raft::types::core::structure::sorted_set::SortedSet;
+    use parking_lot::Mutex;
+    use std::sync::Arc;
+
+    #[test]
+    fn pop_preserves_ttl_until_last_member_then_deletes_key() {
+        let mut set = SortedSet::new();
+        set.zincrby(Bytes::from_static(b"a"), 1.0);
+        set.zincrby(Bytes::from_static(b"b"), 2.0);
+        let snapshot = EntrySnapshot {
+            value: MyValue::new(ValueObject::ZSet(Arc::new(Mutex::new(set)))),
+            expire_at: Some(100),
+        };
+        let request = ZPopMinReq {
+            key: Bytes::from_static(b"zset"),
+            count: Some(0),
+        };
+        let (operation, response) = request.mutate(snapshot.clone(), 0);
+        assert!(matches!(operation, MochaOperation::Abort));
+        assert_eq!(response.encode(), b"*0\r\n");
+        let request = ZPopMinReq {
+            key: Bytes::from_static(b"zset"),
+            count: None,
+        };
+        let (operation, response) = request.mutate(snapshot.clone(), 0);
+        assert!(matches!(
+            operation,
+            MochaOperation::Insert {
+                expire: ExpirePolicy::Absolute(100),
+                ..
+            }
+        ));
+        assert_eq!(response.encode(), b"*2\r\n$1\r\na\r\n$1\r\n1\r\n");
+        let request = ZPopMinReq {
+            key: Bytes::from_static(b"zset"),
+            count: Some(10),
+        };
+        let (operation, response) = request.mutate(snapshot, 0);
+        assert!(matches!(operation, MochaOperation::Remove));
+        assert_eq!(response.encode(), b"*2\r\n$1\r\nb\r\n$1\r\n2\r\n");
     }
 }

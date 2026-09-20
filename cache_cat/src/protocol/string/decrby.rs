@@ -32,9 +32,7 @@ impl DecrByParams {
             .string_bytes_clone()
             .ok_or(ProtocolError::InvalidArgument("key"))?;
 
-        let decrement = items[2]
-            .parse_i64()
-            .ok_or(ProtocolError::InvalidArgument("decrement"))?;
+        let decrement = items[2].try_parse_i64()?;
 
         Ok(DecrByParams { key, decrement })
     }

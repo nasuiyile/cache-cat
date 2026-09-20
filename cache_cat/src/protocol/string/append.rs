@@ -112,26 +112,20 @@ impl ComputeCommand for AppendReq {
         entry: EntrySnapshot<MyValue>,
         _write_clock: u64,
     ) -> (MochaOperation<MyValue>, Value) {
-        match &entry.value.data {
-            ValueObject::String(data_arc) => {
-                // Construct a new string: original content + appended content
-                let mut new_buf = BytesMut::from(data_arc.clone());
-                new_buf.extend_from_slice(&self.value);
-                let len = new_buf.len() as i64;
-                let new_value = MyValue::new(ValueObject::String(new_buf.freeze()));
-                (
-                    MochaOperation::Insert {
-                        value: new_value,
-                        expire: entry.get_expire_policy(),
-                    },
-                    Value::Integer(len),
-                )
-            }
-            _ => (
-                MochaOperation::Abort,
-                ProtocolError::WrongType.into(),
-            ),
-        }
+        let mut new_buf = match &entry.value.data {
+            ValueObject::String(data) => BytesMut::from(data.clone()),
+            ValueObject::Int(value) => BytesMut::from(value.to_string().as_bytes()),
+            _ => return (MochaOperation::Abort, ProtocolError::WrongType.into()),
+        };
+        new_buf.extend_from_slice(&self.value);
+        let len = new_buf.len() as i64;
+        (
+            MochaOperation::Insert {
+                value: MyValue::new(ValueObject::String(new_buf.freeze())),
+                expire: entry.get_expire_policy(),
+            },
+            Value::Integer(len),
+        )
     }
 
     fn init(self) -> (MochaOperation<MyValue>, Value) {
@@ -143,5 +137,36 @@ impl ComputeCommand for AppendReq {
             },
             Value::Integer(len),
         )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn append_accepts_integer_encoded_strings_and_keeps_ttl() {
+        for value in [0, -12, i64::MIN, i64::MAX] {
+            let (operation, reply) = AppendReq {
+                key: "k".into(),
+                value: "x".into(),
+            }
+            .mutate(
+                EntrySnapshot {
+                    value: MyValue::new(ValueObject::Int(value)),
+                    expire_at: Some(10_000),
+                },
+                0,
+            );
+            let expected = format!("{value}x");
+            assert!(matches!(reply, Value::Integer(len) if len == expected.len() as i64));
+            let MochaOperation::Insert { value, expire } = operation else {
+                panic!("expected string insertion");
+            };
+            assert_eq!(expire, ExpirePolicy::Absolute(10_000));
+            assert!(
+                matches!(value.data, ValueObject::String(bytes) if bytes.as_ref() == expected.as_bytes())
+            );
+        }
     }
 }

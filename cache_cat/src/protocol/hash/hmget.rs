@@ -4,6 +4,7 @@
 //! Returns the values associated with the specified fields in the hash stored at key.
 
 use crate::error::{CacheCatError, ProtocolError};
+use crate::mocha::EntrySnapshot;
 use crate::protocol::command::{Client, Command};
 use crate::protocol::raft_command::RaftCommand;
 use crate::raft::network::redis_server::RedisServer;
@@ -17,7 +18,6 @@ use async_trait::async_trait;
 use bytes::Bytes;
 use serde::{Deserialize, Serialize};
 use std::fmt::{Display, Formatter};
-use crate::mocha::EntrySnapshot;
 
 /// Parsed HMGET arguments
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -46,7 +46,7 @@ impl ReadCommand for HMGetParams {
     }
     fn execute(&self, value: Option<EntrySnapshot<MyValue>>) -> Value {
         match value {
-            None => Value::BulkString(None),
+            None => Value::Array(Some(vec![Value::BulkString(None); self.fields.len()])),
             Some(v) => match v.value.data {
                 ValueObject::Hash(map) => {
                     let guard = map.lock();

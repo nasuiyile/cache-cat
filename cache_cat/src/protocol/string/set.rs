@@ -197,12 +197,10 @@ impl Command for SetCommand {
             return Ok(Value::queued());
         }
         let params = SetParams::parse(items)?;
-        let get = params.get;
-        let value = server
+        server
             .app
             .write(Operation::Redis(RedisSet(params)), client.db_number)
-            .await?;
-        if get { Ok(value) } else { Ok(Value::ok()) }
+            .await
     }
 }
 

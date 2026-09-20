@@ -132,13 +132,7 @@ impl ComputeCommand for LTrimReq {
                 let mut list = data_arc.lock();
                 let len = list.len() as i64;
                 if len == 0 {
-                    return (
-                        MochaOperation::Insert {
-                            value: entry.value.clone(),
-                            expire: entry.get_expire_policy(),
-                        },
-                        Value::SimpleString(String::from("OK")),
-                    );
+                    return (MochaOperation::Remove, Value::ok());
                 }
                 // Convert negative indexes to positive
                 let mut start = self.start;
@@ -160,7 +154,7 @@ impl ComputeCommand for LTrimReq {
                 }
                 // If start > stop, the list becomes empty
                 if start > stop {
-                    list.clear();
+                    return (MochaOperation::Remove, Value::ok());
                 } else {
                     // Keep only elements in range [start, stop]
                     let start = start as usize;
@@ -183,14 +177,41 @@ impl ComputeCommand for LTrimReq {
                     Value::SimpleString(String::from("OK")),
                 )
             }
-            _ => (
-                Abort,
-                ProtocolError::WrongType.into(),
-            ),
+            _ => (Abort, ProtocolError::WrongType.into()),
         }
     }
 
     fn init(self) -> (MochaOperation<MyValue>, Value) {
         (Abort, Value::SimpleString(String::from("OK")))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use parking_lot::Mutex;
+    use std::collections::VecDeque;
+    use std::sync::Arc;
+
+    #[test]
+    fn empty_ranges_delete_the_key() {
+        for (start, stop) in [(1, 0), (3, 5), (0, -4), (i64::MAX, i64::MAX)] {
+            let snapshot = EntrySnapshot {
+                value: MyValue::new(ValueObject::List(Arc::new(Mutex::new(VecDeque::from([
+                    Bytes::from_static(b"a"),
+                    Bytes::from_static(b"b"),
+                    Bytes::from_static(b"c"),
+                ]))))),
+                expire_at: None,
+            };
+            let (operation, response) = LTrimReq {
+                key: Bytes::from_static(b"list"),
+                start,
+                stop,
+            }
+            .mutate(snapshot, 0);
+            assert!(matches!(operation, MochaOperation::Remove));
+            assert_eq!(response.encode(), b"+OK\r\n");
+        }
     }
 }

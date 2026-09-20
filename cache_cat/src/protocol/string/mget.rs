@@ -1,4 +1,5 @@
 use crate::error::{CacheCatError, ProtocolError};
+use crate::mocha::EntrySnapshot;
 use crate::protocol::command::{Client, Command};
 use crate::protocol::raft_command::{RaftCommand, ReadRaftCommand};
 use crate::raft::network::redis_server::RedisServer;
@@ -11,7 +12,6 @@ use async_trait::async_trait;
 use bytes::Bytes;
 use serde::{Deserialize, Serialize};
 use std::fmt::Display;
-use crate::mocha::EntrySnapshot;
 
 /// Parameters for MGET command
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -90,10 +90,41 @@ impl MultiReadCommand for MgetParams {
                         Value::BulkString(Some(int_value.to_string().into()))
                     }
                     ValueObject::String(str_value) => Value::BulkString(Some(str_value)),
-                    _ => ProtocolError::WrongType.into(),
+                    _ => Value::BulkString(None),
                 },
             });
         }
         Value::Array(Some(results))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use parking_lot::Mutex;
+    use std::collections::HashMap;
+    use std::sync::Arc;
+
+    #[test]
+    fn mget_returns_null_for_non_strings_and_missing_keys_in_order() {
+        let params = MgetParams {
+            keys: vec!["s".into(), "h".into(), "missing".into(), "n".into()],
+        };
+        let snapshot = |data| {
+            Some(EntrySnapshot {
+                value: MyValue::new(data),
+                expire_at: None,
+            })
+        };
+        let reply = params.execute(vec![
+            snapshot(ValueObject::String("value".into())),
+            snapshot(ValueObject::Hash(Arc::new(Mutex::new(HashMap::new())))),
+            None,
+            snapshot(ValueObject::Int(42)),
+        ]);
+        assert_eq!(
+            reply.encode(),
+            b"*4\r\n$5\r\nvalue\r\n$-1\r\n$-1\r\n$2\r\n42\r\n"
+        );
     }
 }

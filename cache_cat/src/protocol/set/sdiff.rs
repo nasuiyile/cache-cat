@@ -94,8 +94,7 @@ impl MultiReadCommand for SDiffParams {
 
             Some(Some(value)) => {
                 let ValueObject::Set(data) = value.value.data else {
-                    return ProtocolError::InvalidArgument("There is a value that is not a set")
-                        .into();
+                    return ProtocolError::WrongType.into();
                 };
 
                 Some(data.lock().clone())
@@ -108,7 +107,7 @@ impl MultiReadCommand for SDiffParams {
             };
 
             let ValueObject::Set(data) = value.value.data else {
-                return ProtocolError::InvalidArgument("There is a value that is not a set").into();
+                return ProtocolError::WrongType.into();
             };
 
             let Some(ref mut results) = results else {
@@ -129,5 +128,30 @@ impl MultiReadCommand for SDiffParams {
 
         // Set reply (RESP2 *N, RESP3 ~N); empty when the diff is empty.
         Value::Set(members)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn wrong_type_is_reported_even_when_first_key_is_missing() {
+        let wrong_type = EntrySnapshot {
+            value: MyValue::new(ValueObject::String(Bytes::from_static(b"value"))),
+            expire_at: None,
+        };
+        let params = SDiffParams {
+            keys: vec![
+                Bytes::from_static(b"missing"),
+                Bytes::from_static(b"string"),
+            ],
+        };
+        for values in [vec![Some(wrong_type.clone())], vec![None, Some(wrong_type)]] {
+            assert_eq!(
+                params.execute(values).encode(),
+                b"-WRONGTYPE Operation against a key holding the wrong kind of value\r\n"
+            );
+        }
     }
 }

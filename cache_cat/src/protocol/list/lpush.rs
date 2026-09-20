@@ -141,15 +141,12 @@ impl ComputeCommand for LPushReq {
                     Value::Integer(len),
                 )
             }
-            _ => (
-                MochaOperation::Abort,
-                ProtocolError::WrongType.into(),
-            ),
+            _ => (MochaOperation::Abort, ProtocolError::WrongType.into()),
         }
     }
 
     fn init(self) -> (MochaOperation<MyValue>, Value) {
-        let deque: VecDeque<_> = VecDeque::from(self.elements);
+        let deque: VecDeque<_> = self.elements.into_iter().rev().collect();
         let len = deque.len() as i64;
         (
             MochaOperation::Insert {
@@ -158,5 +155,46 @@ impl ComputeCommand for LPushReq {
             },
             Value::Integer(len),
         )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn new_and_existing_lists_use_the_same_push_order() {
+        let request = LPushReq {
+            key: Bytes::from_static(b"list"),
+            elements: vec![
+                Bytes::from_static(b"a"),
+                Bytes::from_static(b"b"),
+                Bytes::from_static(b"c"),
+            ],
+        };
+        let (MochaOperation::Insert { value, .. }, response) = request.clone().init() else {
+            panic!("expected inserted list");
+        };
+        assert_eq!(response.encode(), b":3\r\n");
+        let ValueObject::List(created) = value.data else {
+            panic!("expected list");
+        };
+        assert_eq!(
+            *created.lock(),
+            VecDeque::from([
+                Bytes::from_static(b"c"),
+                Bytes::from_static(b"b"),
+                Bytes::from_static(b"a")
+            ])
+        );
+        let existing = Arc::new(Mutex::new(VecDeque::new()));
+        request.mutate(
+            EntrySnapshot {
+                value: MyValue::new(ValueObject::List(existing.clone())),
+                expire_at: None,
+            },
+            0,
+        );
+        assert_eq!(*existing.lock(), *created.lock());
     }
 }

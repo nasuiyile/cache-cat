@@ -39,7 +39,7 @@ impl MultiReadComputeCommand for RenameParams {
         let key = self.key;
         let new_key = self.new_key;
         let Some(source) = entries.into_iter().next().flatten() else {
-            return (Vec::new(), Value::Error("no such key".into()));
+            return (Vec::new(), Value::Error("ERR no such key".into()));
         };
         if key == new_key {
             return (Vec::new(), Value::ok());

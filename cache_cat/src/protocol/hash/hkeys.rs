@@ -4,6 +4,7 @@
 //! Returns all field names in the hash stored at key.
 
 use crate::error::{CacheCatError, ProtocolError};
+use crate::mocha::EntrySnapshot;
 use crate::protocol::command::{Client, Command};
 use crate::protocol::raft_command::RaftCommand;
 use crate::raft::network::redis_server::RedisServer;
@@ -17,7 +18,6 @@ use async_trait::async_trait;
 use bytes::Bytes;
 use serde::{Deserialize, Serialize};
 use std::fmt::{Display, Formatter};
-use crate::mocha::EntrySnapshot;
 
 /// Parsed HKEYS arguments
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -58,7 +58,7 @@ impl HKeysCommand {
     /// Parse arguments from RESP items
     /// Format: HKEYS key
     fn parse_args(items: &[Value]) -> Result<HKeysParams, ProtocolError> {
-        if items.len() < 2 {
+        if items.len() != 2 {
             return Err(ProtocolError::WrongArgCount("hkeys"));
         }
         let key = items[1]

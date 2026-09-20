@@ -15,7 +15,7 @@ impl SubCommand for SetNameCommand {
         _server: &RedisServer,
     ) -> Result<Value, CacheCatError> {
         if items.len() != 3 {
-            return Err(ProtocolError::WrongArgCount("SENTINEL GET-MASTER-ADDR-BY-NAME").into());
+            return Err(ProtocolError::WrongArgCount("client|setname").into());
         }
         let name = items[2]
             .as_str_lossy()

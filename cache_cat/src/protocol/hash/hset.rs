@@ -151,16 +151,12 @@ impl ComputeCommand for HSetReq {
                     Value::Integer(count),
                 )
             }
-            _ => (
-                MochaOperation::Abort,
-                ProtocolError::WrongType.into(),
-            ),
+            _ => (MochaOperation::Abort, ProtocolError::WrongType.into()),
         }
     }
 
     fn init(self) -> (MochaOperation<MyValue>, Value) {
         let mut map = HashMap::new();
-        let len = self.elements.len();
         for (k, v) in self.elements {
             if let Some(int) = parse_i64(&v) {
                 map.insert(k.clone(), HashValue::Int(int));
@@ -168,6 +164,7 @@ impl ComputeCommand for HSetReq {
                 map.insert(k.clone(), HashValue::Str(v.clone()));
             }
         }
+        let len = map.len();
         (
             MochaOperation::Insert {
                 value: MyValue::new(ValueObject::Hash(Arc::new(Mutex::new(map)))),

@@ -41,7 +41,7 @@ impl MultiReadComputeCommand for RenameNxParams {
         let new_key = self.new_key;
         let mut entries = entries.into_iter();
         let Some(source) = entries.next().flatten() else {
-            return (Vec::new(), Value::Error("no such key".into()));
+            return (Vec::new(), Value::Error("ERR no such key".into()));
         };
         if entries.next().flatten().is_some() {
             return (Vec::new(), Value::Integer(0));

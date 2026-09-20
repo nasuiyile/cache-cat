@@ -91,7 +91,7 @@ impl MultiReadCommand for SUnionParams {
             };
 
             let ValueObject::Set(data) = value.value.data else {
-                return ProtocolError::InvalidArgument("There is a value that is not a set").into();
+                return ProtocolError::WrongType.into();
             };
 
             results.extend(data.lock().iter().cloned());
@@ -104,5 +104,28 @@ impl MultiReadCommand for SUnionParams {
 
         // Set reply (RESP2 *N, RESP3 ~N).
         Value::Set(results)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn wrong_type_is_reported_even_when_first_key_is_missing() {
+        let wrong_type = EntrySnapshot {
+            value: MyValue::new(ValueObject::String(Bytes::from_static(b"value"))),
+            expire_at: None,
+        };
+        let params = SUnionParams {
+            keys: vec![
+                Bytes::from_static(b"missing"),
+                Bytes::from_static(b"string"),
+            ],
+        };
+        assert_eq!(
+            params.execute(vec![None, Some(wrong_type)]).encode(),
+            b"-WRONGTYPE Operation against a key holding the wrong kind of value\r\n"
+        );
     }
 }

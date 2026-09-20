@@ -14,27 +14,20 @@ impl Command for SelectCommand {
         items: &[Value],
         server: &RedisServer,
     ) -> Result<Value, CacheCatError> {
-        if items.len() > 2 {
+        if items.len() != 2 {
             return Err(ProtocolError::WrongArgCount("select").into());
         }
-        let mut num: u16 = 0;
-        if items.len() == 2 {
-            match &items[1] {
-                Value::Integer(s) => num = *s as u16,
-                Value::SimpleString(s) => {
-                    num = s.parse::<u16>().map_err(|_| ProtocolError::SyntaxError)?;
-                }
-                Value::BulkString(Some(bytes)) => {
-                    num = std::str::from_utf8(bytes)
-                        .ok()
-                        .and_then(|v| v.parse::<u16>().ok())
-                        .ok_or(ProtocolError::WrongArgCount("select"))?;
-                }
-                _ => return Err(CacheCatError::from(ProtocolError::SyntaxError)),
-            }
-        }
+        let bytes = items[1]
+            .string_bytes_clone()
+            .ok_or_else(|| ProtocolError::response("ERR invalid DB index"))?;
+        let index = std::str::from_utf8(&bytes)
+            .ok()
+            .and_then(|text| text.parse::<i64>().ok())
+            .filter(|index| index.to_string().as_bytes() == bytes.as_ref())
+            .ok_or_else(|| ProtocolError::response("ERR invalid DB index"))?;
+        let num = u16::try_from(index).map_err(|_| ProtocolError::DbNotExist)?;
         let len = server.app.state_machine.data.kvs.databases.len();
-        if num >= len as u16 {
+        if usize::from(num) >= len {
             return Err(ProtocolError::DbNotExist.into());
         }
         client.db_number = num;

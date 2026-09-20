@@ -4,19 +4,19 @@
 //! Returns all fields and values of the hash stored at key.
 
 use crate::error::{CacheCatError, ProtocolError};
+use crate::mocha::EntrySnapshot;
 use crate::protocol::command::{Client, Command};
 use crate::protocol::raft_command::{RaftCommand, ReadRaftCommand};
 use crate::raft::network::redis_server::RedisServer;
+use crate::raft::types::core::mocha::core::MyValue;
+use crate::raft::types::core::mocha::read_command::ReadCommand;
 use crate::raft::types::core::response_value::Value;
+use crate::raft::types::core::value_object::ValueObject;
 use crate::raft::types::entry::read_operation::ReadOperation;
 use async_trait::async_trait;
 use bytes::Bytes;
 use serde::{Deserialize, Serialize};
 use std::fmt::{Display, Formatter};
-use crate::mocha::EntrySnapshot;
-use crate::raft::types::core::mocha::core::MyValue;
-use crate::raft::types::core::mocha::read_command::ReadCommand;
-use crate::raft::types::core::value_object::ValueObject;
 
 /// Parsed HGETALL arguments
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -63,7 +63,7 @@ impl HGetAllCommand {
     /// Parse arguments from RESP items
     /// Format: HGETALL key
     fn parse_args(items: &[Value]) -> Result<HGetAllParams, ProtocolError> {
-        if items.len() < 2 {
+        if items.len() != 2 {
             return Err(ProtocolError::WrongArgCount("hgetall"));
         }
         let key = items[1]

@@ -4,19 +4,19 @@
 //! Returns the value associated with field in the hash stored at key.
 
 use crate::error::{CacheCatError, ProtocolError};
+use crate::mocha::EntrySnapshot;
 use crate::protocol::command::{Client, Command};
 use crate::protocol::raft_command::{RaftCommand, ReadRaftCommand};
 use crate::raft::network::redis_server::RedisServer;
+use crate::raft::types::core::mocha::core::MyValue;
+use crate::raft::types::core::mocha::read_command::ReadCommand;
 use crate::raft::types::core::response_value::Value;
+use crate::raft::types::core::value_object::ValueObject;
 use crate::raft::types::entry::read_operation::ReadOperation;
 use async_trait::async_trait;
 use bytes::Bytes;
 use serde::{Deserialize, Serialize};
 use std::fmt::{Display, Formatter};
-use crate::mocha::EntrySnapshot;
-use crate::raft::types::core::mocha::core::MyValue;
-use crate::raft::types::core::mocha::read_command::ReadCommand;
-use crate::raft::types::core::value_object::ValueObject;
 
 /// Parsed HGET arguments
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -66,7 +66,7 @@ impl HGetCommand {
     /// Format: HGET key field
     fn parse_args(items: &[Value]) -> Result<HGetParams, ProtocolError> {
         // HGET key field (3 items)
-        if items.len() < 3 {
+        if items.len() != 3 {
             return Err(ProtocolError::WrongArgCount("hget"));
         }
 
@@ -89,7 +89,6 @@ impl ReadRaftCommand for HGetCommand {
         Ok(ReadOperation::HGet(Self::parse_args(items)?))
     }
 }
-
 
 #[async_trait]
 impl Command for HGetCommand {

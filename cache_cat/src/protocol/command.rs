@@ -31,6 +31,7 @@ use crate::protocol::hash::hincrby::HIncrByCommand;
 use crate::protocol::hash::hkeys::HKeysCommand;
 use crate::protocol::hash::hlen::HLenCommand;
 use crate::protocol::hash::hmget::HMGetCommand;
+use crate::protocol::hash::hmset::HMSetCommand;
 use crate::protocol::hash::hset::HSetCommand;
 use crate::protocol::hash::hsetnx::HSetNxCommand;
 use crate::protocol::hash::hvals::HValsCommand;
@@ -349,6 +350,7 @@ impl CommandFactory {
         factory.register("HGET", HGetCommand);
         factory.register("HINCRBY", HIncrByCommand);
         factory.register("HMGET", HMGetCommand);
+        factory.register("HMSET", HMSetCommand);
         factory.register("HDEL", HDelCommand);
         factory.register("HGETALL", HGetAllCommand);
         factory.register("HKEYS", HKeysCommand);
@@ -642,5 +644,145 @@ impl CommandFactory {
         let resp = Value::from(ProtocolError::UnknownCommand(parsed.name));
         client.framed.send(resp).await?;
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::cfg::config::Config;
+    use crate::node::parsed_config::ParsedConfig;
+    use crate::node::raft_node::RaftNode;
+    use crate::raft::store::statemachine::SnapshotState;
+    use std::time::Duration;
+    use tokio::net::{TcpListener, TcpStream};
+    use tokio::sync::broadcast;
+    use tokio::time::timeout;
+
+    #[tokio::test]
+    async fn connection_commands_preserve_state_and_validate_arguments() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut config = Config::default();
+        config.raft.log_path = dir.path().to_str().unwrap().to_owned();
+        config.raft.address = "127.0.0.1:0".into();
+        config.redis.databases = 2;
+        let config = ParsedConfig::from(&config).unwrap();
+        let (shutdown_tx, _) = broadcast::channel(1);
+        let node = RaftNode::create(config, shutdown_tx).await.unwrap();
+        let server =
+            RedisServer::new(node.app.clone(), "127.0.0.1:0".into(), &node.app.config).unwrap();
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let socket = TcpStream::connect(listener.local_addr().unwrap())
+            .await
+            .unwrap();
+        let (connection, _) = listener.accept().await.unwrap();
+        let mut client = Client::new(1, connection, true);
+        let mut replies = Framed::new(socket, RespCodec::new());
+
+        let cases: &[(&[&str], &[u8])] = &[
+            (&["SELECT", "1"], b"+OK\r\n"),
+            (
+                &["SELECT"],
+                b"-ERR wrong number of arguments for 'select' command\r\n",
+            ),
+            (&["SELECT", "-1"], b"-ERR DB index is out of range\r\n"),
+            (&["SELECT", "65536"], b"-ERR DB index is out of range\r\n"),
+            (&["SELECT", "01"], b"-ERR invalid DB index\r\n"),
+            (&["SELECT", "+1"], b"-ERR invalid DB index\r\n"),
+            (&["SELECT", "x"], b"-ERR invalid DB index\r\n"),
+            (&["CLIENT", "SETINFO", "LIB-NAME", "redis-test"], b"+OK\r\n"),
+            (&["CLIENT", "SETINFO", "LIB-VER", "1.2.3"], b"+OK\r\n"),
+            (
+                &["CLIENT", "SETNAME"],
+                b"-ERR wrong number of arguments for 'client|setname' command\r\n",
+            ),
+            (
+                &["CLIENT", "INFO", "extra"],
+                b"-ERR wrong number of arguments for 'client|info' command\r\n",
+            ),
+            (
+                &["PUBSUB", "CHANNELS", "*", "extra"],
+                b"-ERR unknown subcommand or wrong number of arguments for 'CHANNELS'. Try PUBSUB HELP.\r\n",
+            ),
+            (&["BGSAVE", "invalid"], b"-ERR syntax error\r\n"),
+            (&["BGSAVE", "SCHEDULE", "extra"], b"-ERR syntax error\r\n"),
+            (&["MULTI"], b"+OK\r\n"),
+            (&["HMSET", "hash", "field", "value"], b"+QUEUED\r\n"),
+            (&["DISCARD"], b"+OK\r\n"),
+        ];
+        for (parts, expected) in cases {
+            let command = Value::Array(Some(
+                parts
+                    .iter()
+                    .map(|part| Value::BulkString(Some(part.to_string().into())))
+                    .collect(),
+            ));
+            server
+                .cmd_factory
+                .execute_command(&mut client, &server, command)
+                .await
+                .unwrap();
+            let reply = timeout(Duration::from_secs(2), replies.next())
+                .await
+                .unwrap()
+                .unwrap()
+                .unwrap();
+            assert_eq!(reply.encode(), *expected, "{parts:?}");
+            assert_eq!(
+                client.db_number, 1,
+                "failed SELECT must not change databases"
+            );
+        }
+        assert_eq!(client.lib_name, "redis-test");
+        assert_eq!(client.lib_ver, "1.2.3");
+        assert!(client.transaction_queue.is_none());
+        assert!(!client.flag.multi);
+        let info = ClientCommand::new()
+            .execute(
+                &mut client,
+                &[
+                    Value::SimpleString("CLIENT".into()),
+                    Value::SimpleString("INFO".into()),
+                ],
+                &server,
+            )
+            .await
+            .unwrap();
+        assert!(
+            matches!(&info, Value::VerbatimString { format, data } if format == "txt" && data.ends_with(b"\n"))
+        );
+        assert_eq!(info.encode()[0], b'$');
+        assert_eq!(info.encode_proto(3)[0], b'=');
+        server
+            .app
+            .state_machine
+            .data
+            .raft_meta_data
+            .lock()
+            .await
+            .snapshot_state = SnapshotState::Start;
+        for parts in [vec!["BGSAVE"], vec!["BGSAVE", "SCHEDULE"]] {
+            let args = parts
+                .into_iter()
+                .map(|part| Value::BulkString(Some(part.into())))
+                .collect::<Vec<_>>();
+            let error = BgsaveCommand
+                .execute(&mut client, &args, &server)
+                .await
+                .unwrap_err();
+            assert_eq!(
+                Value::from(error).encode(),
+                b"-ERR Background save already in progress\r\n"
+            );
+        }
+        server
+            .app
+            .state_machine
+            .data
+            .raft_meta_data
+            .lock()
+            .await
+            .snapshot_state = SnapshotState::End;
+        node.app.cluster.shutdown().await.unwrap();
     }
 }

@@ -105,18 +105,18 @@ impl ComputeCommand for PersistReq {
         _write_clock: u64,
     ) -> (MochaOperation<MyValue>, Value) {
         if entry.expire_at.is_none() {
-            return (MochaOperation::Abort, Value::Boolean(false));
+            return (MochaOperation::Abort, Value::Integer(0));
         }
         (
             MochaOperation::Insert {
                 value: entry.value.clone(),
                 expire: ExpirePolicy::Persistent,
             },
-            Value::Boolean(true),
+            Value::Integer(1),
         )
     }
 
     fn init(self) -> (MochaOperation<MyValue>, Value) {
-        (MochaOperation::Abort, Value::Boolean(false))
+        (MochaOperation::Abort, Value::Integer(0))
     }
 }

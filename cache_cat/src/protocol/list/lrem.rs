@@ -134,6 +134,9 @@ impl ComputeCommand for LRemReq {
             ValueObject::List(data_arc) => {
                 let mut list = data_arc.lock();
                 let removed_count = self.remove_elements(&mut list);
+                if list.is_empty() {
+                    return (MochaOperation::Remove, Value::Integer(removed_count));
+                }
                 (
                     MochaOperation::Insert {
                         value: entry.value.clone(),
@@ -175,7 +178,7 @@ impl LRemReq {
             }
             std::cmp::Ordering::Less => {
                 // count < 0: 从尾到头移除|count|个匹配元素
-                let mut count = -self.count;
+                let mut count = self.count.unsigned_abs();
                 let mut i = list.len();
                 while i > 0 && count > 0 {
                     i -= 1;
@@ -202,5 +205,42 @@ impl LRemReq {
         }
 
         removed
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use parking_lot::Mutex;
+    use std::sync::Arc;
+
+    #[test]
+    fn minimum_count_removes_from_tail_without_overflow() {
+        let list = Arc::new(Mutex::new(VecDeque::from([
+            Bytes::from_static(b"a"),
+            Bytes::from_static(b"b"),
+            Bytes::from_static(b"a"),
+        ])));
+        let snapshot = EntrySnapshot {
+            value: MyValue::new(ValueObject::List(list.clone())),
+            expire_at: Some(100),
+        };
+        let request = LRemReq {
+            key: Bytes::from_static(b"list"),
+            count: i64::MIN,
+            element: Bytes::from_static(b"a"),
+        };
+        let (operation, response) = request.mutate(snapshot.clone(), 0);
+        assert_eq!(response.encode(), b":2\r\n");
+        assert_eq!(*list.lock(), VecDeque::from([Bytes::from_static(b"b")]));
+        assert!(matches!(operation, MochaOperation::Insert { .. }));
+        let request = LRemReq {
+            key: Bytes::from_static(b"list"),
+            count: 0,
+            element: Bytes::from_static(b"b"),
+        };
+        let (operation, response) = request.mutate(snapshot, 0);
+        assert_eq!(response.encode(), b":1\r\n");
+        assert!(matches!(operation, MochaOperation::Remove));
     }
 }

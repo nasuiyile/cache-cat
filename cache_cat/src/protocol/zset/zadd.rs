@@ -97,22 +97,23 @@ impl ZAddCommand {
             }
         }
 
+        // Remaining items must be score-member pairs. Redis checks syntax
+        // before checking whether the supplied flags are compatible.
+        let remaining = &items[i..];
+        if remaining.is_empty() || !remaining.len().is_multiple_of(2) {
+            return Err(ProtocolError::SyntaxError);
+        }
+
         if nx && xx {
             return Err(ProtocolError::response(
                 "ERR XX and NX options at the same time are not compatible",
             ));
         }
 
-        if gt && lt {
+        if gt && lt || nx && (gt || lt) {
             return Err(ProtocolError::response(
-                "ERR GT and LT options at the same time are not compatible",
+                "ERR GT, LT, and/or NX options at the same time are not compatible",
             ));
-        }
-
-        // Remaining items must be score-member pairs
-        let remaining = &items[i..];
-        if remaining.is_empty() || !remaining.len().is_multiple_of(2) {
-            return Err(ProtocolError::WrongArgCount("zadd"));
         }
 
         let mut members = Vec::with_capacity(remaining.len() / 2);
@@ -121,6 +122,7 @@ impl ZAddCommand {
             let score = remaining[j]
                 .as_str_lossy()
                 .and_then(|v| v.parse::<f64>().ok())
+                .filter(|score| !score.is_nan())
                 .ok_or(ProtocolError::response("ERR value is not a valid float"))?;
 
             let member = remaining[j + 1]
@@ -236,6 +238,9 @@ impl ComputeCommand for ZAddReq {
     }
 
     fn init(self) -> (MochaOperation<MyValue>, Value) {
+        if self.xx {
+            return (MochaOperation::Abort, Value::Integer(0));
+        }
         let mut set = SortedSet::new();
         let changed_count = set.zadd(self);
         (
@@ -245,5 +250,68 @@ impl ComputeCommand for ZAddReq {
             },
             Value::Integer(changed_count),
         )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn args(values: &[&str]) -> Vec<Value> {
+        values
+            .iter()
+            .map(|s| Value::BulkString(Some(Bytes::copy_from_slice(s.as_bytes()))))
+            .collect()
+    }
+
+    #[test]
+    fn rejects_nan_scores_and_incompatible_options() {
+        for score in ["NaN", "nan", "-nan"] {
+            let error =
+                ZAddCommand::parse_params(&args(&["ZADD", "key", "1", "first", score, "second"]))
+                    .unwrap_err();
+            assert_eq!(error.to_string(), "ERR value is not a valid float");
+        }
+        for flags in [["NX", "GT"], ["NX", "LT"], ["GT", "LT"]] {
+            let error = ZAddCommand::parse_params(&args(&[
+                "ZADD", "key", flags[0], flags[1], "1", "member",
+            ]))
+            .unwrap_err();
+            assert_eq!(
+                error.to_string(),
+                "ERR GT, LT, and/or NX options at the same time are not compatible"
+            );
+        }
+        for score in ["-inf", "+inf"] {
+            assert!(ZAddCommand::parse_params(&args(&["ZADD", "key", score, "member"])).is_ok());
+        }
+    }
+
+    #[test]
+    fn xx_does_not_create_a_missing_key() {
+        let Operation::Base(BaseOperation::ZAdd(request)) = ZAddCommand
+            .raft_request(&args(&["ZADD", "key", "XX", "1", "member"]))
+            .unwrap()
+        else {
+            panic!("expected ZADD");
+        };
+        let (operation, response) = request.init();
+        assert!(matches!(operation, MochaOperation::Abort));
+        assert_eq!(response.encode(), b":0\r\n");
+    }
+
+    #[test]
+    fn incomplete_score_pairs_are_syntax_errors_before_flag_validation() {
+        for values in [
+            vec!["ZADD", "key", "NX", "XX"],
+            vec!["ZADD", "key", "1", "member", "2"],
+        ] {
+            assert_eq!(
+                ZAddCommand::parse_params(&args(&values))
+                    .unwrap_err()
+                    .to_string(),
+                "ERR syntax error"
+            );
+        }
     }
 }

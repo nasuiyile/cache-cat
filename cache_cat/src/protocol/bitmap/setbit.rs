@@ -152,15 +152,41 @@ impl SetBitCommand {
             .string_bytes_clone()
             .ok_or(ProtocolError::InvalidArgument("setbit"))?;
 
-        let offset = items[2].parse_u64().ok_or(ProtocolError::response(
-            "ERR bit offset is not an integer or out of range",
-        ))?;
+        let offset = items[2]
+            .parse_u64()
+            .filter(|offset| *offset <= u32::MAX as u64)
+            .ok_or(ProtocolError::response(
+                "ERR bit offset is not an integer or out of range",
+            ))?;
 
         let value = items[3].parse_bool_u8().ok_or(ProtocolError::response(
             "ERR bit is not an integer or out of range",
         ))?;
 
         Ok(SetBitParams { key, offset, value })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn rejects_offsets_beyond_redis_string_limit_before_allocation() {
+        let mut items = vec![
+            Value::SimpleString("SETBIT".into()),
+            Value::SimpleString("key".into()),
+            Value::SimpleString("4294967295".into()),
+            Value::SimpleString("1".into()),
+        ];
+        assert!(SetBitCommand::parse_args(&items).is_ok());
+        for offset in ["4294967296", "18446744073709551615", "-1"] {
+            items[2] = Value::SimpleString(offset.into());
+            assert_eq!(
+                SetBitCommand::parse_args(&items).unwrap_err().to_string(),
+                "ERR bit offset is not an integer or out of range"
+            );
+        }
     }
 }
 

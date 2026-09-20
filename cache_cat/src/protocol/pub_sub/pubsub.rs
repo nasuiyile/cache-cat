@@ -55,6 +55,12 @@ impl PubSubParams {
         match subcommand_str.as_str() {
             "CHANNELS" => {
                 // CHANNELS [pattern]
+                if items.len() > 3 {
+                    return Err(ProtocolError::response(format!(
+                        "ERR unknown subcommand or wrong number of arguments for '{}'. Try PUBSUB HELP.",
+                        items[1].as_str_lossy().unwrap(),
+                    )));
+                }
                 let pattern = if items.len() >= 3 {
                     let item = items[2].string_bytes_clone();
                     if item.is_none() {

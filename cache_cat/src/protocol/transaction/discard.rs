@@ -26,6 +26,7 @@ impl Command for DiscardCommand {
 
         // Clear transaction queue
         client.transaction_queue = None;
+        client.flag.multi = false;
 
         Ok(Value::ok())
     }

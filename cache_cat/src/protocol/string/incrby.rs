@@ -32,9 +32,7 @@ impl IncrByParams {
             .string_bytes_clone()
             .ok_or(ProtocolError::InvalidArgument("key"))?;
 
-        let increment = items[2]
-            .parse_i64()
-            .ok_or(ProtocolError::InvalidArgument("increment"))?;
+        let increment = items[2].try_parse_i64()?;
 
         Ok(IncrByParams { key, increment })
     }

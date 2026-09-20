@@ -97,7 +97,7 @@ impl MultiReadCommand for SInterParams {
             };
 
             let ValueObject::Set(data) = value.value.data else {
-                return ProtocolError::InvalidArgument("There is a value that is not a set").into();
+                return ProtocolError::WrongType.into();
             };
 
             match results {
@@ -125,5 +125,28 @@ impl MultiReadCommand for SInterParams {
 
         // Set reply (RESP2 *N, RESP3 ~N); empty when nothing intersects.
         Value::Set(members)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn wrong_type_is_reported_even_when_first_key_is_missing() {
+        let wrong_type = EntrySnapshot {
+            value: MyValue::new(ValueObject::String(Bytes::from_static(b"value"))),
+            expire_at: None,
+        };
+        let params = SInterParams {
+            keys: vec![
+                Bytes::from_static(b"missing"),
+                Bytes::from_static(b"string"),
+            ],
+        };
+        assert_eq!(
+            params.execute(vec![None, Some(wrong_type)]).encode(),
+            b"-WRONGTYPE Operation against a key holding the wrong kind of value\r\n"
+        );
     }
 }

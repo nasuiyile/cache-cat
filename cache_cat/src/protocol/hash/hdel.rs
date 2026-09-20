@@ -132,9 +132,13 @@ impl ComputeCommand for HDelReq {
                         deleted_count += 1;
                     }
                 }
+                let empty = map.is_empty();
                 drop(map);
                 if deleted_count == 0 {
                     return (MochaOperation::Abort, Value::Integer(0));
+                }
+                if empty {
+                    return (MochaOperation::Remove, Value::Integer(deleted_count));
                 }
                 (
                     MochaOperation::Insert {

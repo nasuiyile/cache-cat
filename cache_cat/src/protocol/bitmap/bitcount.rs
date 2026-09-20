@@ -60,12 +60,17 @@ impl ReadCommand for BitCountParams {
         let start = self.start.unwrap_or(0);
         let end = self.end.unwrap_or(-1);
 
+        // Preserve a reversed negative range before clipping both ends to zero.
+        if start < 0 && end < 0 && start > end {
+            return Value::Integer(0);
+        }
+
         let start = if start < 0 { start + len } else { start };
         let end = if end < 0 { end + len } else { end };
 
         // Clamp indices to valid range
-        let start = start.max(0).min(len - 1) as usize;
-        let end = end.max(0).min(len - 1) as usize;
+        let start = start.max(0);
+        let end = end.max(0).min(len - 1);
 
         // If start > end after conversion, return 0
         if start > end {
@@ -73,12 +78,62 @@ impl ReadCommand for BitCountParams {
         }
 
         // Count bits in the specified range
-        let count: i64 = bytes[start..=end]
+        let count: i64 = bytes[start as usize..=end as usize]
             .iter()
             .map(|&byte| byte.count_ones() as i64)
             .sum();
 
         Value::Integer(count)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn range_start_beyond_string_returns_zero() {
+        let value = EntrySnapshot {
+            value: MyValue::new(ValueObject::String(Bytes::from_static(b"\xff"))),
+            expire_at: None,
+        };
+        for start in [1, 100, i64::MAX] {
+            let params = BitCountParams {
+                key: Bytes::from_static(b"key"),
+                start: Some(start),
+                end: Some(i64::MAX),
+            };
+            assert!(matches!(
+                params.execute(Some(value.clone())),
+                Value::Integer(0)
+            ));
+        }
+        let params = BitCountParams {
+            key: Bytes::from_static(b"key"),
+            start: Some(-1),
+            end: Some(-1),
+        };
+        assert!(matches!(params.execute(Some(value)), Value::Integer(8)));
+    }
+
+    #[test]
+    fn reversed_negative_range_remains_empty_after_clipping() {
+        let value = EntrySnapshot {
+            value: MyValue::new(ValueObject::String(Bytes::from_static(b"\xff"))),
+            expire_at: None,
+        };
+        let mut params = BitCountParams {
+            key: Bytes::from_static(b"key"),
+            start: Some(-4),
+            end: Some(-5),
+        };
+        assert!(matches!(
+            params.execute(Some(value.clone())),
+            Value::Integer(0)
+        ));
+        params.start = Some(-5);
+        params.end = Some(-4);
+        assert!(matches!(params.execute(Some(value)), Value::Integer(8)));
     }
 }
 

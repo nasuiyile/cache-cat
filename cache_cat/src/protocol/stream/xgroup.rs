@@ -1,5 +1,3 @@
-use std::fmt;
-use std::fmt::Formatter;
 use super::arg;
 use crate::error::{CacheCatError, ProtocolError};
 use crate::mocha::{EntrySnapshot, ExpirePolicy, MochaOperation};
@@ -17,6 +15,8 @@ use async_trait::async_trait;
 use bytes::Bytes;
 use parking_lot::RwLock;
 use serde::{Deserialize, Serialize};
+use std::fmt;
+use std::fmt::Formatter;
 use std::str::FromStr;
 use std::sync::Arc;
 
@@ -317,6 +317,9 @@ impl ComputeCommand for XGroupReq {
         }
     }
     fn init(self) -> (MochaOperation<MyValue>, Value) {
+        if matches!(self, Self::Destroy { .. }) {
+            return (MochaOperation::Abort, Value::Integer(0));
+        }
         let Self::Create {
             group,
             id,
@@ -349,6 +352,22 @@ impl ComputeCommand for XGroupReq {
             ),
             Err(e) => (MochaOperation::Abort, stream_err(e)),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn destroy_missing_stream_returns_zero_without_creating_key() {
+        let (operation, reply) = XGroupReq::Destroy {
+            key: Bytes::from_static(b"missing"),
+            group: Bytes::from_static(b"group"),
+        }
+        .init();
+        assert!(matches!(operation, MochaOperation::Abort));
+        assert!(matches!(reply, Value::Integer(0)));
     }
 }
 fn stream_err(e: StreamError) -> Value {

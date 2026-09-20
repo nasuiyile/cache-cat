@@ -129,19 +129,16 @@ impl ComputeCommand for SAddReq {
                     Value::Integer(count),
                 )
             }
-            _ => (
-                MochaOperation::Abort,
-                ProtocolError::WrongType.into(),
-            ),
+            _ => (MochaOperation::Abort, ProtocolError::WrongType.into()),
         }
     }
 
     fn init(self) -> (MochaOperation<MyValue>, Value) {
         let mut set = HashSet::new();
-        let len = self.elements.len();
         for v in self.elements {
             set.insert(v);
         }
+        let len = set.len();
         (
             MochaOperation::Insert {
                 value: MyValue::new(ValueObject::Set(Arc::new(Mutex::new(set)))),
@@ -149,5 +146,30 @@ impl ComputeCommand for SAddReq {
             },
             Value::Integer(len as i64),
         )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn new_set_counts_only_distinct_members() {
+        let request = SAddReq {
+            key: Bytes::from_static(b"set"),
+            elements: vec![
+                Bytes::from_static(b"a"),
+                Bytes::from_static(b"a"),
+                Bytes::from_static(b"b"),
+            ],
+        };
+        let (MochaOperation::Insert { value, .. }, response) = request.init() else {
+            panic!("expected inserted set");
+        };
+        assert_eq!(response.encode(), b":2\r\n");
+        let ValueObject::Set(set) = value.data else {
+            panic!("expected set");
+        };
+        assert_eq!(set.lock().len(), 2);
     }
 }

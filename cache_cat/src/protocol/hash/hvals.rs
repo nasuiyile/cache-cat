@@ -4,6 +4,7 @@
 //! Returns all values in the hash stored at key.
 
 use crate::error::{CacheCatError, ProtocolError};
+use crate::mocha::EntrySnapshot;
 use crate::protocol::command::{Client, Command};
 use crate::protocol::raft_command::{RaftCommand, ReadRaftCommand};
 use crate::raft::network::redis_server::RedisServer;
@@ -16,7 +17,6 @@ use async_trait::async_trait;
 use bytes::Bytes;
 use serde::{Deserialize, Serialize};
 use std::fmt::{Display, Formatter};
-use crate::mocha::EntrySnapshot;
 
 /// Parsed HVALS arguments
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -59,7 +59,7 @@ pub struct HValsCommand;
 
 impl HValsCommand {
     fn parse_args(items: &[Value]) -> Result<HValsParams, ProtocolError> {
-        if items.len() < 2 {
+        if items.len() != 2 {
             return Err(ProtocolError::WrongArgCount("hvals"));
         }
         let key = items[1]

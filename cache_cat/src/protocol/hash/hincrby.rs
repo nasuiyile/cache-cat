@@ -24,6 +24,19 @@ use std::collections::HashMap;
 use std::fmt;
 use std::sync::Arc;
 
+fn parse_hash_integer(bytes: &[u8]) -> Option<i64> {
+    // Redis integers use canonical decimal syntax: no whitespace, plus sign,
+    // leading zeroes, or negative zero.
+    match bytes.first() {
+        Some(b'0') if bytes.len() == 1 => Some(0),
+        Some(b'1'..=b'9') => std::str::from_utf8(bytes).ok()?.parse().ok(),
+        Some(b'-') if matches!(bytes.get(1), Some(b'1'..=b'9')) => {
+            std::str::from_utf8(bytes).ok()?.parse().ok()
+        }
+        _ => None,
+    }
+}
+
 /// Parsed HINCRBY arguments
 #[derive(Debug)]
 struct HIncrByParams {
@@ -132,36 +145,33 @@ impl ComputeCommand for HIncrReq {
         match &entry.value.data {
             ValueObject::Hash(hash) => {
                 let mut map = hash.lock();
-                let result = match map.get(&self.field) {
-                    Some(HashValue::Int(int)) => {
-                        let new_int = *int + self.value;
-                        map.insert(self.field.clone(), HashValue::Int(new_int));
-                        Value::Integer(new_int)
-                    }
-                    Some(HashValue::Str(_)) => {
-                        return (
-                            MochaOperation::Abort,
-                            ProtocolError::response("ERR hash value is not an integer").into(),
-                        );
-                    }
-                    None => {
-                        map.insert(self.field.clone(), HashValue::Int(self.value));
-                        Value::Integer(self.value)
-                    }
+                let old_value = match map.get(&self.field) {
+                    Some(HashValue::Int(int)) => *int,
+                    Some(HashValue::Str(bytes)) => match parse_hash_integer(bytes) {
+                        Some(value) => value,
+                        None => {
+                            return (
+                                MochaOperation::Abort,
+                                ProtocolError::response("ERR hash value is not an integer").into(),
+                            );
+                        }
+                    },
+                    None => 0,
                 };
+                let Some(new_value) = old_value.checked_add(self.value) else {
+                    return (MochaOperation::Abort, ProtocolError::Overflow.into());
+                };
+                map.insert(self.field, HashValue::Int(new_value));
                 drop(map);
                 (
                     MochaOperation::Insert {
                         value: entry.value.clone(),
                         expire: entry.get_expire_policy(),
                     },
-                    result,
+                    Value::Integer(new_value),
                 )
             }
-            _ => (
-                MochaOperation::Abort,
-                ProtocolError::WrongType.into(),
-            ),
+            _ => (MochaOperation::Abort, ProtocolError::WrongType.into()),
         }
     }
 

@@ -41,11 +41,15 @@ impl RPopCommand {
             .string_bytes_clone()
             .ok_or(ProtocolError::InvalidArgument("key"))?;
         let count = if items.len() == 3 {
-            Some(
-                items[2]
-                    .parse_u64()
-                    .ok_or(ProtocolError::InvalidArgument("count"))?,
-            )
+            let count = items[2].parse_i64().ok_or(ProtocolError::response(
+                "ERR value is out of range, must be positive",
+            ))?;
+            if count < 0 {
+                return Err(ProtocolError::response(
+                    "ERR value is out of range, must be positive",
+                ));
+            }
+            Some(count as u64)
         } else {
             None
         };
@@ -65,7 +69,7 @@ impl RaftCommand for RPopCommand {
 
         Ok(Operation::Base(RPop(RPopReq {
             key: params.key,
-            count: params.count.unwrap_or(1),
+            count: params.count,
         })))
     }
 }
@@ -91,14 +95,14 @@ impl Command for RPopCommand {
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct RPopReq {
     pub key: Bytes,
-    pub count: u64,
+    pub count: Option<u64>,
 }
 
 impl Display for RPopReq {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(
             f,
-            "RPopReq {{ key: {}, count: {} }}",
+            "RPopReq {{ key: {}, count: {:?} }}",
             String::from_utf8_lossy(&self.key),
             self.count
         )
@@ -121,35 +125,130 @@ impl ComputeCommand for RPopReq {
     ) -> (MochaOperation<MyValue>, Value) {
         match &entry.value.data {
             ValueObject::List(data_arc) => {
-                let popped = {
-                    let mut list = data_arc.lock();
-                    list.pop_back()  // 主要区别：使用pop_back()而不是pop_front()
+                let mut list = data_arc.lock();
+                if self.count == Some(0) {
+                    return (Abort, Value::Array(Some(Vec::new())));
+                }
+                let response = match self.count {
+                    None => Value::BulkString(list.pop_back()),
+                    Some(count) => {
+                        let count = count.min(list.len() as u64) as usize;
+                        let start = list.len() - count;
+                        let popped = list
+                            .drain(start..)
+                            .rev()
+                            .map(|value| Value::BulkString(Some(value)))
+                            .collect();
+                        Value::Array(Some(popped))
+                    }
                 };
-                match popped {
-                    Some(value) => (
+                if list.is_empty() {
+                    (MochaOperation::Remove, response)
+                } else {
+                    (
                         MochaOperation::Insert {
                             value: entry.value.clone(),
                             expire: entry.get_expire_policy(),
                         },
-                        Value::BulkString(Some(value)),
-                    ),
-                    None => (
-                        MochaOperation::Insert {
-                            value: entry.value.clone(),
-                            expire: entry.get_expire_policy(),
-                        },
-                        Value::BulkString(None),
-                    ),
+                        response,
+                    )
                 }
             }
-            _ => (
-                Abort,
-                ProtocolError::WrongType.into(),
-            ),
+            _ => (Abort, ProtocolError::WrongType.into()),
         }
     }
 
     fn init(self) -> (MochaOperation<MyValue>, Value) {
-        (Abort, Value::BulkString(None))
+        let response = match self.count {
+            None => Value::BulkString(None),
+            Some(_) => Value::Array(None),
+        };
+        (Abort, response)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::mocha::ExpirePolicy;
+    use parking_lot::Mutex;
+    use std::collections::VecDeque;
+    use std::sync::Arc;
+
+    fn entry() -> EntrySnapshot<MyValue> {
+        EntrySnapshot {
+            value: MyValue::new(ValueObject::List(Arc::new(Mutex::new(VecDeque::from([
+                Bytes::from_static(b"a"),
+                Bytes::from_static(b"b"),
+                Bytes::from_static(b"c"),
+            ]))))),
+            expire_at: Some(100),
+        }
+    }
+
+    fn request(count: Option<&str>) -> RPopReq {
+        let mut items = vec![
+            Value::BulkString(Some(Bytes::from_static(b"RPOP"))),
+            Value::BulkString(Some(Bytes::from_static(b"list"))),
+        ];
+        if let Some(count) = count {
+            items.push(Value::BulkString(Some(Bytes::copy_from_slice(
+                count.as_bytes(),
+            ))));
+        }
+        let Operation::Base(BaseOperation::RPop(request)) =
+            RPopCommand.raft_request(&items).unwrap()
+        else {
+            panic!("expected RPOP");
+        };
+        request
+    }
+
+    #[test]
+    fn count_pops_from_tail_and_removes_key_after_last_element() {
+        let snapshot = entry();
+        let (operation, response) = request(Some("2")).mutate(snapshot.clone(), 0);
+        assert_eq!(response.encode(), b"*2\r\n$1\r\nc\r\n$1\r\nb\r\n");
+        assert!(matches!(
+            operation,
+            MochaOperation::Insert {
+                expire: ExpirePolicy::Absolute(100),
+                ..
+            }
+        ));
+        let (operation, response) = request(None).mutate(snapshot, 0);
+        assert_eq!(response.encode(), b"$1\r\na\r\n");
+        assert!(matches!(operation, MochaOperation::Remove));
+        assert_eq!(
+            request(Some("1")).mutate(entry(), 0).1.encode(),
+            b"*1\r\n$1\r\nc\r\n"
+        );
+    }
+
+    #[test]
+    fn zero_count_is_noop_and_missing_count_form_is_null_array() {
+        let snapshot = entry();
+        let (operation, response) = request(Some("0")).mutate(snapshot.clone(), 0);
+        assert!(matches!(operation, MochaOperation::Abort));
+        assert_eq!(response.encode(), b"*0\r\n");
+        assert_eq!(request(None).mutate(snapshot, 0).1.encode(), b"$1\r\nc\r\n");
+        assert_eq!(request(None).init().1.encode(), b"$-1\r\n");
+        assert_eq!(request(Some("0")).init().1.encode(), b"*-1\r\n");
+        assert!(matches!(
+            request(Some("10")).mutate(entry(), 0).0,
+            MochaOperation::Remove
+        ));
+    }
+
+    #[test]
+    fn rejects_negative_and_overflowing_counts() {
+        for count in ["-1", "9223372036854775808", "invalid"] {
+            let items = ["RPOP", "list", count]
+                .map(|s| Value::BulkString(Some(Bytes::copy_from_slice(s.as_bytes()))));
+            assert_eq!(
+                RPopCommand.raft_request(&items).unwrap_err().to_string(),
+                "ERR value is out of range, must be positive"
+            );
+        }
     }
 }

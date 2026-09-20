@@ -77,7 +77,7 @@ impl ScriptParam {
     /// Parse SCRIPT sub commands from command array
     /// The first element of the input items must be 'SCRIPT'
     pub fn parse(items: &[Value]) -> Result<Self, ProtocolError> {
-        if items.is_empty() {
+        if items.len() < 2 {
             return Err(ProtocolError::WrongArgCount("script"));
         }
 
@@ -98,6 +98,9 @@ impl ScriptParam {
             }
             "EXISTS" => {
                 // SCRIPT EXISTS sha1 [sha1 ...]
+                if items.len() < 3 {
+                    return Err(ProtocolError::WrongArgCount("script|exists"));
+                }
                 let mut sha1s = Vec::new();
                 for item in &items[2..] {
                     sha1s.push(string_from_value(item, "sha1")?);
@@ -143,6 +146,26 @@ impl ScriptParam {
             }
             _ => Err(ProtocolError::InvalidArgument("unknown script subcommand")),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn rejects_missing_subcommand_and_script_hashes() {
+        assert!(matches!(
+            ScriptParam::parse(&[Value::SimpleString("SCRIPT".into())]),
+            Err(ProtocolError::WrongArgCount("script"))
+        ));
+        assert!(matches!(
+            ScriptParam::parse(&[
+                Value::SimpleString("SCRIPT".into()),
+                Value::SimpleString("EXISTS".into()),
+            ]),
+            Err(ProtocolError::WrongArgCount("script|exists"))
+        ));
     }
 }
 

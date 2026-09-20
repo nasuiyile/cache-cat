@@ -21,6 +21,7 @@ use crate::protocol::hash::hincrby::HIncrByCommand;
 use crate::protocol::hash::hkeys::HKeysCommand;
 use crate::protocol::hash::hlen::HLenCommand;
 use crate::protocol::hash::hmget::HMGetCommand;
+use crate::protocol::hash::hmset::HMSetCommand;
 use crate::protocol::hash::hset::HSetCommand;
 use crate::protocol::hash::hsetnx::HSetNxCommand;
 use crate::protocol::hash::hvals::HValsCommand;
@@ -170,6 +171,7 @@ impl RaftCommandFactory {
         factory.register("RENAMENX", RenameNxCommand);
         factory.register("SMEMBERS", SMembersCommand);
         factory.register("HMGET", HMGetCommand);
+        factory.register("HMSET", HMSetCommand);
         // factory.register("EVAL", EvalCommand); // Prohibiting nesting (not prohibited)
         factory.register("SREM", SRemCommand);
         factory.register("SETBIT", SetBitCommand);
@@ -258,5 +260,23 @@ impl RaftCommandFactory {
                 Err(ProtocolError::UnknownCommand(cmd_name))
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::raft::types::entry::base_operation::BaseOperation;
+
+    #[test]
+    fn lua_factory_dispatches_hmset_to_its_compute_operation() {
+        let args =
+            ["HMSET", "hash", "field", "value"].map(|value| Value::BulkString(Some(value.into())));
+        let operation = RaftCommandFactory::init_lua().parse_request(&args).unwrap();
+        let Operation::Base(BaseOperation::HMSet(request)) = operation else {
+            panic!("expected HMSET compute operation");
+        };
+        assert_eq!(request.key.as_ref(), b"hash");
+        assert_eq!(request.fields, vec![("field".into(), "value".into())]);
     }
 }

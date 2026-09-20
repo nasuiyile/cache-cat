@@ -1,4 +1,5 @@
 use crate::error::{CacheCatError, ProtocolError};
+use crate::mocha::EntrySnapshot;
 use crate::protocol::command::{Client, Command};
 use crate::protocol::raft_command::{RaftCommand, ReadRaftCommand};
 use crate::raft::network::redis_server::RedisServer;
@@ -11,7 +12,6 @@ use async_trait::async_trait;
 use bytes::Bytes;
 use serde::{Deserialize, Serialize};
 use std::fmt::Display;
-use crate::mocha::EntrySnapshot;
 
 pub struct LRangeCommand;
 
@@ -40,7 +40,7 @@ impl ReadCommand for LRangeParams {
 
     fn execute(&self, value: Option<EntrySnapshot<MyValue>>) -> Value {
         match value {
-            None => Value::BulkString(None),
+            None => Value::Array(Some(Vec::new())),
             Some(v) => match v.value.data {
                 ValueObject::List(list) => {
                     let vec = crate::utils::lrange(&list.lock(), self.start, self.stop);
@@ -53,6 +53,23 @@ impl ReadCommand for LRangeParams {
                 _ => ProtocolError::WrongType.into(),
             },
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn missing_list_is_an_empty_array_in_both_protocols() {
+        let response = LRangeParams {
+            key: Bytes::from_static(b"missing"),
+            start: 0,
+            stop: -1,
+        }
+        .execute(None);
+        assert_eq!(response.encode_proto(2), b"*0\r\n");
+        assert_eq!(response.encode_proto(3), b"*0\r\n");
     }
 }
 

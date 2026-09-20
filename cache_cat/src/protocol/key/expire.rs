@@ -162,18 +162,18 @@ impl ComputeCommand for ExpireReq {
             },
         };
         if !should_update {
-            return (MochaOperation::Abort, Value::Boolean(false));
+            return (MochaOperation::Abort, Value::Integer(0));
         }
         (
             MochaOperation::Insert {
                 value: entry.value.clone(),
                 expire: ExpirePolicy::Absolute(expires_at),
             },
-            Value::Boolean(true),
+            Value::Integer(1),
         )
     }
 
     fn init(self) -> (MochaOperation<MyValue>, Value) {
-        (MochaOperation::Abort, Value::Boolean(false))
+        (MochaOperation::Abort, Value::Integer(0))
     }
 }

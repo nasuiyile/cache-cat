@@ -43,16 +43,9 @@ impl Display for BitPosParams {
 
 impl BitPosParams {
     fn execute_bytes(&self, bytes: &[u8]) -> Value {
-        /*
-         * Redis 对空字符串有特殊处理：
-         *
-         * BITPOS missing-key 0 -> 0
-         * BITPOS missing-key 1 -> -1
-         *
-         * 即使显式给出 0 -1 BIT，查找 0 仍然返回 0。
-         */
+        // An existing empty string contains no matching bits, unlike a missing key.
         if bytes.is_empty() {
-            return Value::Integer(if self.bit == 0 { 0 } else { -1 });
+            return Value::Integer(-1);
         }
 
         let unit_len = match self.unit {
@@ -128,7 +121,7 @@ impl ReadCommand for BitPosParams {
 
     fn execute(&self, value: Option<EntrySnapshot<MyValue>>) -> Value {
         let bytes: Vec<u8> = match value {
-            None => Vec::new(),
+            None => return Value::Integer(if self.bit == 0 { 0 } else { -1 }),
             Some(value) => match value.value.data {
                 ValueObject::String(value) => value.to_vec(),
 
@@ -173,7 +166,11 @@ fn normalize_range(len: usize, start: Option<i64>, end: Option<i64>) -> Option<(
         start = 0;
     }
 
-    if end < 0 || start >= len || start > end {
+    if end < 0 {
+        end = 0;
+    }
+
+    if start >= len || start > end {
         return None;
     }
 
@@ -182,6 +179,48 @@ fn normalize_range(len: usize, start: Option<i64>, end: Option<i64>) -> Option<(
     }
 
     Some((start as usize, end as usize))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn distinguishes_missing_key_from_existing_empty_string() {
+        let mut params = BitPosParams {
+            key: Bytes::from_static(b"key"),
+            bit: 0,
+            start: None,
+            end: None,
+            unit: BitPosUnit::Byte,
+        };
+        assert!(matches!(params.execute(None), Value::Integer(0)));
+        let empty = EntrySnapshot {
+            value: MyValue::new(ValueObject::String(Bytes::new())),
+            expire_at: None,
+        };
+        assert!(matches!(
+            params.execute(Some(empty.clone())),
+            Value::Integer(-1)
+        ));
+        params.bit = 1;
+        assert!(matches!(params.execute(None), Value::Integer(-1)));
+        assert!(matches!(params.execute(Some(empty)), Value::Integer(-1)));
+    }
+
+    #[test]
+    fn negative_end_before_string_is_clipped_to_first_unit() {
+        for (unit, end) in [(BitPosUnit::Byte, -2), (BitPosUnit::Bit, -9)] {
+            let params = BitPosParams {
+                key: Bytes::from_static(b"key"),
+                bit: 1,
+                start: Some(0),
+                end: Some(end),
+                unit,
+            };
+            assert!(matches!(params.execute_bytes(b"\x80"), Value::Integer(0)));
+        }
+    }
 }
 
 /// 在闭区间 `[start_bit, end_bit]` 中搜索第一个目标位。

@@ -5,7 +5,6 @@ use crate::protocol::command::{Client, Command};
 use crate::raft::network::redis_server::RedisServer;
 use crate::raft::types::core::response_value::Value;
 use async_trait::async_trait;
-use tracing::error;
 
 /// SAVE command handler
 pub struct BgsaveCommand;
@@ -19,17 +18,16 @@ impl Command for BgsaveCommand {
         server: &RedisServer,
     ) -> Result<Value, CacheCatError> {
         if items.len() > 2 {
-            return Err(ProtocolError::WrongArgCount("bgsave").into());
+            return Err(ProtocolError::SyntaxError.into());
         }
-        let mut schedule = false;
         if items.len() == 2 {
             let arg = match &items[1] {
                 Value::BulkString(Some(data)) => String::from_utf8_lossy(data).to_uppercase(),
                 Value::SimpleString(s) => s.to_uppercase(),
                 _ => return Err(CacheCatError::from(ProtocolError::SyntaxError)),
             };
-            if arg == "SCHEDULE" {
-                schedule = true;
+            if arg != "SCHEDULE" {
+                return Err(ProtocolError::SyntaxError.into());
             }
         }
         let snapshot_state = server
@@ -40,26 +38,12 @@ impl Command for BgsaveCommand {
             .lock()
             .await
             .snapshot_state();
-        if snapshot_state && (!schedule) {
-            // If it is already in the snapshot
-            return Err(
-                ProtocolError::response("ERR Background save already in progress").into(),
-            );
+        if snapshot_state {
+            // SCHEDULE does not queue another save behind an active snapshot.
+            return Err(ProtocolError::response("ERR Background save already in progress").into());
         }
-        let mut receiver = server.app.state_machine.data.snapshot_message.subscribe();
         server.app.cluster.trigger_snapshot().await?;
-        // Execute again after the snapshot is completed
-        if schedule && snapshot_state {
-            let app = server.app.clone();
-            tokio::task::spawn(async move {
-                _ = receiver.recv().await;
-                let result = app.cluster.trigger_snapshot().await;
-                _ = result.map_err(|e| {
-                    error!("snapshot error: {}", e);
-                });
-            });
-        }
 
-        Ok(Value::ok())
+        Ok(Value::SimpleString("Background saving started".to_string()))
     }
 }
