@@ -27,9 +27,7 @@ impl DbsizeParams {
             return Err(ProtocolError::WrongArgCount("DBSIZE"));
         }
 
-        Ok(Self {
-            keys: Vec::new(),
-        })
+        Ok(Self { keys: Vec::new() })
     }
 }
 

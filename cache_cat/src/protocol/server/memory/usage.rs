@@ -126,8 +126,6 @@ impl ReadCommand for MemoryUsageParams {
     }
 }
 
-
-
 /// MEMORY command executor.
 ///
 /// 当前这里只实现 MEMORY USAGE。

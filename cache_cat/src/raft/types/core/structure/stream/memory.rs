@@ -40,25 +40,40 @@ pub struct MemoryUsage {
 impl MemoryUsage {
     pub(crate) fn finish(&mut self) {
         self.total_bytes = [
-            self.stream_inline_bytes, self.entry_index_bytes,
-            self.entry_buffer_bytes, self.group_table_bytes,
-            self.consumer_table_bytes, self.pel_index_bytes,
-            self.name_buffer_bytes, self.group_identity_bytes, self.clock_bytes,
-            self.shared_overhead_bytes, self.notification_bytes,
-        ].into_iter().fold(0usize, usize::saturating_add);
+            self.stream_inline_bytes,
+            self.entry_index_bytes,
+            self.entry_buffer_bytes,
+            self.group_table_bytes,
+            self.consumer_table_bytes,
+            self.pel_index_bytes,
+            self.name_buffer_bytes,
+            self.group_identity_bytes,
+            self.clock_bytes,
+            self.shared_overhead_bytes,
+            self.notification_bytes,
+        ]
+        .into_iter()
+        .fold(0usize, usize::saturating_add);
     }
 }
 
 fn align_up(n: usize, alignment: usize) -> usize {
     let rem = n % alignment;
-    if rem == 0 { n } else { n.saturating_add(alignment - rem) }
+    if rem == 0 {
+        n
+    } else {
+        n.saturating_add(alignment - rem)
+    }
 }
 
 /// Model ArcInner as strong/weak counters followed by aligned T. Not a stable ABI.
 pub(crate) fn arc_allocation_bytes(value_size: usize, value_align: usize) -> usize {
     let header = 2usize.saturating_mul(size_of::<usize>());
     let align = value_align.max(align_of::<usize>());
-    align_up(align_up(header, value_align).saturating_add(value_size), align)
+    align_up(
+        align_up(header, value_align).saturating_add(value_size),
+        align,
+    )
 }
 
 pub(crate) fn arc_bytes<T>() -> usize {
@@ -70,11 +85,21 @@ pub(crate) fn arc_bytes<T>() -> usize {
 /// size; tombstones and platform/Rust-version differences can alter this estimate.
 /// Inline HashMap headers and key/value heap buffers are counted elsewhere.
 pub(crate) fn hash_table_bytes<K, V>(capacity: usize) -> usize {
-    if capacity == 0 { return 0; }
-    let needed = if capacity < 4 { 4 } else if capacity < 8 { 8 } else {
+    if capacity == 0 {
+        return 0;
+    }
+    let needed = if capacity < 4 {
+        4
+    } else if capacity < 8 {
+        8
+    } else {
         capacity.saturating_mul(8).saturating_add(6) / 7
     };
-    let Some(buckets) = needed.checked_next_power_of_two() else { return usize::MAX; };
+    let Some(buckets) = needed.checked_next_power_of_two() else {
+        return usize::MAX;
+    };
     let slots = buckets.saturating_mul(size_of::<(K, V)>());
-    align_up(slots, 16).saturating_add(buckets).saturating_add(16)
+    align_up(slots, 16)
+        .saturating_add(buckets)
+        .saturating_add(16)
 }

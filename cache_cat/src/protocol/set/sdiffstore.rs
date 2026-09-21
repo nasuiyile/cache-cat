@@ -53,10 +53,12 @@ impl SDiffStoreCommand {
 impl RaftCommand for SDiffStoreCommand {
     fn raft_request(&self, items: &[Value]) -> Result<Operation, ProtocolError> {
         let params = Self::parse(items)?;
-        Ok(Operation::Redis(RedisOperation::RedisSDiffStore(SDiffStoreReq {
-            key: params.key,
-            keys: params.keys,
-        })))
+        Ok(Operation::Redis(RedisOperation::RedisSDiffStore(
+            SDiffStoreReq {
+                key: params.key,
+                keys: params.keys,
+            },
+        )))
     }
 }
 

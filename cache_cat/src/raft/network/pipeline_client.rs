@@ -1,3 +1,5 @@
+use crate::raft::types::entry::request::Request;
+use crate::raft::types::raft_types::TypeConfig;
 use bincode2;
 use bytes::Bytes;
 use futures::{SinkExt, StreamExt};
@@ -9,8 +11,6 @@ use tokio::io::AsyncWriteExt;
 use tokio::net::TcpStream;
 use tokio::sync::{RwLock, mpsc, oneshot};
 use tokio_util::codec::Framed;
-use crate::raft::types::entry::request::Request;
-use crate::raft::types::raft_types::TypeConfig;
 
 type RequestSender = mpsc::Sender<(
     Request,

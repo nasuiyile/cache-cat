@@ -470,10 +470,12 @@ fn normal_rename_moves_existing_container_without_cloning_its_contents() {
             panic!("destination must be a set");
         };
         assert!(Arc::ptr_eq(&source_set, &dest_set), "{command}");
-        assert!(cache.databases[DB as usize]
-            .mocha
-            .get_entry(b"source".as_slice())
-            .is_none());
+        assert!(
+            cache.databases[DB as usize]
+                .mocha
+                .get_entry(b"source".as_slice())
+                .is_none()
+        );
     }
 }
 
@@ -544,8 +546,10 @@ fn snapshot_replays_collection_removal_with_versioned_cas() {
         };
         base_request(&restored, atomic.request.clone(), &mut update);
     }
-    assert!(restored.databases[DB as usize]
-        .mocha
-        .get_entry(b"set".as_slice())
-        .is_none());
+    assert!(
+        restored.databases[DB as usize]
+            .mocha
+            .get_entry(b"set".as_slice())
+            .is_none()
+    );
 }

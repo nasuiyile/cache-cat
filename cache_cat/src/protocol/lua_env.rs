@@ -180,9 +180,7 @@ impl LuaEnv {
             let setresp_resp = script_resp.clone();
             let redis_setresp = scope.create_function(move |_lua_ctx, ver: i64| {
                 if ver != 2 && ver != 3 {
-                    return Err(LuaError::external(
-                        "RESP version must be 2 or 3",
-                    ));
+                    return Err(LuaError::external("RESP version must be 2 or 3"));
                 }
                 setresp_resp.store(ver as u8, Ordering::Relaxed);
                 Ok(())

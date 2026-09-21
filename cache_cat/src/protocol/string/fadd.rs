@@ -126,7 +126,6 @@ impl ComputeCommand for PfAddReq {
         _write_clock: u64,
     ) -> (MochaOperation<MyValue>, Value) {
         match &entry.value.data {
-
             ValueObject::String(raw) => {
                 if RedisHll::validate_header(raw.as_ref()).is_err() {
                     return (

@@ -11,20 +11,10 @@ impl GlobMatcher {
     }
 
     pub fn matches(&self, value: &[u8]) -> bool {
-        Self::match_inner(
-            &self.pattern,
-            value,
-            0,
-            0,
-        )
+        Self::match_inner(&self.pattern, value, 0, 0)
     }
 
-    fn match_inner(
-        pattern: &[u8],
-        value: &[u8],
-        pi: usize,
-        vi: usize,
-    ) -> bool {
+    fn match_inner(pattern: &[u8], value: &[u8], pi: usize, vi: usize) -> bool {
         if pi == pattern.len() {
             return vi == value.len();
         }
@@ -33,43 +23,26 @@ impl GlobMatcher {
             // *
             b'*' => {
                 // 匹配空
-                if Self::match_inner(
-                    pattern,
-                    value,
-                    pi + 1,
-                    vi,
-                ) {
+                if Self::match_inner(pattern, value, pi + 1, vi) {
                     return true;
                 }
 
                 // 吃掉一个字符
                 if vi < value.len() {
-                    return Self::match_inner(
-                        pattern,
-                        value,
-                        pi,
-                        vi + 1,
-                    );
+                    return Self::match_inner(pattern, value, pi, vi + 1);
                 }
 
                 false
             }
 
-
             // ?
             b'?' => {
                 if vi < value.len() {
-                    Self::match_inner(
-                        pattern,
-                        value,
-                        pi + 1,
-                        vi + 1,
-                    )
+                    Self::match_inner(pattern, value, pi + 1, vi + 1)
                 } else {
                     false
                 }
             }
-
 
             // []
             b'[' => {
@@ -77,25 +50,14 @@ impl GlobMatcher {
                     return false;
                 }
 
-                let (matched, end) =
-                    Self::match_bracket(
-                        pattern,
-                        pi,
-                        value[vi],
-                    );
+                let (matched, end) = Self::match_bracket(pattern, pi, value[vi]);
 
                 if !matched {
                     return false;
                 }
 
-                Self::match_inner(
-                    pattern,
-                    value,
-                    end + 1,
-                    vi + 1,
-                )
+                Self::match_inner(pattern, value, end + 1, vi + 1)
             }
-
 
             // escape
             b'\\' => {
@@ -103,31 +65,16 @@ impl GlobMatcher {
                     return false;
                 }
 
-                if vi < value.len()
-                    && pattern[pi + 1] == value[vi]
-                {
-                    Self::match_inner(
-                        pattern,
-                        value,
-                        pi + 2,
-                        vi + 1,
-                    )
+                if vi < value.len() && pattern[pi + 1] == value[vi] {
+                    Self::match_inner(pattern, value, pi + 2, vi + 1)
                 } else {
                     false
                 }
             }
 
-
             c => {
-                if vi < value.len()
-                    && c == value[vi]
-                {
-                    Self::match_inner(
-                        pattern,
-                        value,
-                        pi + 1,
-                        vi + 1,
-                    )
+                if vi < value.len() && c == value[vi] {
+                    Self::match_inner(pattern, value, pi + 1, vi + 1)
                 } else {
                     false
                 }
@@ -135,42 +82,25 @@ impl GlobMatcher {
         }
     }
 
-
-    fn match_bracket(
-        pattern: &[u8],
-        start: usize,
-        value: u8,
-    ) -> (bool, usize) {
+    fn match_bracket(pattern: &[u8], start: usize, value: u8) -> (bool, usize) {
         let mut i = start + 1;
 
         let mut negate = false;
 
-
-        if i < pattern.len()
-            && (pattern[i] == b'^'
-            || pattern[i] == b'!')
-        {
+        if i < pattern.len() && (pattern[i] == b'^' || pattern[i] == b'!') {
             negate = true;
             i += 1;
         }
 
-
         let mut matched = false;
 
-
-        while i < pattern.len()
-            && pattern[i] != b']'
-        {
+        while i < pattern.len() && pattern[i] != b']' {
             // range a-z
-            if i + 2 < pattern.len()
-                && pattern[i + 1] == b'-'
-            {
+            if i + 2 < pattern.len() && pattern[i + 1] == b'-' {
                 let begin = pattern[i];
                 let end = pattern[i + 2];
 
-                if begin <= value
-                    && value <= end
-                {
+                if begin <= value && value <= end {
                     matched = true;
                 }
 
@@ -184,11 +114,9 @@ impl GlobMatcher {
             }
         }
 
-
         if negate {
             matched = !matched;
         }
-
 
         (matched, i)
     }

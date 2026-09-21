@@ -137,7 +137,6 @@ pub fn estimate_bloom_usage(value: &Arc<Mutex<BloomObject>>) -> usize {
     estimate_arc_allocation::<Mutex<BloomObject>>().saturating_add(bloom.estimated_heap_usage())
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -210,7 +209,6 @@ mod tests {
         assert_eq!(estimate_hash_table_usage::<Bytes>(usize::MAX), usize::MAX);
         assert!(estimate_hash_table_usage::<Bytes>(14) > estimate_hash_table_usage::<Bytes>(7));
     }
-
 
     #[test]
     fn sampling_supports_full_scans_limits_and_saturation() {

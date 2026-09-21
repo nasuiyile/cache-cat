@@ -1,16 +1,16 @@
 //! Logical snapshot format. It restores stream-internal state without replaying
 //! commands or exposing mutable internals outside the stream module.
 
-use blart::TreeMap;
-use serde::{Deserialize, Deserializer, Serialize, Serializer};
-use serde::ser::SerializeStruct;
-use std::{collections::HashMap, fmt, sync::Arc};
 use crate::raft::types::core::structure::stream::clock::{Clock, SystemClock};
 use crate::raft::types::core::structure::stream::core::{
     Consumer, Group, Key, Pending, RedisStream,
 };
 use crate::raft::types::core::structure::stream::id::StreamId;
 use crate::raft::types::core::structure::stream::types::{Entry, Fields};
+use blart::TreeMap;
+use serde::ser::SerializeStruct;
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
+use std::{collections::HashMap, fmt, sync::Arc};
 
 pub const SNAPSHOT_VERSION: u32 = 1;
 
@@ -82,13 +82,18 @@ impl StreamSnapshot {
         clock: Arc<dyn Clock>,
     ) -> Result<RedisStream, SnapshotError> {
         if self.version != SNAPSHOT_VERSION {
-            return Err(SnapshotError(format!("unsupported version {}", self.version)));
+            return Err(SnapshotError(format!(
+                "unsupported version {}",
+                self.version
+            )));
         }
         if u64::try_from(self.entries.len()).map_or(true, |n| n > self.entries_added) {
             return Err(SnapshotError("entries_added is below live length".into()));
         }
         if self.max_deleted_entry_id > self.last_generated_id {
-            return Err(SnapshotError("deleted marker exceeds last-generated ID".into()));
+            return Err(SnapshotError(
+                "deleted marker exceeds last-generated ID".into(),
+            ));
         }
 
         let mut stream = RedisStream::with_clock(clock);
@@ -100,7 +105,8 @@ impl StreamSnapshot {
         for entry in self.entries {
             if entry.id <= previous || entry.id > stream.last_generated_id {
                 return Err(SnapshotError(
-                    "live IDs must be nonzero, strictly increasing, and at most last-generated ID".into(),
+                    "live IDs must be nonzero, strictly increasing, and at most last-generated ID"
+                        .into(),
                 ));
             }
             if entry.fields.is_empty() {
@@ -121,11 +127,14 @@ impl StreamSnapshot {
                 if group.consumers.contains_key(consumer.name.as_slice()) {
                     return Err(SnapshotError("duplicate consumer name".into()));
                 }
-                group.consumers.insert(consumer.name, Consumer {
-                    pel: TreeMap::new(),
-                    seen_ms: consumer.seen_ms,
-                    active_ms: consumer.active_ms,
-                });
+                group.consumers.insert(
+                    consumer.name,
+                    Consumer {
+                        pel: TreeMap::new(),
+                        seen_ms: consumer.seen_ms,
+                        active_ms: consumer.active_ms,
+                    },
+                );
             }
             let mut previous = StreamId::ZERO;
             for pending in saved.pending {
@@ -135,16 +144,21 @@ impl StreamSnapshot {
                     ));
                 }
                 if !group.consumers.contains_key(pending.consumer.as_slice()) {
-                    return Err(SnapshotError("PEL owner is not a registered consumer".into()));
+                    return Err(SnapshotError(
+                        "PEL owner is not a registered consumer".into(),
+                    ));
                 }
                 previous = pending.id;
                 // Missing payload is valid: XDEL/KEEPREF leaves PEL tombstones.
                 // Zero delivery counts and future timestamps are also legal.
-                group.assign(pending.id.to_key(), Pending {
-                    consumer: pending.consumer,
-                    delivery_ms: pending.delivery_ms,
-                    deliveries: pending.deliveries,
-                });
+                group.assign(
+                    pending.id.to_key(),
+                    Pending {
+                        consumer: pending.consumer,
+                        delivery_ms: pending.delivery_ms,
+                        deliveries: pending.deliveries,
+                    },
+                );
             }
             stream.groups.insert(saved.name, group);
         }
@@ -158,35 +172,52 @@ impl RedisStream {
     /// Copy logical state, not ART topology or consumer secondary PEL indexes.
     /// Encoding this snapshot later does not require a lock on the live stream.
     pub fn snapshot(&self) -> StreamSnapshot {
-        let mut groups: Vec<_> = self.groups.iter().map(|(name, g)| {
-            let mut consumers: Vec<_> = g.consumers.iter().map(|(name, c)| {
-                ConsumerSnapshot {
-                    name: name.clone(), seen_ms: c.seen_ms, active_ms: c.active_ms,
+        let mut groups: Vec<_> = self
+            .groups
+            .iter()
+            .map(|(name, g)| {
+                let mut consumers: Vec<_> = g
+                    .consumers
+                    .iter()
+                    .map(|(name, c)| ConsumerSnapshot {
+                        name: name.clone(),
+                        seen_ms: c.seen_ms,
+                        active_ms: c.active_ms,
+                    })
+                    .collect();
+                consumers.sort_unstable_by(|a, b| a.name.cmp(&b.name));
+                GroupSnapshot {
+                    name: name.clone(),
+                    last_delivered: g.last_delivered,
+                    entries_read: g.entries_read,
+                    consumers,
+                    pending: g
+                        .pel
+                        .iter()
+                        .map(|(key, p)| PendingSnapshot {
+                            id: StreamId::from_key(*key),
+                            consumer: p.consumer.clone(),
+                            delivery_ms: p.delivery_ms,
+                            deliveries: p.deliveries,
+                        })
+                        .collect(),
                 }
-            }).collect();
-            consumers.sort_unstable_by(|a, b| a.name.cmp(&b.name));
-            GroupSnapshot {
-                name: name.clone(),
-                last_delivered: g.last_delivered,
-                entries_read: g.entries_read,
-                consumers,
-                pending: g.pel.iter().map(|(key, p)| PendingSnapshot {
-                    id: StreamId::from_key(*key),
-                    consumer: p.consumer.clone(),
-                    delivery_ms: p.delivery_ms,
-                    deliveries: p.deliveries,
-                }).collect(),
-            }
-        }).collect();
+            })
+            .collect();
         groups.sort_unstable_by(|a, b| a.name.cmp(&b.name));
         StreamSnapshot {
             version: SNAPSHOT_VERSION,
             last_generated_id: self.last_generated_id,
             entries_added: self.entries_added,
             max_deleted_entry_id: self.max_deleted_entry_id,
-            entries: self.entries.iter().map(|(key, fields)| Entry {
-                id: StreamId::from_key(*key), fields: fields.clone(),
-            }).collect(),
+            entries: self
+                .entries
+                .iter()
+                .map(|(key, fields)| Entry {
+                    id: StreamId::from_key(*key),
+                    fields: fields.clone(),
+                })
+                .collect(),
             groups,
         }
     }
@@ -205,7 +236,8 @@ struct EntriesRef<'a>(&'a TreeMap<Key, Fields>);
 impl Serialize for EntriesRef<'_> {
     fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
         serializer.collect_seq(self.0.iter().map(|(key, fields)| EntryRef {
-            id: StreamId::from_key(*key), fields,
+            id: StreamId::from_key(*key),
+            fields,
         }))
     }
 }
@@ -223,7 +255,9 @@ impl Serialize for ConsumersRef<'_> {
         let mut ordered: Vec<_> = self.0.iter().collect();
         ordered.sort_unstable_by(|a, b| a.0.cmp(b.0));
         serializer.collect_seq(ordered.into_iter().map(|(name, c)| ConsumerRef {
-            name, seen_ms: c.seen_ms, active_ms: c.active_ms,
+            name,
+            seen_ms: c.seen_ms,
+            active_ms: c.active_ms,
         }))
     }
 }
@@ -240,8 +274,10 @@ struct PendingListRef<'a>(&'a TreeMap<Key, Pending>);
 impl Serialize for PendingListRef<'_> {
     fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
         serializer.collect_seq(self.0.iter().map(|(key, p)| PendingRef {
-            id: StreamId::from_key(*key), consumer: &p.consumer,
-            delivery_ms: p.delivery_ms, deliveries: p.deliveries,
+            id: StreamId::from_key(*key),
+            consumer: &p.consumer,
+            delivery_ms: p.delivery_ms,
+            deliveries: p.deliveries,
         }))
     }
 }

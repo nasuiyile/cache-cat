@@ -1,7 +1,7 @@
 pub mod core;
-pub mod usage;
-mod stats;
-mod purge;
-mod malloc_stats;
 mod doctor;
 mod help;
+mod malloc_stats;
+mod purge;
+mod stats;
+pub mod usage;

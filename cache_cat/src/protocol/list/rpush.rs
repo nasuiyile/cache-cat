@@ -141,10 +141,7 @@ impl ComputeCommand for RPushReq {
                     Value::Integer(len),
                 )
             }
-            _ => (
-                MochaOperation::Abort,
-                ProtocolError::WrongType.into(),
-            ),
+            _ => (MochaOperation::Abort, ProtocolError::WrongType.into()),
         }
     }
 

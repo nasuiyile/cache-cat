@@ -138,10 +138,7 @@ impl ComputeCommand for HMSetReq {
                     Value::SimpleString(String::from("OK")),
                 )
             }
-            _ => (
-                MochaOperation::Abort,
-                ProtocolError::WrongType.into(),
-            ),
+            _ => (MochaOperation::Abort, ProtocolError::WrongType.into()),
         }
     }
 

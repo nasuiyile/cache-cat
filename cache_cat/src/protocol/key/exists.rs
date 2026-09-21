@@ -4,6 +4,7 @@
 //! Returns the number of keys that exist from those specified as arguments.
 
 use crate::error::{CacheCatError, ProtocolError};
+use crate::mocha::EntrySnapshot;
 use crate::protocol::command::{Client, Command};
 use crate::protocol::raft_command::{RaftCommand, ReadRaftCommand};
 use crate::raft::network::redis_server::RedisServer;
@@ -15,7 +16,6 @@ use async_trait::async_trait;
 use bytes::Bytes;
 use serde::{Deserialize, Serialize};
 use std::fmt::Display;
-use crate::mocha::EntrySnapshot;
 
 /// EXISTS command parameters
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

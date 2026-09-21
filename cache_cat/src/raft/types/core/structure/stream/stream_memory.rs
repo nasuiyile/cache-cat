@@ -127,5 +127,3 @@ impl RedisStream {
         self.memory_usage().total_bytes
     }
 }
-
-

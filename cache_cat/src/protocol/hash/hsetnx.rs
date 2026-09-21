@@ -12,7 +12,6 @@
 //! Note: This command uses atomic batch write to ensure all fields and metadata
 //! are written together as a single atomic operation.
 
-use std::collections::HashMap;
 use crate::error::{CacheCatError, ProtocolError};
 use crate::mocha::{EntrySnapshot, ExpirePolicy, MochaOperation};
 use crate::protocol::command::{Client, Command};
@@ -30,6 +29,7 @@ use async_trait::async_trait;
 use bytes::Bytes;
 use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::fmt;
 use std::sync::Arc;
 
@@ -134,10 +134,7 @@ impl ComputeCommand for HSetNxReq {
                 if map.contains_key(&self.field) {
                     // Field exists, no operation performed
                     drop(map);
-                    (
-                        MochaOperation::Abort,
-                        Value::Integer(0),
-                    )
+                    (MochaOperation::Abort, Value::Integer(0))
                 } else {
                     // Field doesn't exist, set it
                     let value = parse_i64(&self.value)
@@ -155,10 +152,7 @@ impl ComputeCommand for HSetNxReq {
                     )
                 }
             }
-            _ => (
-                MochaOperation::Abort,
-                ProtocolError::WrongType.into(),
-            ),
+            _ => (MochaOperation::Abort, ProtocolError::WrongType.into()),
         }
     }
 

@@ -109,10 +109,7 @@ impl Command for SPopCommand {
 
         let operation = self.raft_request(items)?;
 
-        let value = server
-            .app
-            .write(operation, client.db_number)
-            .await?;
+        let value = server.app.write(operation, client.db_number).await?;
 
         Ok(value)
     }
@@ -165,11 +162,9 @@ impl DeterministicRng {
 
         let mut value = self.state;
 
-        value = (value ^ (value >> 30))
-            .wrapping_mul(0xBF58_476D_1CE4_E5B9);
+        value = (value ^ (value >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
 
-        value = (value ^ (value >> 27))
-            .wrapping_mul(0x94D0_49BB_1331_11EB);
+        value = (value ^ (value >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
 
         value ^ (value >> 31)
     }
@@ -262,10 +257,7 @@ impl ComputeCommand for SPopReq {
                  * 仍然应该返回 WRONGTYPE，而不是空数组。
                  */
                 if self.count == Some(0) {
-                    return (
-                        MochaOperation::Abort,
-                        Value::Set(Vec::new()),
-                    );
+                    return (MochaOperation::Abort, Value::Set(Vec::new()));
                 }
 
                 let mut set_guard = set.lock();
@@ -277,10 +269,7 @@ impl ComputeCommand for SPopReq {
                  * 这里仍然处理空集合，防止历史数据或其他命令产生空 Set。
                  */
                 if set_guard.is_empty() {
-                    return (
-                        MochaOperation::Remove,
-                        self.missing_key_response(),
-                    );
+                    return (MochaOperation::Remove, self.missing_key_response());
                 }
 
                 let set_len = set_guard.len();
@@ -314,15 +303,11 @@ impl ComputeCommand for SPopReq {
                  *
                  * 因此必须先按字节序排序，建立所有节点一致的成员序列。
                  */
-                let mut candidates: Vec<Bytes> =
-                    set_guard.iter().cloned().collect();
+                let mut candidates: Vec<Bytes> = set_guard.iter().cloned().collect();
 
-                candidates.sort_unstable_by(|left, right| {
-                    left.as_ref().cmp(right.as_ref())
-                });
+                candidates.sort_unstable_by(|left, right| left.as_ref().cmp(right.as_ref()));
 
-                let mut rng =
-                    DeterministicRng::new(self.random_seed(write_clock));
+                let mut rng = DeterministicRng::new(self.random_seed(write_clock));
 
                 let mut popped = Vec::with_capacity(pop_count);
 
@@ -372,10 +357,7 @@ impl ComputeCommand for SPopReq {
                 }
             }
 
-            _ => (
-                MochaOperation::Abort,
-                ProtocolError::WrongType.into(),
-            ),
+            _ => (MochaOperation::Abort, ProtocolError::WrongType.into()),
         }
     }
 

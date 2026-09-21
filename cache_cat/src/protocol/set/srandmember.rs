@@ -10,8 +10,8 @@ use crate::raft::types::core::value_object::ValueObject;
 use crate::raft::types::entry::read_operation::ReadOperation;
 use async_trait::async_trait;
 use bytes::Bytes;
-use rand::seq::IteratorRandom;
 use rand::Rng;
+use rand::seq::IteratorRandom;
 use serde::{Deserialize, Serialize};
 use std::fmt::Display;
 
@@ -74,9 +74,7 @@ impl ReadCommand for SRandMemberParams {
                             let mut rng = rand::thread_rng();
 
                             match guard.iter().choose(&mut rng) {
-                                Some(member) => {
-                                    Value::BulkString(Some(member.clone()))
-                                }
+                                Some(member) => Value::BulkString(Some(member.clone())),
                                 None => Value::BulkString(None),
                             }
                         }
@@ -103,9 +101,7 @@ impl ReadCommand for SRandMemberParams {
                                 .iter()
                                 .choose_multiple(&mut rng, take_count)
                                 .into_iter()
-                                .map(|member| {
-                                    Value::BulkString(Some(member.clone()))
-                                })
+                                .map(|member| Value::BulkString(Some(member.clone())))
                                 .collect();
 
                             Value::Array(Some(members))
@@ -144,9 +140,7 @@ impl ReadCommand for SRandMemberParams {
                             for _ in 0..requested {
                                 let index = rng.gen_range(0..members.len());
 
-                                result.push(Value::BulkString(Some(
-                                    members[index].clone(),
-                                )));
+                                result.push(Value::BulkString(Some(members[index].clone())));
                             }
 
                             Value::Array(Some(result))
@@ -208,13 +202,10 @@ impl SRandMemberCommand {
 }
 
 impl ReadRaftCommand for SRandMemberCommand {
-    fn read_operation(
-        &self,
-        items: &[Value],
-    ) -> Result<ReadOperation, ProtocolError> {
-        Ok(ReadOperation::SRandMember(
-            SRandMemberCommand::parse_args(items)?,
-        ))
+    fn read_operation(&self, items: &[Value]) -> Result<ReadOperation, ProtocolError> {
+        Ok(ReadOperation::SRandMember(SRandMemberCommand::parse_args(
+            items,
+        )?))
     }
 }
 

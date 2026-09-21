@@ -5,6 +5,6 @@ pub mod lpush;
 pub mod lrange;
 pub mod lrem;
 pub mod lset;
+pub mod ltrim;
 pub mod rpop;
 pub mod rpush;
-pub mod ltrim;

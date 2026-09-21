@@ -160,10 +160,7 @@ impl ComputeCommand for SRemReq {
                 )
             }
             // Key exists but is not a Set - return error (Redis behavior)
-            _ => (
-                MochaOperation::Abort,
-                ProtocolError::WrongType.into(),
-            ),
+            _ => (MochaOperation::Abort, ProtocolError::WrongType.into()),
         }
     }
 

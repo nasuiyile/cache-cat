@@ -3,13 +3,13 @@ use crate::raft::network::model::{AppendEntriesReq, InstallFullSnapshotReq, Vote
 use crate::raft::types::file_operator::FileOperator;
 use crate::raft::types::raft_types::{Node, NodeId, Snapshot, TypeConfig};
 use crate::utils::now_ms;
+use openraft::RPCTypes::{InstallSnapshot, Vote};
 use openraft::alias::VoteOf;
 use openraft::error::{RPCError, ReplicationClosed, StreamingError, Timeout, Unreachable};
 use openraft::network::{Backoff, RPCOption};
 use openraft::raft::{
     AppendEntriesRequest, AppendEntriesResponse, SnapshotResponse, VoteRequest, VoteResponse,
 };
-use openraft::RPCTypes::{InstallSnapshot, Vote};
 use openraft::{OptionalSend, RaftNetworkFactory, RaftNetworkV2};
 use parking_lot::RwLock;
 use std::sync::Arc;

@@ -46,7 +46,7 @@ impl GetSetCommand {
             .string_bytes_clone()
             .ok_or(ProtocolError::InvalidArgument("key"))?;
 
-        let value = items[2]  // Fixed: using items[2] instead of items[1]
+        let value = items[2] // Fixed: using items[2] instead of items[1]
             .string_bytes_clone()
             .ok_or(ProtocolError::InvalidArgument("value"))?;
 

@@ -106,50 +106,27 @@ struct MemoryDoctorStats {
 
 impl MemoryDoctorStats {
     fn collect() -> Result<Self, &'static str> {
-        let json =
-            MiMalloc::stats_json()
-                .map_err(|_| {
-                    "failed to get mimalloc stats"
-                })?;
+        let json = MiMalloc::stats_json().map_err(|_| "failed to get mimalloc stats")?;
 
-        let raw: MiMallocStats =
-            serde_json::from_slice(json.to_bytes())
-                .map_err(|_| {
-                    "failed to parse mimalloc stats"
-                })?;
+        let raw: MiMallocStats = serde_json::from_slice(json.to_bytes())
+            .map_err(|_| "failed to parse mimalloc stats")?;
 
         Ok(Self {
-            process_rss:
-            raw.process.rss_current,
+            process_rss: raw.process.rss_current,
 
-            process_peak_rss:
-            raw.process.rss_peak,
+            process_peak_rss: raw.process.rss_peak,
 
-            process_commit:
-            raw.process.commit_current,
+            process_commit: raw.process.commit_current,
 
-            process_peak_commit:
-            raw.process.commit_peak,
+            process_peak_commit: raw.process.commit_peak,
 
-            allocator_committed:
-            non_negative(
-                raw.committed.current
-            ),
+            allocator_committed: non_negative(raw.committed.current),
 
-            allocator_peak_committed:
-            non_negative(
-                raw.committed.peak
-            ),
+            allocator_peak_committed: non_negative(raw.committed.peak),
 
-            purge_calls:
-            non_negative(
-                raw.purge_calls
-            ),
+            purge_calls: non_negative(raw.purge_calls),
 
-            purged_bytes:
-            non_negative(
-                raw.purged
-            ),
+            purged_bytes: non_negative(raw.purged),
         })
     }
 
@@ -177,21 +154,17 @@ impl MemoryDoctorStats {
     }
 
     fn diagnose(self) -> MemoryDoctorReport {
-        let footprint =
-            self.current_memory_footprint();
+        let footprint = self.current_memory_footprint();
 
         /*
          * Redis MEMORY DOCTOR 对很小的实例
          * 不进行进一步判断。
          */
         if footprint < MIN_MEMORY_FOR_DIAGNOSIS {
-            return MemoryDoctorReport::TooLittleMemory {
-                footprint,
-            };
+            return MemoryDoctorReport::TooLittleMemory { footprint };
         }
 
-        let mut issues =
-            Vec::with_capacity(4);
+        let mut issues = Vec::with_capacity(4);
 
         /*
          * Redis 原始 MEMORY DOCTOR 有：
@@ -212,49 +185,28 @@ impl MemoryDoctorStats {
          * 所以报告中明确标出具体 metric。
          */
 
-        if high_peak(
-            self.process_peak_rss,
-            self.process_rss,
-        ) {
-            issues.push(
-                MemoryIssue::HighProcessRssPeak {
-                    current:
-                    self.process_rss,
+        if high_peak(self.process_peak_rss, self.process_rss) {
+            issues.push(MemoryIssue::HighProcessRssPeak {
+                current: self.process_rss,
 
-                    peak:
-                    self.process_peak_rss,
-                },
-            );
+                peak: self.process_peak_rss,
+            });
         }
 
-        if high_peak(
-            self.process_peak_commit,
-            self.process_commit,
-        ) {
-            issues.push(
-                MemoryIssue::HighProcessCommitPeak {
-                    current:
-                    self.process_commit,
+        if high_peak(self.process_peak_commit, self.process_commit) {
+            issues.push(MemoryIssue::HighProcessCommitPeak {
+                current: self.process_commit,
 
-                    peak:
-                    self.process_peak_commit,
-                },
-            );
+                peak: self.process_peak_commit,
+            });
         }
 
-        if high_peak(
-            self.allocator_peak_committed,
-            self.allocator_committed,
-        ) {
-            issues.push(
-                MemoryIssue::HighAllocatorCommitPeak {
-                    current:
-                    self.allocator_committed,
+        if high_peak(self.allocator_peak_committed, self.allocator_committed) {
+            issues.push(MemoryIssue::HighAllocatorCommitPeak {
+                current: self.allocator_committed,
 
-                    peak:
-                    self.allocator_peak_committed,
-                },
-            );
+                peak: self.allocator_peak_committed,
+            });
         }
 
         /*
@@ -272,9 +224,7 @@ impl MemoryDoctorStats {
          */
 
         if issues.is_empty() {
-            MemoryDoctorReport::Healthy {
-                stats: self,
-            }
+            MemoryDoctorReport::Healthy { stats: self }
         } else {
             MemoryDoctorReport::Issues {
                 stats: self,
@@ -286,20 +236,11 @@ impl MemoryDoctorStats {
 
 #[derive(Debug)]
 enum MemoryIssue {
-    HighProcessRssPeak {
-        current: u64,
-        peak: u64,
-    },
+    HighProcessRssPeak { current: u64, peak: u64 },
 
-    HighProcessCommitPeak {
-        current: u64,
-        peak: u64,
-    },
+    HighProcessCommitPeak { current: u64, peak: u64 },
 
-    HighAllocatorCommitPeak {
-        current: u64,
-        peak: u64,
-    },
+    HighAllocatorCommitPeak { current: u64, peak: u64 },
 }
 
 #[derive(Debug)]
@@ -329,107 +270,64 @@ impl MemoryDoctorReport {
              */
             format: "txt".to_string(),
 
-            data: Bytes::from(
-                self.render().into_bytes()
-            ),
+            data: Bytes::from(self.render().into_bytes()),
         }
     }
 
     fn render(self) -> String {
         match self {
-            MemoryDoctorReport::TooLittleMemory {
-                footprint,
-            } => {
+            MemoryDoctorReport::TooLittleMemory { footprint } => {
                 format!(
                     concat!(
-                    "This instance is using very little memory, ",
-                    "so MEMORY DOCTOR does not have enough data ",
-                    "to perform meaningful diagnostics.\n\n",
-                    "Observed memory footprint: {}.\n",
+                        "This instance is using very little memory, ",
+                        "so MEMORY DOCTOR does not have enough data ",
+                        "to perform meaningful diagnostics.\n\n",
+                        "Observed memory footprint: {}.\n",
                     ),
                     human_bytes(footprint),
                 )
             }
 
-            MemoryDoctorReport::Healthy {
-                stats,
-            } => {
-                let mut report =
-                    String::with_capacity(512);
+            MemoryDoctorReport::Healthy { stats } => {
+                let mut report = String::with_capacity(512);
 
-                report.push_str(
-                    "Hi Sam, I can't find any obvious memory "
-                );
+                report.push_str("Hi Sam, I can't find any obvious memory ");
 
-                report.push_str(
-                    "issue in this instance.\n\n"
-                );
+                report.push_str("issue in this instance.\n\n");
 
-                write_summary(
-                    &mut report,
-                    &stats,
-                );
+                write_summary(&mut report, &stats);
 
-                report.push_str(
-                    "\nThe available mimalloc and process statistics "
-                );
+                report.push_str("\nThe available mimalloc and process statistics ");
 
-                report.push_str(
-                    "do not indicate a significant historical "
-                );
+                report.push_str("do not indicate a significant historical ");
 
-                report.push_str(
-                    "memory peak.\n"
-                );
+                report.push_str("memory peak.\n");
 
                 report
             }
 
-            MemoryDoctorReport::Issues {
-                stats,
-                issues,
-            } => {
-                let mut report =
-                    String::with_capacity(2048);
+            MemoryDoctorReport::Issues { stats, issues } => {
+                let mut report = String::with_capacity(2048);
 
-                report.push_str(
-                    "MEMORY DOCTOR detected possible memory "
-                );
+                report.push_str("MEMORY DOCTOR detected possible memory ");
 
-                report.push_str(
-                    "issues in this instance:\n\n"
-                );
+                report.push_str("issues in this instance:\n\n");
 
                 for issue in issues {
-                    issue.write_report(
-                        &mut report
-                    );
+                    issue.write_report(&mut report);
                 }
 
-                report.push_str(
-                    "Memory summary:\n"
-                );
+                report.push_str("Memory summary:\n");
 
-                write_summary(
-                    &mut report,
-                    &stats,
-                );
+                write_summary(&mut report, &stats);
 
-                report.push_str(
-                    "\nIf the memory peak was temporary, "
-                );
+                report.push_str("\nIf the memory peak was temporary, ");
 
-                report.push_str(
-                    "MEMORY PURGE may help mimalloc return "
-                );
+                report.push_str("MEMORY PURGE may help mimalloc return ");
 
-                report.push_str(
-                    "unused committed pages to the operating "
-                );
+                report.push_str("unused committed pages to the operating ");
 
-                report.push_str(
-                    "system.\n"
-                );
+                report.push_str("system.\n");
 
                 report
             }
@@ -438,397 +336,195 @@ impl MemoryDoctorReport {
 }
 
 impl MemoryIssue {
-    fn write_report(
-        &self,
-        report: &mut String,
-    ) {
+    fn write_report(&self, report: &mut String) {
         match self {
-            MemoryIssue::HighProcessRssPeak {
-                current,
-                peak,
-            } => {
-                report.push_str(
-                    " * Peak process RSS: the process previously "
-                );
+            MemoryIssue::HighProcessRssPeak { current, peak } => {
+                report.push_str(" * Peak process RSS: the process previously ");
 
-                report.push_str(
-                    "used substantially more resident memory than "
-                );
+                report.push_str("used substantially more resident memory than ");
 
-                report.push_str(
-                    "it uses now.\n"
-                );
+                report.push_str("it uses now.\n");
 
-                report.push_str(
-                    "   Current RSS: "
-                );
+                report.push_str("   Current RSS: ");
 
-                report.push_str(
-                    &human_bytes(*current)
-                );
+                report.push_str(&human_bytes(*current));
 
                 report.push('\n');
 
-                report.push_str(
-                    "   Peak RSS: "
-                );
+                report.push_str("   Peak RSS: ");
 
-                report.push_str(
-                    &human_bytes(*peak)
-                );
+                report.push_str(&human_bytes(*peak));
 
                 report.push('\n');
 
-                report.push_str(
-                    "   Peak/current ratio: "
-                );
+                report.push_str("   Peak/current ratio: ");
 
-                report.push_str(
-                    &format!(
-                        "{:.2}",
-                        ratio(*peak, *current)
-                    )
-                );
+                report.push_str(&format!("{:.2}", ratio(*peak, *current)));
 
-                report.push_str(
-                    "\n\n"
-                );
+                report.push_str("\n\n");
             }
 
-            MemoryIssue::HighProcessCommitPeak {
-                current,
-                peak,
-            } => {
-                report.push_str(
-                    " * Peak process commit: the process previously "
-                );
+            MemoryIssue::HighProcessCommitPeak { current, peak } => {
+                report.push_str(" * Peak process commit: the process previously ");
 
-                report.push_str(
-                    "had substantially more committed memory than "
-                );
+                report.push_str("had substantially more committed memory than ");
 
-                report.push_str(
-                    "it has now.\n"
-                );
+                report.push_str("it has now.\n");
 
-                report.push_str(
-                    "   Current commit: "
-                );
+                report.push_str("   Current commit: ");
 
-                report.push_str(
-                    &human_bytes(*current)
-                );
+                report.push_str(&human_bytes(*current));
 
                 report.push('\n');
 
-                report.push_str(
-                    "   Peak commit: "
-                );
+                report.push_str("   Peak commit: ");
 
-                report.push_str(
-                    &human_bytes(*peak)
-                );
+                report.push_str(&human_bytes(*peak));
 
                 report.push('\n');
 
-                report.push_str(
-                    "   Peak/current ratio: "
-                );
+                report.push_str("   Peak/current ratio: ");
 
-                report.push_str(
-                    &format!(
-                        "{:.2}",
-                        ratio(*peak, *current)
-                    )
-                );
+                report.push_str(&format!("{:.2}", ratio(*peak, *current)));
 
-                report.push_str(
-                    "\n\n"
-                );
+                report.push_str("\n\n");
             }
 
-            MemoryIssue::HighAllocatorCommitPeak {
-                current,
-                peak,
-            } => {
-                report.push_str(
-                    " * Peak allocator commit: mimalloc previously "
-                );
+            MemoryIssue::HighAllocatorCommitPeak { current, peak } => {
+                report.push_str(" * Peak allocator commit: mimalloc previously ");
 
-                report.push_str(
-                    "had substantially more committed memory than "
-                );
+                report.push_str("had substantially more committed memory than ");
 
-                report.push_str(
-                    "it has now.\n"
-                );
+                report.push_str("it has now.\n");
 
-                report.push_str(
-                    "   Current committed: "
-                );
+                report.push_str("   Current committed: ");
 
-                report.push_str(
-                    &human_bytes(*current)
-                );
+                report.push_str(&human_bytes(*current));
 
                 report.push('\n');
 
-                report.push_str(
-                    "   Peak committed: "
-                );
+                report.push_str("   Peak committed: ");
 
-                report.push_str(
-                    &human_bytes(*peak)
-                );
+                report.push_str(&human_bytes(*peak));
 
                 report.push('\n');
 
-                report.push_str(
-                    "   Peak/current ratio: "
-                );
+                report.push_str("   Peak/current ratio: ");
 
-                report.push_str(
-                    &format!(
-                        "{:.2}",
-                        ratio(*peak, *current)
-                    )
-                );
+                report.push_str(&format!("{:.2}", ratio(*peak, *current)));
 
-                report.push_str(
-                    "\n\n"
-                );
+                report.push_str("\n\n");
             }
         }
     }
 }
 
-fn write_summary(
-    report: &mut String,
-    stats: &MemoryDoctorStats,
-) {
-    report.push_str(
-        "Process RSS: "
-    );
+fn write_summary(report: &mut String, stats: &MemoryDoctorStats) {
+    report.push_str("Process RSS: ");
 
-    report.push_str(
-        &human_bytes(
-            stats.process_rss
-        )
-    );
+    report.push_str(&human_bytes(stats.process_rss));
 
-    report.push_str(
-        "\nPeak process RSS: "
-    );
+    report.push_str("\nPeak process RSS: ");
 
-    report.push_str(
-        &human_bytes(
-            stats.process_peak_rss
-        )
-    );
+    report.push_str(&human_bytes(stats.process_peak_rss));
 
-    report.push_str(
-        "\nProcess commit: "
-    );
+    report.push_str("\nProcess commit: ");
 
-    report.push_str(
-        &human_bytes(
-            stats.process_commit
-        )
-    );
+    report.push_str(&human_bytes(stats.process_commit));
 
-    report.push_str(
-        "\nPeak process commit: "
-    );
+    report.push_str("\nPeak process commit: ");
 
-    report.push_str(
-        &human_bytes(
-            stats.process_peak_commit
-        )
-    );
+    report.push_str(&human_bytes(stats.process_peak_commit));
 
-    report.push_str(
-        "\nAllocator committed: "
-    );
+    report.push_str("\nAllocator committed: ");
 
-    report.push_str(
-        &human_bytes(
-            stats.allocator_committed
-        )
-    );
+    report.push_str(&human_bytes(stats.allocator_committed));
 
-    report.push_str(
-        "\nPeak allocator committed: "
-    );
+    report.push_str("\nPeak allocator committed: ");
 
-    report.push_str(
-        &human_bytes(
-            stats.allocator_peak_committed
-        )
-    );
+    report.push_str(&human_bytes(stats.allocator_peak_committed));
 
-    report.push_str(
-        "\nAllocator purge calls: "
-    );
+    report.push_str("\nAllocator purge calls: ");
 
-    report.push_str(
-        &stats.purge_calls.to_string()
-    );
+    report.push_str(&stats.purge_calls.to_string());
 
-    report.push_str(
-        "\nAllocator purged bytes: "
-    );
+    report.push_str("\nAllocator purged bytes: ");
 
-    report.push_str(
-        &human_bytes(
-            stats.purged_bytes
-        )
-    );
+    report.push_str(&human_bytes(stats.purged_bytes));
 
     report.push('\n');
 }
 
-fn high_peak(
-    peak: u64,
-    current: u64,
-) -> bool {
+fn high_peak(peak: u64, current: u64) -> bool {
     /*
      * 0 通常表示当前平台 / mimalloc build
      * 没有提供这个 metric。
      *
      * 此时直接跳过，不能产生 false positive。
      */
-    if current == 0
-        || peak == 0
-        || peak <= current
-    {
+    if current == 0 || peak == 0 || peak <= current {
         return false;
     }
 
-    ratio(
-        peak,
-        current,
-    ) > HIGH_PEAK_RATIO
+    ratio(peak, current) > HIGH_PEAK_RATIO
 }
 
-fn ratio(
-    numerator: u64,
-    denominator: u64,
-) -> f64 {
+fn ratio(numerator: u64, denominator: u64) -> f64 {
     if denominator == 0 {
         return 0.0;
     }
 
-    numerator as f64
-        / denominator as f64
+    numerator as f64 / denominator as f64
 }
 
-fn non_negative(
-    value: i64,
-) -> u64 {
-    u64::try_from(value)
-        .unwrap_or(0)
+fn non_negative(value: i64) -> u64 {
+    u64::try_from(value).unwrap_or(0)
 }
 
-fn human_bytes(
-    bytes: u64,
-) -> String {
-    const KIB: u64 =
-        1024;
+fn human_bytes(bytes: u64) -> String {
+    const KIB: u64 = 1024;
 
-    const MIB: u64 =
-        1024 * KIB;
+    const MIB: u64 = 1024 * KIB;
 
-    const GIB: u64 =
-        1024 * MIB;
+    const GIB: u64 = 1024 * MIB;
 
-    const TIB: u64 =
-        1024 * GIB;
+    const TIB: u64 = 1024 * GIB;
 
     if bytes >= TIB {
-        format!(
-            "{:.1} TiB",
-            bytes as f64
-                / TIB as f64
-        )
+        format!("{:.1} TiB", bytes as f64 / TIB as f64)
     } else if bytes >= GIB {
-        format!(
-            "{:.1} GiB",
-            bytes as f64
-                / GIB as f64
-        )
+        format!("{:.1} GiB", bytes as f64 / GIB as f64)
     } else if bytes >= MIB {
-        format!(
-            "{:.1} MiB",
-            bytes as f64
-                / MIB as f64
-        )
+        format!("{:.1} MiB", bytes as f64 / MIB as f64)
     } else if bytes >= KIB {
-        format!(
-            "{:.1} KiB",
-            bytes as f64
-                / KIB as f64
-        )
+        format!("{:.1} KiB", bytes as f64 / KIB as f64)
     } else {
-        format!(
-            "{bytes} B"
-        )
+        format!("{bytes} B")
     }
 }
 
 pub struct MemoryDoctorCommand;
 
 impl MemoryDoctorCommand {
-    fn parse(
-        items: &[Value],
-    ) -> Result<(), ProtocolError> {
+    fn parse(items: &[Value]) -> Result<(), ProtocolError> {
         if items.len() != 2 {
-            return Err(
-                ProtocolError::WrongArgCount(
-                    "MEMORY DOCTOR"
-                )
-            );
+            return Err(ProtocolError::WrongArgCount("MEMORY DOCTOR"));
         }
 
         let memory = items[0]
             .string_bytes_clone()
-            .ok_or(
-                ProtocolError::InvalidArgument(
-                    "command"
-                )
-            )?;
+            .ok_or(ProtocolError::InvalidArgument("command"))?;
 
-        if !memory
-            .as_ref()
-            .eq_ignore_ascii_case(
-                b"MEMORY"
-            )
-        {
-            return Err(
-                ProtocolError::InvalidArgument(
-                    "command"
-                )
-            );
+        if !memory.as_ref().eq_ignore_ascii_case(b"MEMORY") {
+            return Err(ProtocolError::InvalidArgument("command"));
         }
 
         let doctor = items[1]
             .string_bytes_clone()
-            .ok_or(
-                ProtocolError::InvalidArgument(
-                    "subcommand"
-                )
-            )?;
+            .ok_or(ProtocolError::InvalidArgument("subcommand"))?;
 
-        if !doctor
-            .as_ref()
-            .eq_ignore_ascii_case(
-                b"DOCTOR"
-            )
-        {
-            return Err(
-                ProtocolError::InvalidArgument(
-                    "subcommand"
-                )
-            );
+        if !doctor.as_ref().eq_ignore_ascii_case(b"DOCTOR") {
+            return Err(ProtocolError::InvalidArgument("subcommand"));
         }
 
         Ok(())
@@ -845,18 +541,9 @@ impl SubCommand for MemoryDoctorCommand {
     ) -> Result<Value, CacheCatError> {
         Self::parse(items)?;
 
-        let stats =
-            MemoryDoctorStats::collect()
-                .map_err(|_| {
-                    ProtocolError::InvalidArgument(
-                        "mimalloc stats"
-                    )
-                })?;
+        let stats = MemoryDoctorStats::collect()
+            .map_err(|_| ProtocolError::InvalidArgument("mimalloc stats"))?;
 
-        Ok(
-            stats
-                .diagnose()
-                .into_value()
-        )
+        Ok(stats.diagnose().into_value())
     }
 }

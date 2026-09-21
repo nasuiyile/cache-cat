@@ -39,23 +39,15 @@ impl MemoryHelpCommand {
 
     fn help() -> Value {
         Value::Array(Some(vec![
-            Self::help_line(
-                "MEMORY <subcommand> [<arg> [value] [opt] ...]. Subcommands are:",
-            ),
+            Self::help_line("MEMORY <subcommand> [<arg> [value] [opt] ...]. Subcommands are:"),
             Self::help_line("DOCTOR"),
             Self::help_line("    Return memory problems reports."),
             Self::help_line("MALLOC-STATS"),
-            Self::help_line(
-                "    Return internal statistics report from the memory allocator.",
-            ),
+            Self::help_line("    Return internal statistics report from the memory allocator."),
             Self::help_line("PURGE"),
-            Self::help_line(
-                "    Attempt to purge dirty pages for reclamation by the allocator.",
-            ),
+            Self::help_line("    Attempt to purge dirty pages for reclamation by the allocator."),
             Self::help_line("STATS"),
-            Self::help_line(
-                "    Return information about the memory usage of the server.",
-            ),
+            Self::help_line("    Return information about the memory usage of the server."),
             Self::help_line("USAGE <key> [SAMPLES <count>]"),
             Self::help_line(
                 "    Return memory in bytes used by <key> and its value. Nested values are",

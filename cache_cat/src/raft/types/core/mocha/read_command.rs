@@ -1,7 +1,7 @@
+use crate::mocha::EntrySnapshot;
 use crate::raft::types::core::mocha::core::{MyCache, MyValue};
 use crate::raft::types::core::response_value::Value;
 use bytes::Bytes;
-use crate::mocha::EntrySnapshot;
 
 pub trait ReadCommand: Send + 'static {
     fn key(&self) -> &Bytes;

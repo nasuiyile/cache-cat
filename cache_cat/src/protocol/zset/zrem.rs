@@ -15,7 +15,6 @@ use bytes::Bytes;
 use serde::{Deserialize, Serialize};
 use std::fmt;
 
-
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ZRemParam {
     pub key: Bytes,
@@ -131,10 +130,7 @@ impl ComputeCommand for ZRemReq {
                     )
                 }
             }
-            _ => (
-                MochaOperation::Abort,
-                ProtocolError::WrongType.into(),
-            ),
+            _ => (MochaOperation::Abort, ProtocolError::WrongType.into()),
         }
     }
 

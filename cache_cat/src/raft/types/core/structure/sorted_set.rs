@@ -1,11 +1,11 @@
+use crate::protocol::zset::zadd::ZAddReq;
 use crate::raft::types::core::size_estimate::{
     estimate_hash_table_usage, estimated_bytes_heap_usage, sampled_total,
 };
-use std::collections::{BTreeSet, HashMap};
 use bytes::Bytes;
 use ordered_float::OrderedFloat;
 use serde::{Deserialize, Serialize};
-use crate::protocol::zset::zadd::ZAddReq;
+use std::collections::{BTreeSet, HashMap};
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct SortedSet {
@@ -57,11 +57,9 @@ impl SortedSet {
 
                 // score 真正发生改变才需要修改 tree/hash
                 if old_score != score {
-                    self.tree
-                        .remove(&(OrderedFloat(old_score), member.clone()));
+                    self.tree.remove(&(OrderedFloat(old_score), member.clone()));
 
-                    self.tree
-                        .insert((OrderedFloat(score), member.clone()));
+                    self.tree.insert((OrderedFloat(score), member.clone()));
 
                     self.hash.insert(member, score);
 
@@ -69,8 +67,7 @@ impl SortedSet {
                 }
             } else {
                 // 新 member
-                self.tree
-                    .insert((OrderedFloat(score), member.clone()));
+                self.tree.insert((OrderedFloat(score), member.clone()));
 
                 self.hash.insert(member, score);
 
@@ -79,11 +76,7 @@ impl SortedSet {
             }
         }
 
-        if req.ch {
-            changed
-        } else {
-            added
-        }
+        if req.ch { changed } else { added }
     }
 
     /// 按 rank 返回成员。
@@ -101,17 +94,9 @@ impl SortedSet {
             return Vec::new();
         }
 
-        let mut start_idx = if start < 0 {
-            len + start
-        } else {
-            start
-        };
+        let mut start_idx = if start < 0 { len + start } else { start };
 
-        let mut stop_idx = if stop < 0 {
-            len + stop
-        } else {
-            stop
-        };
+        let mut stop_idx = if stop < 0 { len + stop } else { stop };
 
         // Redis 语义：
         // start 过小则修正到 0
@@ -157,13 +142,7 @@ impl SortedSet {
     /// max_exclusive:
     /// - false => score <= max
     /// - true  => score < max
-    pub fn zcount(
-        &self,
-        min: f64,
-        max: f64,
-        min_exclusive: bool,
-        max_exclusive: bool,
-    ) -> i64 {
+    pub fn zcount(&self, min: f64, max: f64, min_exclusive: bool, max_exclusive: bool) -> i64 {
         if self.tree.is_empty() {
             return 0;
         }
@@ -209,12 +188,8 @@ impl SortedSet {
         if min > max {
             return Vec::new();
         }
-        let skip_count = limit
-            .map(|(offset, _)| offset)
-            .unwrap_or(0);
-        let take_count = limit
-            .map(|(_, count)| count)
-            .unwrap_or(usize::MAX);
+        let skip_count = limit.map(|(offset, _)| offset).unwrap_or(0);
+        let take_count = limit.map(|(_, count)| count).unwrap_or(usize::MAX);
         if take_count == 0 {
             return Vec::new();
         }
@@ -261,8 +236,7 @@ impl SortedSet {
         let mut removed = 0i64;
         for member in members {
             if let Some(score) = self.hash.remove(member) {
-                self.tree
-                    .remove(&(OrderedFloat(score), member.clone()));
+                self.tree.remove(&(OrderedFloat(score), member.clone()));
                 removed += 1;
             }
         }
@@ -272,11 +246,7 @@ impl SortedSet {
     /// ZINCRBY
     ///
     /// member 不存在时，相当于从 0 开始增加。
-    pub fn zincrby(
-        &mut self,
-        member: Bytes,
-        increment: f64,
-    ) -> Option<f64> {
+    pub fn zincrby(&mut self, member: Bytes, increment: f64) -> Option<f64> {
         let old_score = self.hash.get(&member).copied();
         let new_score = old_score.unwrap_or(0.0) + increment;
         // Redis 不允许 NaN score。
@@ -288,11 +258,9 @@ impl SortedSet {
             if old_score == new_score {
                 return Some(new_score);
             }
-            self.tree
-                .remove(&(OrderedFloat(old_score), member.clone()));
+            self.tree.remove(&(OrderedFloat(old_score), member.clone()));
         }
-        self.tree
-            .insert((OrderedFloat(new_score), member.clone()));
+        self.tree.insert((OrderedFloat(new_score), member.clone()));
         self.hash.insert(member, new_score);
         Some(new_score)
     }
@@ -345,18 +313,13 @@ impl SortedSet {
     }
 
     /// ZPOPMIN
-    pub fn zpop_min(
-        &mut self,
-        count: Option<usize>,
-    ) -> Vec<(Bytes, f64)> {
+    pub fn zpop_min(&mut self, count: Option<usize>) -> Vec<(Bytes, f64)> {
         let count = match count {
             None => 1,
             Some(0) => return Vec::new(),
             Some(count) => count,
         };
-        let mut values = Vec::with_capacity(
-            count.min(self.tree.len())
-        );
+        let mut values = Vec::with_capacity(count.min(self.tree.len()));
         for _ in 0..count {
             let (score, member) = match self.tree.pop_first() {
                 Some(value) => value,

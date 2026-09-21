@@ -73,7 +73,9 @@ impl ValueObject {
             ValueObject::ZSet(value) => estimate_zset_usage(value, samples),
             ValueObject::Set(value) => estimate_set_usage(value, samples),
             ValueObject::Bloom(value) => estimate_bloom_usage(value),
-            ValueObject::Stream(value) => value.write().memory_usage_with_samples(samples).total_bytes,
+            ValueObject::Stream(value) => {
+                value.write().memory_usage_with_samples(samples).total_bytes
+            }
         }
     }
 }

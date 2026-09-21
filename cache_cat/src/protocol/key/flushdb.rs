@@ -5,7 +5,6 @@
 ///
 /// Returns:
 /// - Simple string OK
-
 use crate::error::{CacheCatError, ProtocolError};
 use crate::protocol::command::{Client, Command};
 use crate::protocol::raft_command::RaftCommand;
@@ -55,11 +54,7 @@ impl FlushDBParams {
 
 impl Display for FlushDBParams {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        write!(
-            f,
-            "FlushDBReq {{ async_mode: {} }}",
-            self.async_mode
-        )
+        write!(f, "FlushDBReq {{ async_mode: {} }}", self.async_mode)
     }
 }
 
@@ -101,10 +96,6 @@ pub struct FlushDBReq {
 
 impl Display for FlushDBReq {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(
-            f,
-            "FlushDBReq {{ async_mode: {} }}",
-            self.async_mode
-        )
+        write!(f, "FlushDBReq {{ async_mode: {} }}", self.async_mode)
     }
 }

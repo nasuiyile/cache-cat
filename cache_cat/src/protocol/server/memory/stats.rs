@@ -79,13 +79,10 @@ struct MemoryStats {
 
 impl MemoryStats {
     fn collect() -> Result<Self, &'static str> {
-        let json =
-            MiMalloc::stats_json()
-                .map_err(|_| "failed to get mimalloc stats")?;
+        let json = MiMalloc::stats_json().map_err(|_| "failed to get mimalloc stats")?;
 
-        let raw: MiMallocStats =
-            serde_json::from_slice(json.to_bytes())
-                .map_err(|_| "failed to parse mimalloc stats")?;
+        let raw: MiMallocStats = serde_json::from_slice(json.to_bytes())
+            .map_err(|_| "failed to parse mimalloc stats")?;
 
         Ok(Self {
             /*
@@ -128,77 +125,33 @@ impl MemoryStats {
         /*
          * Process memory
          */
-        push_integer(
-            &mut values,
-            "process.rss",
-            self.process_rss,
-        );
+        push_integer(&mut values, "process.rss", self.process_rss);
 
-        push_integer(
-            &mut values,
-            "process.peak-rss",
-            self.process_peak_rss,
-        );
+        push_integer(&mut values, "process.peak-rss", self.process_peak_rss);
 
-        push_integer(
-            &mut values,
-            "process.commit",
-            self.process_commit,
-        );
+        push_integer(&mut values, "process.commit", self.process_commit);
 
-        push_integer(
-            &mut values,
-            "process.peak-commit",
-            self.process_peak_commit,
-        );
+        push_integer(&mut values, "process.peak-commit", self.process_peak_commit);
 
-        push_integer(
-            &mut values,
-            "process.page-faults",
-            self.page_faults,
-        );
+        push_integer(&mut values, "process.page-faults", self.page_faults);
 
         /*
          * mimalloc memory
          */
-        push_integer(
-            &mut values,
-            "mimalloc.reserved",
-            self.reserved,
-        );
+        push_integer(&mut values, "mimalloc.reserved", self.reserved);
 
-        push_integer(
-            &mut values,
-            "mimalloc.committed",
-            self.committed,
-        );
+        push_integer(&mut values, "mimalloc.committed", self.committed);
 
         /*
          * mimalloc allocator operations
          */
-        push_integer(
-            &mut values,
-            "mimalloc.mmap-calls",
-            self.mmap_calls,
-        );
+        push_integer(&mut values, "mimalloc.mmap-calls", self.mmap_calls);
 
-        push_integer(
-            &mut values,
-            "mimalloc.commit-calls",
-            self.commit_calls,
-        );
+        push_integer(&mut values, "mimalloc.commit-calls", self.commit_calls);
 
-        push_integer(
-            &mut values,
-            "mimalloc.purge-calls",
-            self.purge_calls,
-        );
+        push_integer(&mut values, "mimalloc.purge-calls", self.purge_calls);
 
-        push_integer(
-            &mut values,
-            "mimalloc.purged-bytes",
-            self.purged_bytes,
-        );
+        push_integer(&mut values, "mimalloc.purged-bytes", self.purged_bytes);
 
         Value::Array(Some(values))
     }
@@ -208,25 +161,14 @@ fn non_negative(value: i64) -> u64 {
     u64::try_from(value).unwrap_or(0)
 }
 
-fn push_key(
-    values: &mut Vec<Value>,
-    key: &'static str,
-) {
-    values.push(Value::BulkString(Some(
-        Bytes::from_static(key.as_bytes()),
-    )));
+fn push_key(values: &mut Vec<Value>, key: &'static str) {
+    values.push(Value::BulkString(Some(Bytes::from_static(key.as_bytes()))));
 }
 
-fn push_integer(
-    values: &mut Vec<Value>,
-    key: &'static str,
-    value: u64,
-) {
+fn push_integer(values: &mut Vec<Value>, key: &'static str, value: u64) {
     push_key(values, key);
 
-    values.push(Value::Integer(
-        i64::try_from(value).unwrap_or(i64::MAX),
-    ));
+    values.push(Value::Integer(i64::try_from(value).unwrap_or(i64::MAX)));
 }
 
 pub struct MemoryStatsCommand;
@@ -234,39 +176,23 @@ pub struct MemoryStatsCommand;
 impl MemoryStatsCommand {
     fn parse(items: &[Value]) -> Result<(), ProtocolError> {
         if items.len() != 2 {
-            return Err(
-                ProtocolError::WrongArgCount("MEMORY STATS")
-            );
+            return Err(ProtocolError::WrongArgCount("MEMORY STATS"));
         }
 
         let memory = items[0]
             .string_bytes_clone()
-            .ok_or(
-                ProtocolError::InvalidArgument("command")
-            )?;
+            .ok_or(ProtocolError::InvalidArgument("command"))?;
 
-        if !memory
-            .as_ref()
-            .eq_ignore_ascii_case(b"MEMORY")
-        {
-            return Err(
-                ProtocolError::InvalidArgument("command")
-            );
+        if !memory.as_ref().eq_ignore_ascii_case(b"MEMORY") {
+            return Err(ProtocolError::InvalidArgument("command"));
         }
 
         let stats = items[1]
             .string_bytes_clone()
-            .ok_or(
-                ProtocolError::InvalidArgument("subcommand")
-            )?;
+            .ok_or(ProtocolError::InvalidArgument("subcommand"))?;
 
-        if !stats
-            .as_ref()
-            .eq_ignore_ascii_case(b"STATS")
-        {
-            return Err(
-                ProtocolError::InvalidArgument("subcommand")
-            );
+        if !stats.as_ref().eq_ignore_ascii_case(b"STATS") {
+            return Err(ProtocolError::InvalidArgument("subcommand"));
         }
 
         Ok(())
@@ -284,11 +210,7 @@ impl SubCommand for MemoryStatsCommand {
         Self::parse(items)?;
 
         let stats =
-            MemoryStats::collect().map_err(|_| {
-                ProtocolError::InvalidArgument(
-                    "mimalloc stats"
-                )
-            })?;
+            MemoryStats::collect().map_err(|_| ProtocolError::InvalidArgument("mimalloc stats"))?;
 
         Ok(stats.into_value())
     }

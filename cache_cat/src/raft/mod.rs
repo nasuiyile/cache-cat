@@ -1,5 +1,4 @@
-pub mod types;
+pub mod application;
 pub mod network;
 pub mod store;
-pub mod application;
-
+pub mod types;

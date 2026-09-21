@@ -8,7 +8,7 @@ use bytes::Bytes;
 
 use libmimalloc_sys::mi_stats_print_out;
 
-use std::ffi::{c_char, c_void, CStr};
+use std::ffi::{CStr, c_char, c_void};
 use std::sync::Mutex;
 
 #[derive(Debug)]
@@ -25,23 +25,16 @@ impl MallocStats {
          * 这里不解析、不重命名 allocator 字段，
          * 直接返回 mimalloc 原生统计报告。
          */
-        let output = Mutex::new(
-            Vec::<u8>::with_capacity(16 * 1024)
-        );
+        let output = Mutex::new(Vec::<u8>::with_capacity(16 * 1024));
 
-        unsafe extern "C" fn output_callback(
-            msg: *const c_char,
-            arg: *mut c_void,
-        ) {
+        unsafe extern "C" fn output_callback(msg: *const c_char, arg: *mut c_void) {
             if msg.is_null() || arg.is_null() {
                 return;
             }
 
-            let output =
-                unsafe { &*(arg as *const Mutex<Vec<u8>>) };
+            let output = unsafe { &*(arg as *const Mutex<Vec<u8>>) };
 
-            let msg =
-                unsafe { CStr::from_ptr(msg) };
+            let msg = unsafe { CStr::from_ptr(msg) };
 
             /*
              * mi_output_fun 要求 callback thread-safe。
@@ -111,41 +104,23 @@ pub struct MemoryMallocStatsCommand;
 impl MemoryMallocStatsCommand {
     fn parse(items: &[Value]) -> Result<(), ProtocolError> {
         if items.len() != 2 {
-            return Err(
-                ProtocolError::WrongArgCount(
-                    "MEMORY MALLOC-STATS"
-                )
-            );
+            return Err(ProtocolError::WrongArgCount("MEMORY MALLOC-STATS"));
         }
 
         let memory = items[0]
             .string_bytes_clone()
-            .ok_or(
-                ProtocolError::InvalidArgument("command")
-            )?;
+            .ok_or(ProtocolError::InvalidArgument("command"))?;
 
-        if !memory
-            .as_ref()
-            .eq_ignore_ascii_case(b"MEMORY")
-        {
-            return Err(
-                ProtocolError::InvalidArgument("command")
-            );
+        if !memory.as_ref().eq_ignore_ascii_case(b"MEMORY") {
+            return Err(ProtocolError::InvalidArgument("command"));
         }
 
         let malloc_stats = items[1]
             .string_bytes_clone()
-            .ok_or(
-                ProtocolError::InvalidArgument("subcommand")
-            )?;
+            .ok_or(ProtocolError::InvalidArgument("subcommand"))?;
 
-        if !malloc_stats
-            .as_ref()
-            .eq_ignore_ascii_case(b"MALLOC-STATS")
-        {
-            return Err(
-                ProtocolError::InvalidArgument("subcommand")
-            );
+        if !malloc_stats.as_ref().eq_ignore_ascii_case(b"MALLOC-STATS") {
+            return Err(ProtocolError::InvalidArgument("subcommand"));
         }
 
         Ok(())

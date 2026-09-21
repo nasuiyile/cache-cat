@@ -104,8 +104,10 @@ impl RaftLogReader<TypeConfig> for LogStore {
         const ATTEMPTS: usize = 3;
         for attempt in 1..=ATTEMPTS {
             let group = self.group_id as u64;
-            let (Some(first), Some(last)) = (self.engine.first_index(group), self.engine.last_index(group))
-            else {
+            let (Some(first), Some(last)) = (
+                self.engine.first_index(group),
+                self.engine.last_index(group),
+            ) else {
                 return Ok(Vec::new());
             };
             let clamped_start = start.max(first);
@@ -113,13 +115,15 @@ impl RaftLogReader<TypeConfig> for LogStore {
             if clamped_start >= clamped_end {
                 return Ok(Vec::new());
             }
-            match self.engine.fetch_entries_to_with::<MessageExtTyped, Bincode2Codec>(
-                group,
-                clamped_start,
-                clamped_end,
-                None,
-                &mut res,
-            ) {
+            match self
+                .engine
+                .fetch_entries_to_with::<MessageExtTyped, Bincode2Codec>(
+                    group,
+                    clamped_start,
+                    clamped_end,
+                    None,
+                    &mut res,
+                ) {
                 Ok(_) => return Ok(res.into_iter().map(|e| e.0).collect()),
                 Err(raft_engine::Error::EntryCompacted) if attempt < ATTEMPTS => {
                     res.clear();
@@ -237,8 +241,10 @@ impl RaftLogStorage<TypeConfig> for LogStore {
     ) -> Result<(), io::Error> {
         tracing::debug!("truncate_after: ({:?}, +oo)", last_log_id);
         let group = self.group_id as u64;
-        let (Some(first), Some(last)) = (self.engine.first_index(group), self.engine.last_index(group))
-        else {
+        let (Some(first), Some(last)) = (
+            self.engine.first_index(group),
+            self.engine.last_index(group),
+        ) else {
             // Nothing stored, nothing to truncate.
             return Ok(());
         };
@@ -258,7 +264,10 @@ impl RaftLogStorage<TypeConfig> for LogStore {
                     .ok_or_else(|| {
                         io::Error::new(
                             io::ErrorKind::InvalidData,
-                            format!("log entry {} is within [{}, {}] but missing", idx, first, last),
+                            format!(
+                                "log entry {} is within [{}, {}] but missing",
+                                idx, first, last
+                            ),
                         )
                     })?;
                 let mut batch = LogBatch::with_capacity(1);
@@ -266,7 +275,9 @@ impl RaftLogStorage<TypeConfig> for LogStore {
                 batch
                     .add_entries_with::<MessageExtTyped, Bincode2Codec>(group, &[boundary])
                     .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
-                self.engine.write(&mut batch, false).map_err(io::Error::other)?;
+                self.engine
+                    .write(&mut batch, false)
+                    .map_err(io::Error::other)?;
             }
             _ => {
                 // Either everything must go (`None`) or the boundary was already

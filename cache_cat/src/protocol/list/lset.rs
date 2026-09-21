@@ -166,10 +166,7 @@ impl ComputeCommand for LSetReq {
                     Value::SimpleString("OK".to_string()),
                 )
             }
-            _ => (
-                MochaOperation::Abort,
-                ProtocolError::WrongType.into(),
-            ),
+            _ => (MochaOperation::Abort, ProtocolError::WrongType.into()),
         }
     }
 

@@ -1,5 +1,5 @@
-use crate::error::{CacheCatError, ProtocolError};
 use super::arg;
+use crate::error::{CacheCatError, ProtocolError};
 use crate::mocha::EntrySnapshot;
 use crate::protocol::command::{Client, Command};
 use crate::protocol::raft_command::{RaftCommand, ReadRaftCommand};
