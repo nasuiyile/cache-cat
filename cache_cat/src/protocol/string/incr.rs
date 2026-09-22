@@ -10,7 +10,7 @@ use crate::raft::types::core::value_object::ValueObject;
 use crate::raft::types::entry::base_operation::BaseOperation;
 use crate::raft::types::entry::base_operation::BaseOperation::Incr;
 use crate::raft::types::entry::request::Operation;
-use crate::utils::parse_i64;
+use crate::utils::parse_canonical_i64;
 use async_trait::async_trait;
 use bytes::Bytes;
 use serde::{Deserialize, Serialize};
@@ -25,7 +25,7 @@ pub struct IncrParams {
 impl IncrParams {
     fn parse(items: &[Value]) -> Result<Self, ProtocolError> {
         if items.len() != 2 {
-            return Err(ProtocolError::WrongArgCount("INCR"));
+            return Err(ProtocolError::WrongArgCount("incr"));
         }
 
         let key = items[1]
@@ -105,7 +105,7 @@ impl ComputeCommand for IncrReq {
             }
 
             ValueObject::String(s) => {
-                let Some(value) = parse_i64(s) else {
+                let Some(value) = parse_canonical_i64(s) else {
                     return (MochaOperation::Abort, ProtocolError::NotAnInteger.into());
                 };
 

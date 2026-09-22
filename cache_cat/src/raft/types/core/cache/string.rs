@@ -94,6 +94,13 @@ impl MyCache {
             }
         }
 
+        // Redis runs the GET half first (setGenericCommand -> getGenericCommand):
+        // a key holding a non-string value fails with WRONGTYPE before NX/XX is
+        // evaluated, and nothing is written.
+        if params.get && matches!(existing_key, ExistingKey::OtherType) {
+            return ProtocolError::WrongType.into();
+        }
+
         let key_exists = matches!(existing_key, ExistingKey::Data(_) | ExistingKey::OtherType);
 
         // Apply NX/XX mode logic
@@ -148,43 +155,25 @@ impl MyCache {
     }
 
     pub fn redis_setnx(&self, params: SetNxParams, update: &mut Update<'_>) -> Value {
-        enum ExistingKey {
-            None,      // Key doesn't exist
-            Data,      // Key exists and is a valid string
-            OtherType, // Key exists but is not a string (Hash, etc.)
-        }
-
-        let mut existing_key = ExistingKey::None;
-
         let cache = match self.get_cache(update.db_number) {
             Err(err) => return err,
             Ok(cache) => cache,
         };
-        match cache.mocha.get_entry(&params.key) {
-            None => { /* remains None */ }
-            Some(value) => {
-                existing_key = match value.value.data {
-                    ValueObject::Int(_) => ExistingKey::Data,
-                    ValueObject::String(_) => ExistingKey::Data,
-                    _ => ExistingKey::OtherType,
-                };
-            }
+
+        // SETNX replies with an integer: 0 when the key already holds a value
+        // of any type (nothing is written), 1 when the key was set.
+        if cache.mocha.get_entry(&params.key).is_some() {
+            return Value::Integer(0);
         }
 
-        if matches!(existing_key, ExistingKey::Data | ExistingKey::OtherType) {
-            // Just return nil (nil bulk string)
-            Value::BulkString(None)
-        } else {
-            let set = SetReq {
-                key: params.key,
-                value: params.value,
-                ex_time: NO_EXPIRATION,
-            };
+        let set = SetReq {
+            key: params.key,
+            value: params.value,
+            ex_time: NO_EXPIRATION,
+        };
+        self.set(set, update);
 
-            self.set(set, update);
-
-            Value::ok()
-        }
+        Value::Integer(1)
     }
 
     pub fn redis_setex(&self, params: SetExParams, update: &mut Update<'_>) -> Value {
@@ -271,5 +260,224 @@ impl MyCache {
 
     pub fn p_f_add(&self, param: PfAddReq, update: &mut Update) -> Value {
         self.execute_compute(param, update)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::protocol::hash::hget::HGetParams;
+    use crate::protocol::hash::hset::HSetReq;
+    use crate::protocol::string::get::GetParams;
+    use crate::raft::types::core::mocha::core::UpdateType;
+    use crate::raft::types::core::mocha::request_handler::do_request;
+    use crate::raft::types::entry::base_operation::BaseOperation;
+    use crate::raft::types::entry::read_operation::ReadOperation;
+    use crate::raft::types::entry::request::{Operation, RedisOperation};
+
+    const WRONG_TYPE: &[u8] =
+        b"-WRONGTYPE Operation against a key holding the wrong kind of value\r\n";
+    const NIL: &[u8] = b"$-1\r\n";
+
+    fn apply(cache: &MyCache, operation: Operation) -> Vec<u8> {
+        let mut update_type = UpdateType::None;
+        let mut update = Update {
+            db_number: 0,
+            write_clock: 1,
+            update_type: &mut update_type,
+        };
+        do_request(cache, operation, &mut update, true).encode()
+    }
+
+    fn set(cache: &MyCache, params: SetParams) -> Vec<u8> {
+        apply(cache, Operation::Redis(RedisOperation::RedisSet(params)))
+    }
+
+    fn set_get(key: &'static str, value: &'static str, mode: Option<SetMode>) -> SetParams {
+        SetParams {
+            mode,
+            get: true,
+            ..SetParams::new(key, value)
+        }
+    }
+
+    fn setnx(cache: &MyCache, key: &'static str, value: &'static str) -> Vec<u8> {
+        let params = SetNxParams {
+            key: key.into(),
+            value: value.into(),
+        };
+        apply(cache, Operation::Redis(RedisOperation::RedisSetNx(params)))
+    }
+
+    fn get(cache: &MyCache, key: &'static str) -> Vec<u8> {
+        let params = GetParams { key: key.into() };
+        apply(cache, Operation::Read(ReadOperation::Get(params)))
+    }
+
+    fn hset(cache: &MyCache, key: &'static str) {
+        let req = HSetReq {
+            key: key.into(),
+            elements: vec![("field".into(), "value".into())],
+        };
+        assert_eq!(
+            apply(cache, Operation::Base(BaseOperation::HSet(req))),
+            b":1\r\n"
+        );
+    }
+
+    fn bulk(value: &str) -> Vec<u8> {
+        format!("${}\r\n{}\r\n", value.len(), value).into_bytes()
+    }
+
+    /// INCR, DECR, INCRBY 5 and DECRBY 5 against `key`.
+    fn incr_family(key: &'static str) -> [BaseOperation; 4] {
+        let key = Bytes::from_static(key.as_bytes());
+        [
+            BaseOperation::Incr(IncrReq { key: key.clone() }),
+            BaseOperation::Decr(DecrReq { key: key.clone() }),
+            BaseOperation::IncrBy(IncrByReq {
+                key: key.clone(),
+                increment: 5,
+            }),
+            BaseOperation::DecrBy(DecrByReq { key, decrement: 5 }),
+        ]
+    }
+
+    fn hget(cache: &MyCache, key: &'static str) -> Vec<u8> {
+        let params = HGetParams {
+            key: key.into(),
+            field: "field".into(),
+        };
+        apply(cache, Operation::Read(ReadOperation::HGet(params)))
+    }
+
+    #[test]
+    fn set_keeps_non_canonical_integer_strings_verbatim() {
+        let cache = MyCache::new(1).expect("cache");
+
+        for value in ["01", "+1", "-0", " 1", "1 ", "007", "9223372036854775808"] {
+            assert_eq!(set(&cache, SetParams::new("k", value)), b"+OK\r\n");
+            let expected = format!("${}\r\n{}\r\n", value.len(), value);
+            assert_eq!(get(&cache, "k"), expected.as_bytes(), "SET k {value:?}");
+        }
+
+        // Canonical integers still use the integer encoding and read back unchanged.
+        for value in [
+            "0",
+            "1",
+            "-1",
+            "9223372036854775807",
+            "-9223372036854775808",
+        ] {
+            assert_eq!(set(&cache, SetParams::new("k", value)), b"+OK\r\n");
+            let entry = cache.databases[0]
+                .mocha
+                .get_entry(&b"k"[..])
+                .expect("entry");
+            assert!(matches!(entry.value.data, ValueObject::Int(_)), "{value}");
+            let expected = format!("${}\r\n{}\r\n", value.len(), value);
+            assert_eq!(get(&cache, "k"), expected.as_bytes());
+        }
+    }
+
+    #[test]
+    fn set_get_returns_the_previous_string_verbatim() {
+        let cache = MyCache::new(1).expect("cache");
+
+        assert_eq!(set(&cache, set_get("k", "01", None)), NIL);
+        assert_eq!(set(&cache, set_get("k", "v2", None)), b"$2\r\n01\r\n");
+        assert_eq!(get(&cache, "k"), b"$2\r\nv2\r\n");
+    }
+
+    #[test]
+    fn set_get_on_a_hash_is_wrongtype_and_does_not_overwrite() {
+        let cache = MyCache::new(1).expect("cache");
+        hset(&cache, "h");
+
+        for mode in [None, Some(SetMode::Nx), Some(SetMode::Xx)] {
+            assert_eq!(
+                set(&cache, set_get("h", "v", mode.clone())),
+                WRONG_TYPE,
+                "{mode:?}"
+            );
+            assert_eq!(hget(&cache, "h"), b"$5\r\nvalue\r\n", "{mode:?}");
+        }
+
+        let keep_ttl = SetParams {
+            expiration: Some(Expiration::KeepTTL),
+            ..set_get("h", "v", None)
+        };
+        assert_eq!(set(&cache, keep_ttl), WRONG_TYPE);
+        assert_eq!(hget(&cache, "h"), b"$5\r\nvalue\r\n");
+
+        // Without GET, SET still replaces a key of any type, as Redis does.
+        assert_eq!(set(&cache, SetParams::new("h", "v")), b"+OK\r\n");
+        assert_eq!(get(&cache, "h"), b"$1\r\nv\r\n");
+    }
+
+    #[test]
+    fn setnx_replies_with_an_integer() {
+        let cache = MyCache::new(1).expect("cache");
+
+        assert_eq!(setnx(&cache, "k", "01"), b":1\r\n");
+        assert_eq!(setnx(&cache, "k", "other"), b":0\r\n");
+        assert_eq!(get(&cache, "k"), b"$2\r\n01\r\n");
+
+        // An existing key of another type also blocks SETNX and is left untouched.
+        hset(&cache, "h");
+        assert_eq!(setnx(&cache, "h", "v"), b":0\r\n");
+        assert_eq!(hget(&cache, "h"), b"$5\r\nvalue\r\n");
+    }
+
+    #[test]
+    fn incr_family_requires_a_canonical_stored_integer() {
+        const NOT_AN_INTEGER: &[u8] = b"-ERR value is not an integer or out of range\r\n";
+        let cache = MyCache::new(1).expect("cache");
+
+        // Redis string2ll: no whitespace, no '+', no leading zeros, no "-0".
+        for value in [
+            "01",
+            "+1",
+            "-0",
+            " 1",
+            "1 ",
+            "",
+            "1.0",
+            "9223372036854775808",
+        ] {
+            for operation in incr_family("k") {
+                assert_eq!(set(&cache, SetParams::new("k", value)), b"+OK\r\n");
+                assert_eq!(
+                    apply(&cache, Operation::Base(operation)),
+                    NOT_AN_INTEGER,
+                    "{value:?}"
+                );
+                assert_eq!(
+                    get(&cache, "k"),
+                    bulk(value),
+                    "value must be left untouched"
+                );
+            }
+        }
+
+        assert_eq!(set(&cache, SetParams::new("k", "10")), b"+OK\r\n");
+        let replies = incr_family("k").map(|op| apply(&cache, Operation::Base(op)));
+        assert_eq!(
+            replies,
+            [&b":11\r\n"[..], b":10\r\n", b":15\r\n", b":10\r\n"]
+        );
+
+        // A raw string that happens to be canonical is still a number: "1" + "0".
+        assert_eq!(set(&cache, SetParams::new("k", "1")), b"+OK\r\n");
+        let append = AppendReq {
+            key: "k".into(),
+            value: "0".into(),
+        };
+        assert_eq!(
+            apply(&cache, Operation::Base(BaseOperation::Append(append))),
+            b":2\r\n"
+        );
+        let incr = BaseOperation::Incr(IncrReq { key: "k".into() });
+        assert_eq!(apply(&cache, Operation::Base(incr)), b":11\r\n");
     }
 }

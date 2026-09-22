@@ -21,7 +21,7 @@ use crate::raft::types::core::value_object::{HashValue, ValueObject};
 use crate::raft::types::entry::base_operation::BaseOperation;
 use crate::raft::types::entry::base_operation::BaseOperation::HSet;
 use crate::raft::types::entry::request::Operation;
-use crate::utils::parse_i64;
+use crate::utils::parse_canonical_i64;
 use async_trait::async_trait;
 use bytes::Bytes;
 use parking_lot::Mutex;
@@ -135,7 +135,7 @@ impl ComputeCommand for HSetReq {
                 let mut count = 0;
                 let mut map = hash.lock();
                 for (k, v) in &self.elements {
-                    let value = parse_i64(v)
+                    let value = parse_canonical_i64(v)
                         .map(HashValue::Int)
                         .unwrap_or_else(|| HashValue::Str(v.clone()));
                     if map.insert(k.clone(), value).is_none() {
@@ -158,7 +158,7 @@ impl ComputeCommand for HSetReq {
     fn init(self) -> (MochaOperation<MyValue>, Value) {
         let mut map = HashMap::new();
         for (k, v) in self.elements {
-            if let Some(int) = parse_i64(&v) {
+            if let Some(int) = parse_canonical_i64(&v) {
                 map.insert(k.clone(), HashValue::Int(int));
             } else {
                 map.insert(k.clone(), HashValue::Str(v.clone()));

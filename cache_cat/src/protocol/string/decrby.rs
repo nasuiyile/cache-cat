@@ -9,7 +9,7 @@ use crate::raft::types::core::response_value::Value;
 use crate::raft::types::core::value_object::ValueObject;
 use crate::raft::types::entry::base_operation::BaseOperation;
 use crate::raft::types::entry::request::Operation;
-use crate::utils::parse_i64;
+use crate::utils::parse_canonical_i64;
 use async_trait::async_trait;
 use bytes::Bytes;
 use serde::{Deserialize, Serialize};
@@ -25,14 +25,19 @@ pub struct DecrByParams {
 impl DecrByParams {
     fn parse(items: &[Value]) -> Result<Self, ProtocolError> {
         if items.len() != 3 {
-            return Err(ProtocolError::WrongArgCount("DECRBY"));
+            return Err(ProtocolError::WrongArgCount("decrby"));
         }
 
         let key = items[1]
             .string_bytes_clone()
             .ok_or(ProtocolError::InvalidArgument("key"))?;
 
-        let decrement = items[2].try_parse_i64()?;
+        // getLongLongFromObjectOrReply: the argument must be a canonical integer.
+        let decrement = items[2].try_parse_canonical_i64()?;
+        // decrbyCommand: negating i64::MIN overflows, whatever the key holds.
+        if decrement == i64::MIN {
+            return Err(ProtocolError::response("ERR decrement would overflow"));
+        }
 
         Ok(DecrByParams { key, decrement })
     }
@@ -110,7 +115,7 @@ impl ComputeCommand for DecrByReq {
             }
 
             ValueObject::String(s) => {
-                let Some(value) = parse_i64(s) else {
+                let Some(value) = parse_canonical_i64(s) else {
                     return (MochaOperation::Abort, ProtocolError::NotAnInteger.into());
                 };
                 let Some(result) = value.checked_sub(self.decrement) else {
@@ -143,5 +148,61 @@ impl ComputeCommand for DecrByReq {
             },
             Value::Integer(v),
         )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn args(amount: &'static [u8]) -> [Value; 3] {
+        let bulk = |v: &'static [u8]| Value::BulkString(Some(Bytes::from_static(v)));
+        [bulk(b"DECRBY"), bulk(b"key"), bulk(amount)]
+    }
+
+    #[test]
+    fn amount_must_be_a_canonical_integer() {
+        // Redis getLongLongFromObjectOrReply -> string2ll.
+        let rejected: [&'static [u8]; 10] = [
+            b"+5",
+            b"05",
+            b"-0",
+            b"-05",
+            b" 5",
+            b"5 ",
+            b"",
+            b"1.5",
+            b"abc",
+            b"9223372036854775808",
+        ];
+        for amount in rejected {
+            assert_eq!(
+                DecrByParams::parse(&args(amount)),
+                Err(ProtocolError::NotAnInteger),
+                "{:?}",
+                amount
+            );
+        }
+
+        let accepted: [(&'static [u8], i64); 4] = [
+            (b"0", 0),
+            (b"5", 5),
+            (b"-5", -5),
+            (b"9223372036854775807", i64::MAX),
+        ];
+        for (amount, expected) in accepted {
+            let params = DecrByParams::parse(&args(amount)).expect("canonical integer");
+            assert_eq!(params.decrement, expected);
+        }
+    }
+
+    #[test]
+    fn negating_i64_min_is_rejected_before_touching_the_key() {
+        let result = DecrByParams::parse(&args(b"-9223372036854775808"));
+        assert_eq!(
+            result,
+            Err(ProtocolError::response("ERR decrement would overflow"))
+        );
+        assert!(DecrByParams::parse(&args(b"-9223372036854775807")).is_ok());
     }
 }

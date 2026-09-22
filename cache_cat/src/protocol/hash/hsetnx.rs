@@ -24,7 +24,7 @@ use crate::raft::types::core::value_object::{HashValue, ValueObject};
 use crate::raft::types::entry::base_operation::BaseOperation;
 use crate::raft::types::entry::base_operation::BaseOperation::HSetNx;
 use crate::raft::types::entry::request::Operation;
-use crate::utils::parse_i64;
+use crate::utils::parse_canonical_i64;
 use async_trait::async_trait;
 use bytes::Bytes;
 use parking_lot::Mutex;
@@ -137,7 +137,7 @@ impl ComputeCommand for HSetNxReq {
                     (MochaOperation::Abort, Value::Integer(0))
                 } else {
                     // Field doesn't exist, set it
-                    let value = parse_i64(&self.value)
+                    let value = parse_canonical_i64(&self.value)
                         .map(HashValue::Int)
                         .unwrap_or_else(|| HashValue::Str(self.value));
 
@@ -158,7 +158,7 @@ impl ComputeCommand for HSetNxReq {
 
     fn init(self) -> (MochaOperation<MyValue>, Value) {
         let mut map = HashMap::new();
-        let value = if let Some(int) = parse_i64(&self.value) {
+        let value = if let Some(int) = parse_canonical_i64(&self.value) {
             HashValue::Int(int)
         } else {
             HashValue::Str(self.value)

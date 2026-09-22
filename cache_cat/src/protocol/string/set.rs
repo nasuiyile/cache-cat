@@ -10,7 +10,7 @@ use crate::raft::types::core::value_object::ValueObject;
 use crate::raft::types::entry::base_operation::BaseOperation;
 use crate::raft::types::entry::request::Operation;
 use crate::raft::types::entry::request::RedisOperation::RedisSet;
-use crate::utils::parse_i64;
+use crate::utils::parse_canonical_i64;
 use async_trait::async_trait;
 use bytes::Bytes;
 use serde::{Deserialize, Serialize};
@@ -237,7 +237,7 @@ impl ComputeCommand for SetReq {
         _entry: EntrySnapshot<MyValue>,
         _write_clock: u64,
     ) -> (MochaOperation<MyValue>, Value) {
-        let data = match parse_i64(&self.value) {
+        let data = match parse_canonical_i64(&self.value) {
             None => ValueObject::String(self.value.clone()),
             Some(v) => ValueObject::Int(v),
         };
@@ -257,7 +257,7 @@ impl ComputeCommand for SetReq {
     }
 
     fn init(self) -> (MochaOperation<MyValue>, Value) {
-        let data = match parse_i64(&self.value) {
+        let data = match parse_canonical_i64(&self.value) {
             None => ValueObject::String(self.value.clone()),
             Some(v) => ValueObject::Int(v),
         };

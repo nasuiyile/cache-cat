@@ -1,4 +1,5 @@
 use crate::error::ProtocolError;
+use crate::utils::parse_canonical_i64;
 use bytes::{BufMut, Bytes};
 use mlua::{Lua, Value as LuaValue};
 use serde::{Deserialize, Serialize};
@@ -674,6 +675,19 @@ impl Value {
     #[inline]
     pub(crate) fn try_parse_i64(&self) -> Result<i64, ProtocolError> {
         self.parse_i64().ok_or(ProtocolError::NotAnInteger)
+    }
+
+    /// Strict counterpart of `try_parse_i64`, matching Redis
+    /// `getLongLongFromObjectOrReply` (`string2ll`): rejects whitespace, a `+`
+    /// sign, leading zeros and `-0`.
+    pub(crate) fn try_parse_canonical_i64(&self) -> Result<i64, ProtocolError> {
+        match self {
+            Value::BulkString(Some(data)) => parse_canonical_i64(data),
+            Value::SimpleString(s) => parse_canonical_i64(s.as_bytes()),
+            Value::Integer(i) => Some(*i),
+            _ => None,
+        }
+        .ok_or(ProtocolError::NotAnInteger)
     }
 
     pub(crate) fn parse_usize(&self) -> Option<usize> {

@@ -10,7 +10,7 @@ use crate::raft::types::core::value_object::ValueObject;
 use crate::raft::types::entry::base_operation::BaseOperation;
 use crate::raft::types::entry::base_operation::BaseOperation::Decr;
 use crate::raft::types::entry::request::Operation;
-use crate::utils::parse_i64;
+use crate::utils::parse_canonical_i64;
 use async_trait::async_trait;
 use bytes::Bytes;
 use serde::{Deserialize, Serialize};
@@ -25,7 +25,7 @@ pub struct DecrParams {
 impl DecrParams {
     fn parse(items: &[Value]) -> Result<Self, ProtocolError> {
         if items.len() != 2 {
-            return Err(ProtocolError::WrongArgCount("DECR"));
+            return Err(ProtocolError::WrongArgCount("decr"));
         }
 
         let key = items[1]
@@ -104,7 +104,7 @@ impl ComputeCommand for DecrReq {
             }
 
             ValueObject::String(s) => {
-                let Some(value) = parse_i64(s) else {
+                let Some(value) = parse_canonical_i64(s) else {
                     return (MochaOperation::Abort, ProtocolError::NotAnInteger.into());
                 };
                 let Some(result) = value.checked_sub(1) else {
