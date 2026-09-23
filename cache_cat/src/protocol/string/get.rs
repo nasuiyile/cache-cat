@@ -29,7 +29,7 @@ impl GetParams {
     /// Parse GET command parameters from RESP array items
     fn parse(items: &[Value]) -> Result<Self, ProtocolError> {
         if items.len() != 2 {
-            return Err(ProtocolError::WrongArgCount("GET"));
+            return Err(ProtocolError::WrongArgCount("get"));
         }
 
         let key = items[1]

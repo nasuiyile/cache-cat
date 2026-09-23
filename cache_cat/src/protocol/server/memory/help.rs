@@ -11,7 +11,7 @@ pub struct MemoryHelpCommand;
 impl MemoryHelpCommand {
     fn parse(items: &[Value]) -> Result<(), ProtocolError> {
         if items.len() != 2 {
-            return Err(ProtocolError::WrongArgCount("MEMORY HELP"));
+            return Err(ProtocolError::WrongArgCount("memory|help"));
         }
 
         let memory = items[0]

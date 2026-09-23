@@ -16,7 +16,7 @@ impl Command for QuitCommand {
         _server: &RedisServer,
     ) -> Result<Value, CacheCatError> {
         if items.len() >= 2 {
-            return Err(ProtocolError::WrongArgCount("QUIT").into());
+            return Err(ProtocolError::WrongArgCount("quit").into());
         }
         client.closed = true;
         Ok(Value::ok())

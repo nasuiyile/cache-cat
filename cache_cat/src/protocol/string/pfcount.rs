@@ -43,7 +43,7 @@ impl Display for PfcountParams {
 impl PfcountParams {
     fn parse(items: &[Value]) -> Result<Self, ProtocolError> {
         if items.len() < 2 {
-            return Err(ProtocolError::WrongArgCount("PFCOUNT"));
+            return Err(ProtocolError::WrongArgCount("pfcount"));
         }
 
         let keys = items

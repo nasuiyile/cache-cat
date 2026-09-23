@@ -24,7 +24,7 @@ impl Display for DbsizeParams {
 impl DbsizeParams {
     fn parse(items: &[Value]) -> Result<Self, ProtocolError> {
         if items.len() != 1 {
-            return Err(ProtocolError::WrongArgCount("DBSIZE"));
+            return Err(ProtocolError::WrongArgCount("dbsize"));
         }
 
         Ok(Self { keys: Vec::new() })

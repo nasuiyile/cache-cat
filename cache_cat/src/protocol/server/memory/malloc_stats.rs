@@ -104,7 +104,7 @@ pub struct MemoryMallocStatsCommand;
 impl MemoryMallocStatsCommand {
     fn parse(items: &[Value]) -> Result<(), ProtocolError> {
         if items.len() != 2 {
-            return Err(ProtocolError::WrongArgCount("MEMORY MALLOC-STATS"));
+            return Err(ProtocolError::WrongArgCount("memory|malloc-stats"));
         }
 
         let memory = items[0]

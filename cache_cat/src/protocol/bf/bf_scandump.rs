@@ -34,7 +34,7 @@ impl Display for BfScanDumpParams {
 impl BfScanDumpParams {
     fn parse(items: &[Value]) -> Result<Self, ProtocolError> {
         if items.len() != 3 {
-            return Err(ProtocolError::WrongArgCount("BF.SCANDUMP"));
+            return Err(ProtocolError::WrongArgCount("bf.scandump"));
         }
         let key = items[1]
             .string_bytes_clone()

@@ -25,7 +25,7 @@ impl Display for KeysParams {
 impl KeysParams {
     fn parse(items: &[Value]) -> Result<Self, ProtocolError> {
         if items.len() != 2 {
-            return Err(ProtocolError::WrongArgCount("KEYS"));
+            return Err(ProtocolError::WrongArgCount("keys"));
         }
 
         let pattern = items[1]

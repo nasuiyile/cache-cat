@@ -35,7 +35,7 @@ impl BfExistsParams {
     fn parse(items: &[Value]) -> Result<Self, ProtocolError> {
         // BF.EXISTS key item
         if items.len() != 3 {
-            return Err(ProtocolError::WrongArgCount("BF.EXISTS"));
+            return Err(ProtocolError::WrongArgCount("bf.exists"));
         }
 
         let key = items[1]

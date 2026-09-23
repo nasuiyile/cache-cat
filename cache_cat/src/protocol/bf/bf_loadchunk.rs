@@ -26,7 +26,7 @@ pub struct BfLoadChunkParams {
 impl BfLoadChunkParams {
     fn parse(items: &[Value]) -> Result<Self, ProtocolError> {
         if items.len() != 4 {
-            return Err(ProtocolError::WrongArgCount("BF.LOADCHUNK"));
+            return Err(ProtocolError::WrongArgCount("bf.loadchunk"));
         }
         let key = items[1]
             .string_bytes_clone()

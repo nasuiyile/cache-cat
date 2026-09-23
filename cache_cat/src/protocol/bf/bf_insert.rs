@@ -43,7 +43,7 @@ pub struct BfInsertParams {
 impl BfInsertParams {
     fn parse(values: &[Value]) -> Result<Self, ProtocolError> {
         if values.len() < 4 {
-            return Err(ProtocolError::WrongArgCount("BF.INSERT"));
+            return Err(ProtocolError::WrongArgCount("bf.insert"));
         }
         let key = values[1]
             .string_bytes_clone()
@@ -68,7 +68,7 @@ impl BfInsertParams {
                 index += 1;
 
                 if index >= values.len() {
-                    return Err(ProtocolError::WrongArgCount("BF.INSERT"));
+                    return Err(ProtocolError::WrongArgCount("bf.insert"));
                 }
 
                 let value = values[index]
@@ -93,7 +93,7 @@ impl BfInsertParams {
             if option.as_ref().eq_ignore_ascii_case(b"CAPACITY") {
                 index += 1;
                 if index >= values.len() {
-                    return Err(ProtocolError::WrongArgCount("BF.INSERT"));
+                    return Err(ProtocolError::WrongArgCount("bf.insert"));
                 }
                 let value = values[index]
                     .string_bytes_clone()
@@ -109,7 +109,7 @@ impl BfInsertParams {
             if option.as_ref().eq_ignore_ascii_case(b"EXPANSION") {
                 index += 1;
                 if index >= values.len() {
-                    return Err(ProtocolError::WrongArgCount("BF.INSERT"));
+                    return Err(ProtocolError::WrongArgCount("bf.insert"));
                 }
                 let value = values[index]
                     .string_bytes_clone()
@@ -134,9 +134,9 @@ impl BfInsertParams {
             }
             return Err(ProtocolError::response(UNKNOWN_ARGUMENT));
         }
-        let items_index = items_index.ok_or(ProtocolError::WrongArgCount("BF.INSERT"))?;
+        let items_index = items_index.ok_or(ProtocolError::WrongArgCount("bf.insert"))?;
         if items_index >= values.len() {
-            return Err(ProtocolError::WrongArgCount("BF.INSERT"));
+            return Err(ProtocolError::WrongArgCount("bf.insert"));
         }
         if expansion == 0 {
             non_scaling = true;

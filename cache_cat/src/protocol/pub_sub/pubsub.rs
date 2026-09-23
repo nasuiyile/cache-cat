@@ -93,7 +93,7 @@ impl PubSubParams {
             "NUMPAT" => {
                 // NUMPAT takes no arguments
                 if items.len() > 2 {
-                    return Err(ProtocolError::WrongArgCount("pubsub numpat"));
+                    return Err(ProtocolError::WrongArgCount("pubsub|numpat"));
                 }
                 Ok(PubSubParams {
                     subcommand: PubSubSubCommand::NumPat,

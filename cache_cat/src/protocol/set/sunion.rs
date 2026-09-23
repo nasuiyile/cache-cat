@@ -33,7 +33,7 @@ impl Display for SUnionParams {
 impl SUnionParams {
     fn parse(items: &[Value]) -> Result<Self, ProtocolError> {
         if items.len() < 2 {
-            return Err(ProtocolError::WrongArgCount("SUNION"));
+            return Err(ProtocolError::WrongArgCount("sunion"));
         }
 
         let keys = items

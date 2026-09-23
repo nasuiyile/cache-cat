@@ -176,7 +176,7 @@ pub struct MemoryStatsCommand;
 impl MemoryStatsCommand {
     fn parse(items: &[Value]) -> Result<(), ProtocolError> {
         if items.len() != 2 {
-            return Err(ProtocolError::WrongArgCount("MEMORY STATS"));
+            return Err(ProtocolError::WrongArgCount("memory|stats"));
         }
 
         let memory = items[0]

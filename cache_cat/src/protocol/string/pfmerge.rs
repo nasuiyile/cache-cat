@@ -26,7 +26,7 @@ pub struct PFMergeParams {
 impl PFMergeParams {
     fn parse(items: &[Value]) -> Result<Self, ProtocolError> {
         if items.len() < 2 {
-            return Err(ProtocolError::WrongArgCount("PFMERGE"));
+            return Err(ProtocolError::WrongArgCount("pfmerge"));
         }
 
         let key = items[1]

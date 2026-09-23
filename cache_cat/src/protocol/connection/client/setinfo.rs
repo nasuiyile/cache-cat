@@ -15,7 +15,7 @@ impl SubCommand for SetInfoCommand {
         _server: &RedisServer,
     ) -> Result<Value, CacheCatError> {
         if items.len() != 4 {
-            return Err(ProtocolError::WrongArgCount("CLIENT SETINFO").into());
+            return Err(ProtocolError::WrongArgCount("client|setinfo").into());
         }
 
         let field = items[2]

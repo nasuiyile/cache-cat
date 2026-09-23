@@ -18,12 +18,12 @@ pub struct MsetParams {
 impl MsetParams {
     fn parse(items: &[Value]) -> Result<Self, ProtocolError> {
         if items.len() < 3 {
-            return Err(ProtocolError::WrongArgCount("MSET"));
+            return Err(ProtocolError::WrongArgCount("mset"));
         }
 
         let args_count = items.len() - 1;
         if !args_count.is_multiple_of(2) {
-            return Err(ProtocolError::WrongArgCount("MSET"));
+            return Err(ProtocolError::WrongArgCount("mset"));
         }
 
         let mut pairs = Vec::with_capacity(args_count / 2);

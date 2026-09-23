@@ -28,7 +28,7 @@ impl Display for StrLenParams {
 impl StrLenParams {
     fn parse(items: &[Value]) -> Result<Self, ProtocolError> {
         if items.len() != 2 {
-            return Err(ProtocolError::WrongArgCount("STRLEN"));
+            return Err(ProtocolError::WrongArgCount("strlen"));
         }
 
         let key = items[1]

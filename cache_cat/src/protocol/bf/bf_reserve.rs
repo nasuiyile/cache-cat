@@ -59,7 +59,7 @@ impl BfReserveParams {
          * The last form is normally an error when expansion > 0.
          */
         if values.len() < 4 || values.len() > 7 {
-            return Err(ProtocolError::WrongArgCount("BF.RESERVE"));
+            return Err(ProtocolError::WrongArgCount("bf.reserve"));
         }
 
         let key = values[1]

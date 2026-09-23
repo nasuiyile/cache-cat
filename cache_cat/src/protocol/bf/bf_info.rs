@@ -101,7 +101,7 @@ impl Display for BfInfoParams {
 impl BfInfoParams {
     fn parse(items: &[Value]) -> Result<Self, ProtocolError> {
         if items.len() != 2 && items.len() != 3 {
-            return Err(ProtocolError::WrongArgCount("BF.INFO"));
+            return Err(ProtocolError::WrongArgCount("bf.info"));
         }
         let key = items[1]
             .string_bytes_clone()

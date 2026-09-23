@@ -37,7 +37,7 @@ impl PfAddParams {
         // Redis PFADD 的 arity 是 -2，
         // 所以 PFADD key 是合法的。
         if items.len() < 2 {
-            return Err(ProtocolError::WrongArgCount("PFADD"));
+            return Err(ProtocolError::WrongArgCount("pfadd"));
         }
 
         let key = items[1]

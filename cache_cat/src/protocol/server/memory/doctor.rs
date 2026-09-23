@@ -508,7 +508,7 @@ pub struct MemoryDoctorCommand;
 impl MemoryDoctorCommand {
     fn parse(items: &[Value]) -> Result<(), ProtocolError> {
         if items.len() != 2 {
-            return Err(ProtocolError::WrongArgCount("MEMORY DOCTOR"));
+            return Err(ProtocolError::WrongArgCount("memory|doctor"));
         }
 
         let memory = items[0]

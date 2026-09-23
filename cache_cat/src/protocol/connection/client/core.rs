@@ -39,7 +39,7 @@ impl Command for ClientCommand {
         server: &RedisServer,
     ) -> Result<Value, CacheCatError> {
         if items.len() < 2 {
-            return Err(ProtocolError::WrongArgCount("CLIENT").into());
+            return Err(ProtocolError::WrongArgCount("client").into());
         }
 
         let sub_command = match &items[1] {

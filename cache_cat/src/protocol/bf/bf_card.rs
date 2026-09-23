@@ -27,7 +27,7 @@ impl Display for BfCardParams {
 impl BfCardParams {
     fn parse(items: &[Value]) -> Result<Self, ProtocolError> {
         if items.len() != 2 {
-            return Err(ProtocolError::WrongArgCount("BF.CARD"));
+            return Err(ProtocolError::WrongArgCount("bf.card"));
         }
 
         let key = items[1]

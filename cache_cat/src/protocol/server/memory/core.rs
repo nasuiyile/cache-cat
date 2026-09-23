@@ -48,7 +48,7 @@ impl Command for MemoryCommand {
         server: &RedisServer,
     ) -> Result<Value, CacheCatError> {
         if items.len() < 2 {
-            return Err(ProtocolError::WrongArgCount("MEMORY").into());
+            return Err(ProtocolError::WrongArgCount("memory").into());
         }
 
         let sub_command = match &items[1] {

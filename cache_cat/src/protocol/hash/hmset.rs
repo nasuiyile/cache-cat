@@ -38,7 +38,10 @@ impl HMSetCommand {
     /// Format:
     /// HMSET key field value [field value ...]
     fn parse_args(items: &[Value]) -> Result<HMSetParams, ProtocolError> {
-        if items.len() < 4 || items.len() % 2 != 0 {
+        if items.len() < 4 {
+            return Err(ProtocolError::WrongArgCount("hmset"));
+        }
+        if items.len() % 2 != 0 {
             return Err(ProtocolError::WrongArgCount("hmset"));
         }
         let key = items[1]

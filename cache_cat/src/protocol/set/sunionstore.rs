@@ -29,7 +29,7 @@ pub struct SUnionStoreCommand;
 impl SUnionStoreCommand {
     fn parse(items: &[Value]) -> Result<SUnionStoreParams, ProtocolError> {
         if items.len() < 3 {
-            return Err(ProtocolError::WrongArgCount("SUNIONSTORE"));
+            return Err(ProtocolError::WrongArgCount("sunionstore"));
         }
 
         let key = items[1]

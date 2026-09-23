@@ -46,7 +46,7 @@ impl MemoryUsageParams {
     /// MEMORY USAGE key SAMPLES count
     fn parse(items: &[Value]) -> Result<Self, ProtocolError> {
         if items.len() < 3 {
-            return Err(ProtocolError::WrongArgCount("MEMORY USAGE"));
+            return Err(ProtocolError::WrongArgCount("memory|usage"));
         }
 
         // MEMORY

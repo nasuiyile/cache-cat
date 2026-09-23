@@ -39,7 +39,10 @@ impl XAddParams {
     /// the storage execution path.
     fn parse(items: &[Value]) -> Result<Self, ProtocolError> {
         // Minimum: XADD key id field value
-        if items.len() < 5 || !(items.len() - 3).is_multiple_of(2) {
+        if items.len() < 5 {
+            return Err(ProtocolError::WrongArgCount("xadd"));
+        }
+        if !(items.len() - 3).is_multiple_of(2) {
             return Err(ProtocolError::WrongArgCount("xadd"));
         }
 

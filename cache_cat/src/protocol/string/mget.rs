@@ -32,7 +32,7 @@ impl Display for MgetParams {
 impl MgetParams {
     fn parse(items: &[Value]) -> Result<Self, ProtocolError> {
         if items.len() < 2 {
-            return Err(ProtocolError::WrongArgCount("MGET"));
+            return Err(ProtocolError::WrongArgCount("mget"));
         }
 
         let keys = items

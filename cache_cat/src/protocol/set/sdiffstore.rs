@@ -29,7 +29,7 @@ pub struct SDiffStoreCommand;
 impl SDiffStoreCommand {
     fn parse(items: &[Value]) -> Result<SDiffStoreParams, ProtocolError> {
         if items.len() < 3 {
-            return Err(ProtocolError::WrongArgCount("SDIFFSTORE"));
+            return Err(ProtocolError::WrongArgCount("sdiffstore"));
         }
 
         let key = items[1]

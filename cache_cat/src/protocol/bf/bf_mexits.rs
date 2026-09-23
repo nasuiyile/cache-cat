@@ -34,7 +34,7 @@ impl Display for BfMExistsParams {
 impl BfMExistsParams {
     fn parse(values: &[Value]) -> Result<Self, ProtocolError> {
         if values.len() < 3 {
-            return Err(ProtocolError::WrongArgCount("BF.MEXISTS"));
+            return Err(ProtocolError::WrongArgCount("bf.mexists"));
         }
         let key = values[1]
             .string_bytes_clone()

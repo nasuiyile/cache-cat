@@ -33,7 +33,7 @@ impl AppendParams {
 
     fn parse(items: &[Value]) -> Result<Self, ProtocolError> {
         if items.len() != 3 {
-            return Err(ProtocolError::WrongArgCount("APPEND"));
+            return Err(ProtocolError::WrongArgCount("append"));
         }
 
         let key = items[1]

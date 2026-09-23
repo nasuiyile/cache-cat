@@ -32,7 +32,7 @@ impl Display for SDiffParams {
 impl SDiffParams {
     fn parse(items: &[Value]) -> Result<Self, ProtocolError> {
         if items.len() < 2 {
-            return Err(ProtocolError::WrongArgCount("SDIFF"));
+            return Err(ProtocolError::WrongArgCount("sdiff"));
         }
         let keys = items
             .iter()

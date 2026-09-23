@@ -29,7 +29,7 @@ pub struct BfAddParams {
 impl BfAddParams {
     fn parse(items: &[Value]) -> Result<Self, ProtocolError> {
         if items.len() != 3 {
-            return Err(ProtocolError::WrongArgCount("BF.ADD"));
+            return Err(ProtocolError::WrongArgCount("bf.add"));
         }
 
         let key = items[1]

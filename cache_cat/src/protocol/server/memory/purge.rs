@@ -10,7 +10,7 @@ pub struct MemoryPurgeCommand;
 impl MemoryPurgeCommand {
     fn parse(items: &[Value]) -> Result<(), ProtocolError> {
         if items.len() != 2 {
-            return Err(ProtocolError::WrongArgCount("MEMORY PURGE"));
+            return Err(ProtocolError::WrongArgCount("memory|purge"));
         }
 
         let memory = items[0]

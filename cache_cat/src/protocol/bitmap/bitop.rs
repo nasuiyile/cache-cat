@@ -100,7 +100,7 @@ impl BitOpCommand {
         // BITOP AND dest src
         //
         if items.len() < 4 {
-            return Err(ProtocolError::WrongArgCount("BITOP"));
+            return Err(ProtocolError::WrongArgCount("bitop"));
         }
         let operation_bytes = items[1]
             .string_bytes_clone()
@@ -126,7 +126,7 @@ impl BitOpCommand {
         // NOT is unary and accepts exactly one source key.
         //
         if operation == BitOp::Not && keys.len() != 1 {
-            return Err(ProtocolError::WrongArgCount("BITOP"));
+            return Err(ProtocolError::WrongArgCount("bitop"));
         }
 
         Ok(BitOpParams {

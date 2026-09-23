@@ -29,7 +29,7 @@ pub struct SInterStoreCommand;
 impl SInterStoreCommand {
     fn parse(items: &[Value]) -> Result<SInterStoreParams, ProtocolError> {
         if items.len() < 3 {
-            return Err(ProtocolError::WrongArgCount("SINTERSTORE"));
+            return Err(ProtocolError::WrongArgCount("sinterstore"));
         }
 
         let key = items[1]

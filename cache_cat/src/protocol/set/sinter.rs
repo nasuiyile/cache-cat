@@ -33,7 +33,7 @@ impl Display for SInterParams {
 impl SInterParams {
     fn parse(items: &[Value]) -> Result<Self, ProtocolError> {
         if items.len() < 2 {
-            return Err(ProtocolError::WrongArgCount("SINTER"));
+            return Err(ProtocolError::WrongArgCount("sinter"));
         }
 
         let keys = items
