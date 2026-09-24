@@ -22,6 +22,7 @@ impl Command for MultiCommand {
             return Err(ProtocolError::response("ERR MULTI calls can not be nested").into());
         }
         client.transaction_queue = Some(vec![]);
+        client.transaction_failed = false;
         client.flag.multi = true;
         Ok(Value::ok())
     }

@@ -1,7 +1,7 @@
 use crate::error::{CacheCatError, ProtocolError};
 use crate::mocha::EntrySnapshot;
 use crate::protocol::command::{Client, Command};
-use crate::protocol::raft_command::ReadRaftCommand;
+use crate::protocol::raft_command::{RaftCommand, ReadRaftCommand};
 use crate::raft::network::redis_server::RedisServer;
 use crate::raft::types::core::mocha::core::MyValue;
 use crate::raft::types::core::mocha::read_command::ReadCommand;
@@ -99,6 +99,11 @@ impl Command for ZRankCommand {
         items: &[Value],
         server: &RedisServer,
     ) -> Result<Value, CacheCatError> {
+        if let Some(queue) = client.transaction_queue.as_mut() {
+            queue.push(self.raft_request(items)?);
+            return Ok(Value::queued());
+        }
+
         let params = self.read_operation(items)?;
 
         server.app.read(params, client.db_number).await

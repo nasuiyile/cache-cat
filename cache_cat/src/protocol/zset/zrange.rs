@@ -15,7 +15,7 @@
 use crate::error::{CacheCatError, ProtocolError};
 use crate::mocha::EntrySnapshot;
 use crate::protocol::command::{Client, Command};
-use crate::protocol::raft_command::ReadRaftCommand;
+use crate::protocol::raft_command::{RaftCommand, ReadRaftCommand};
 use crate::raft::network::redis_server::RedisServer;
 use crate::raft::types::core::mocha::core::MyValue;
 use crate::raft::types::core::mocha::read_command::ReadCommand;
@@ -98,18 +98,15 @@ impl ZRangeCommand {
         let start = items[2].try_parse_i64()?;
         let stop = items[3].try_parse_i64()?;
 
-        // Check for WITHSCORES flag
         let mut with_scores = false;
-        if items.len() > 4 {
-            for item in &items[4..] {
-                let Some(flag) = item.as_str_lossy() else {
-                    continue;
-                };
-
-                if flag.to_uppercase() == "WITHSCORES" {
-                    with_scores = true;
-                }
+        for item in &items[4..] {
+            let Some(flag) = item.as_str_lossy() else {
+                return Err(ProtocolError::SyntaxError);
+            };
+            if !flag.eq_ignore_ascii_case("WITHSCORES") {
+                return Err(ProtocolError::SyntaxError);
             }
+            with_scores = true;
         }
 
         Ok(ZRangeParams {
@@ -135,7 +132,32 @@ impl Command for ZRangeCommand {
         items: &[Value],
         server: &RedisServer,
     ) -> Result<Value, CacheCatError> {
+        if let Some(queue) = client.transaction_queue.as_mut() {
+            queue.push(self.raft_request(items)?);
+            return Ok(Value::queued());
+        }
+
         let params = self.read_operation(items)?;
         server.app.read(params, client.db_number).await
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn args(values: &[&str]) -> Vec<Value> {
+        values
+            .iter()
+            .map(|value| Value::BulkString(Some(Bytes::copy_from_slice(value.as_bytes()))))
+            .collect()
+    }
+
+    #[test]
+    fn rejects_unknown_options() {
+        assert_eq!(
+            ZRangeCommand::parse_args(&args(&["ZRANGE", "key", "0", "-1", "BOGUS"])).unwrap_err(),
+            ProtocolError::SyntaxError
+        );
     }
 }

@@ -182,6 +182,11 @@ pub struct Client {
     pub id: u64,
     pub db_number: u16,
     pub transaction_queue: Option<Vec<Operation>>,
+    /// Whether command validation failed while a MULTI transaction was open.
+    ///
+    /// Redis keeps the transaction queue after a queue-time error, but marks
+    /// it as unusable. EXEC then discards the queue and returns EXECABORT.
+    pub transaction_failed: bool,
     pub closed: bool,
     pub authenticated: bool,
     pub framed: Framed<Connection, RespCodec>,
@@ -200,6 +205,7 @@ impl Client {
             id,
             db_number: 0,
             transaction_queue: None,
+            transaction_failed: false,
             closed: false,
             authenticated: auth,
             framed: Framed::new(connection.into(), RespCodec::new()),
@@ -210,6 +216,15 @@ impl Client {
             last_cmd: "".to_string(),
             lib_name: "".to_string(),
             lib_ver: "".to_string(),
+        }
+    }
+
+    /// Mark the current transaction as unusable after a queue-time error.
+    /// This does nothing when MULTI is not active.
+    #[inline]
+    pub fn mark_transaction_failed(&mut self) {
+        if self.transaction_queue.is_some() {
+            self.transaction_failed = true;
         }
     }
 }
@@ -461,6 +476,15 @@ impl CommandFactory {
         "RESET",
     ];
 
+    #[inline]
+    fn mark_transaction_error(client: &mut Client, parsed: &ParsedCommand) {
+        // A valid nested MULTI is an immediate command error that does not
+        // dirty the transaction. Other command validation errors do.
+        if !(parsed.name == "MULTI" && parsed.items.len() == 1) {
+            client.mark_transaction_failed();
+        }
+    }
+
     /// Handle a command in blocking context (checking if it's allowed)
     async fn handle_command_in_blocking_context(
         &self,
@@ -478,6 +502,7 @@ impl CommandFactory {
                 let resp = match cmd.execute(client, &parsed.items, server).await {
                     Ok(v) => v,
                     Err(e) => {
+                        Self::mark_transaction_error(client, &parsed);
                         warn!("Command '{}' error: {}", parsed.name, e);
                         Value::from(e)
                     }
@@ -486,6 +511,7 @@ impl CommandFactory {
                 return Ok(());
             }
 
+            client.mark_transaction_failed();
             let resp = Value::from(ProtocolError::UnknownCommand(parsed.name));
             client.framed.send(resp).await?;
             return Ok(());
@@ -613,6 +639,10 @@ impl CommandFactory {
             let resp = match cmd.execute(client, &parsed.items, server).await {
                 Ok(v) => v,
                 Err(e) => {
+                    // MULTI queue-time errors make the whole transaction
+                    // abort at EXEC. A nested MULTI is a special command
+                    // error in Redis and leaves the transaction usable.
+                    Self::mark_transaction_error(client, &parsed);
                     warn!("Command '{}' error: {}", parsed.name, e);
                     Value::from(e)
                 }
@@ -634,6 +664,7 @@ impl CommandFactory {
                     return result;
                 }
                 Err(e) => {
+                    Self::mark_transaction_error(client, &parsed);
                     client.framed.send(Value::from(e)).await?;
                     return Ok(());
                 }
@@ -641,11 +672,16 @@ impl CommandFactory {
         }
 
         // Unknown command
+        client.mark_transaction_failed();
         let resp = Value::from(ProtocolError::UnknownCommand(parsed.name));
         client.framed.send(resp).await?;
         Ok(())
     }
 }
+
+#[cfg(test)]
+#[path = "transaction_tests.rs"]
+mod transaction_tests;
 
 #[cfg(test)]
 mod tests {

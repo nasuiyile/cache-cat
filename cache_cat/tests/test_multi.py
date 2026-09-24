@@ -27,9 +27,9 @@ return result
 """
 # pipe.eval(lua_script, 0)
 
-pipe.discard()
+# pipe.discard()
 # # 执行事务
-# result = pipe.execute()
+result = pipe.execute()
 #
 # # 输出返回的结果
 # print(result)

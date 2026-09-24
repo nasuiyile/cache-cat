@@ -11,7 +11,7 @@
 use crate::error::{CacheCatError, ProtocolError};
 use crate::mocha::EntrySnapshot;
 use crate::protocol::command::{Client, Command};
-use crate::protocol::raft_command::ReadRaftCommand;
+use crate::protocol::raft_command::{RaftCommand, ReadRaftCommand};
 use crate::raft::network::redis_server::RedisServer;
 use crate::raft::types::core::mocha::core::MyValue;
 use crate::raft::types::core::mocha::read_command::ReadCommand;
@@ -51,7 +51,11 @@ fn parse_score_range(value: &Bytes) -> Result<ScoreRange, ProtocolError> {
     if s.starts_with('(') {
         let score = s[1..]
             .parse::<f64>()
-            .map_err(|_| ProtocolError::InvalidArgument("score"))?;
+            .map_err(|_| ProtocolError::response("ERR min or max is not a float"))?;
+
+        if score.is_nan() {
+            return Err(ProtocolError::response("ERR min or max is not a float"));
+        }
 
         return Ok(ScoreRange {
             value: score,
@@ -66,8 +70,12 @@ fn parse_score_range(value: &Bytes) -> Result<ScoreRange, ProtocolError> {
 
         _ => s
             .parse::<f64>()
-            .map_err(|_| ProtocolError::InvalidArgument("score"))?,
+            .map_err(|_| ProtocolError::response("ERR min or max is not a float"))?,
     };
+
+    if score.is_nan() {
+        return Err(ProtocolError::response("ERR min or max is not a float"));
+    }
 
     Ok(ScoreRange {
         value: score,
@@ -189,8 +197,39 @@ impl Command for ZCountCommand {
 
         server: &RedisServer,
     ) -> Result<Value, CacheCatError> {
+        if let Some(queue) = client.transaction_queue.as_mut() {
+            queue.push(self.raft_request(items)?);
+            return Ok(Value::queued());
+        }
+
         let params = self.read_operation(items)?;
 
         server.app.read(params, client.db_number).await
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn args(values: &[&str]) -> Vec<Value> {
+        values
+            .iter()
+            .map(|value| Value::BulkString(Some(Bytes::copy_from_slice(value.as_bytes()))))
+            .collect()
+    }
+
+    #[test]
+    fn rejects_nan_boundaries() {
+        for boundary in ["NaN", "nan", "-nan", "(NaN", "invalid"] {
+            for bounds in [[boundary, "+inf"], ["-inf", boundary]] {
+                assert_eq!(
+                    ZCountCommand::parse_args(&args(&["ZCOUNT", "key", bounds[0], bounds[1]]))
+                        .unwrap_err()
+                        .to_string(),
+                    "ERR min or max is not a float"
+                );
+            }
+        }
     }
 }

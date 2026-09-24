@@ -2,6 +2,7 @@ use crate::error::{CacheCatError, ProtocolError};
 use crate::protocol::command::{Client, Command};
 use crate::raft::network::redis_server::RedisServer;
 use crate::raft::types::core::response_value::Value;
+use crate::raft::types::entry::request::{Operation, RedisOperation};
 use async_trait::async_trait;
 use bytes::Bytes;
 
@@ -67,12 +68,14 @@ impl Command for PingCommand {
             Ok(p) => p,
             Err(e) => return Err(e.into()),
         };
-        // Check if we're in a transaction
-        if let Some(_vec) = client.transaction_queue.as_mut() {}
-        // Execute the command
-        match params.message {
-            None => Ok(Value::SimpleString("PONG".to_string())),
-            Some(message) => Ok(Value::BulkString(Some(message))),
+        let response = match params.message {
+            None => Value::SimpleString("PONG".to_string()),
+            Some(message) => Value::BulkString(Some(message)),
+        };
+        if let Some(queue) = client.transaction_queue.as_mut() {
+            queue.push(Operation::Redis(RedisOperation::RedisReply(response)));
+            return Ok(Value::queued());
         }
+        Ok(response)
     }
 }

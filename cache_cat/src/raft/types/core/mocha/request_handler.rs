@@ -215,6 +215,7 @@ pub fn do_request(
                 Value::Array(Some(vec))
             }
             RedisOperation::RedisUnlink(param) => my_cache.redis_unlink(param, update, external),
+            RedisOperation::RedisReply(value) => value,
         },
     };
     if external {

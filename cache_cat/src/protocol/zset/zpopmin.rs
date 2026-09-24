@@ -87,6 +87,11 @@ impl Command for ZPopMinCommand {
         items: &[Value],
         server: &RedisServer,
     ) -> Result<Value, CacheCatError> {
+        if let Some(queue) = client.transaction_queue.as_mut() {
+            queue.push(self.raft_request(items)?);
+            return Ok(Value::queued());
+        }
+
         // Parse arguments
         let operation = self.raft_request(items)?;
         let value = server.app.write(operation, client.db_number).await?;

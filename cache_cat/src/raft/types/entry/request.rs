@@ -84,6 +84,9 @@ pub enum RedisOperation {
     RedisEval(EvalParams),
     RedisExec(ExecParams),
     RedisUnlink(UnlinkParams),
+    /// A deterministic connection-level reply captured while queueing a
+    /// command such as PING or ECHO in MULTI.
+    RedisReply(crate::raft::types::core::response_value::Value),
 }
 
 impl fmt::Display for Request {
@@ -200,6 +203,7 @@ impl fmt::Display for Request {
                 RedisOperation::RedisRenameNx(req) => write!(f, "RedisRenameNx: {}", req),
                 RedisOperation::RedisGetSet(req) => write!(f, "RedisGetSet: {}", req),
                 RedisOperation::RedisUnlink(req) => write!(f, "RedisUnlink: {}", req),
+                RedisOperation::RedisReply(req) => write!(f, "RedisReply: {:?}", req),
             },
         }
     }

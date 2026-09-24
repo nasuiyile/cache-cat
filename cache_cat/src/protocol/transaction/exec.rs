@@ -31,17 +31,30 @@ impl Command for ExecCommand {
             return Err(ProtocolError::WrongArgCount("EXEC").into());
         }
         // If no transaction has been initiated
-        let params = client
+        let queue = client
             .transaction_queue
             .take()
-            .map(|queue| RedisOperation::RedisExec(ExecParams { operations: queue }))
             .ok_or(ProtocolError::response("ERR EXEC without MULTI"))?;
+
+        // EXEC always ends MULTI, including the abort path. A queue-time
+        // validation error discards every queued operation and does not enter
+        // the Raft state machine.
+        let transaction_failed = client.transaction_failed;
+        client.transaction_failed = false;
+        client.flag.multi = false;
+        if transaction_failed {
+            return Err(ProtocolError::response(
+                "EXECABORT Transaction discarded because of previous errors.",
+            )
+            .into());
+        }
+
+        let params = RedisOperation::RedisExec(ExecParams { operations: queue });
 
         let value = server
             .app
             .write(Operation::Redis(params), client.db_number)
             .await?;
-        client.flag.multi = false;
         Ok(value)
     }
 }

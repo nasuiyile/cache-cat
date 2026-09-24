@@ -1,7 +1,7 @@
 use crate::error::{CacheCatError, ProtocolError};
 use crate::mocha::EntrySnapshot;
 use crate::protocol::command::{Client, Command};
-use crate::protocol::raft_command::ReadRaftCommand;
+use crate::protocol::raft_command::{RaftCommand, ReadRaftCommand};
 use crate::raft::network::redis_server::RedisServer;
 use crate::raft::types::core::mocha::core::MyValue;
 use crate::raft::types::core::mocha::read_command::ReadCommand;
@@ -110,8 +110,7 @@ impl ZRangeByScoreCommand {
             let mut i = 4;
             while i < items.len() {
                 let Some(flag) = items[i].as_str_lossy() else {
-                    i += 1;
-                    continue;
+                    return Err(ProtocolError::SyntaxError);
                 };
 
                 match flag.to_uppercase().as_str() {
@@ -131,8 +130,7 @@ impl ZRangeByScoreCommand {
                         i += 3;
                     }
                     _ => {
-                        // Unknown flag, skip
-                        i += 1;
+                        return Err(ProtocolError::SyntaxError);
                     }
                 }
             }
@@ -156,7 +154,7 @@ impl ZRangeByScoreCommand {
             }
             Value::SimpleString(s) => Self::parse_score_string(s),
             Value::Integer(n) => Ok(*n as f64),
-            _ => Err(ProtocolError::InvalidArgument("score")),
+            _ => Err(ProtocolError::response("ERR min or max is not a float")),
         }
     }
 
@@ -165,9 +163,15 @@ impl ZRangeByScoreCommand {
         match s_upper.as_str() {
             "-INF" | "-INFINITY" => Ok(f64::NEG_INFINITY),
             "+INF" | "+INFINITY" => Ok(f64::INFINITY),
-            _ => s
-                .parse::<f64>()
-                .map_err(|_| ProtocolError::InvalidArgument("score")),
+            _ => {
+                let score = s
+                    .parse::<f64>()
+                    .map_err(|_| ProtocolError::response("ERR min or max is not a float"))?;
+                if score.is_nan() {
+                    return Err(ProtocolError::response("ERR min or max is not a float"));
+                }
+                Ok(score)
+            }
         }
     }
 
@@ -204,7 +208,58 @@ impl Command for ZRangeByScoreCommand {
         items: &[Value],
         server: &RedisServer,
     ) -> Result<Value, CacheCatError> {
+        if let Some(queue) = client.transaction_queue.as_mut() {
+            queue.push(self.raft_request(items)?);
+            return Ok(Value::queued());
+        }
+
         let params = self.read_operation(items)?;
         server.app.read(params, client.db_number).await
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn args(values: &[&str]) -> Vec<Value> {
+        values
+            .iter()
+            .map(|value| Value::BulkString(Some(Bytes::copy_from_slice(value.as_bytes()))))
+            .collect()
+    }
+
+    #[test]
+    fn rejects_unknown_options() {
+        assert_eq!(
+            ZRangeByScoreCommand::parse_args(&args(&[
+                "ZRANGEBYSCORE",
+                "key",
+                "-inf",
+                "+inf",
+                "BOGUS",
+            ]))
+            .unwrap_err(),
+            ProtocolError::SyntaxError
+        );
+    }
+
+    #[test]
+    fn rejects_nan_scores() {
+        for boundary in ["NaN", "nan", "-nan", "invalid"] {
+            for bounds in [[boundary, "+inf"], ["-inf", boundary]] {
+                assert_eq!(
+                    ZRangeByScoreCommand::parse_args(&args(&[
+                        "ZRANGEBYSCORE",
+                        "key",
+                        bounds[0],
+                        bounds[1],
+                    ]))
+                    .unwrap_err()
+                    .to_string(),
+                    "ERR min or max is not a float"
+                );
+            }
+        }
     }
 }
