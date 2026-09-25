@@ -1,7 +1,7 @@
 use crate::error::{CacheCatError, ProtocolError};
 use crate::mocha::{EntrySnapshot, ExpirePolicy, MochaOperation};
 use crate::protocol::command::{Client, Command};
-use crate::protocol::key::expire::ExpireCondition;
+use crate::protocol::key::expire::{ExpireCondition, parse_expire_conditions};
 use crate::protocol::raft_command::RaftCommand;
 use crate::raft::network::redis_server::RedisServer;
 use crate::raft::types::core::mocha::cas::ComputeCommand;
@@ -20,7 +20,7 @@ use std::fmt::Display;
 #[derive(Debug, Clone, PartialEq)]
 pub struct PExpireParams {
     pub key: Bytes,
-    pub milliseconds: u64,
+    pub milliseconds: i64,
     pub condition: Option<ExpireCondition>,
 }
 
@@ -39,24 +39,9 @@ impl PExpireParams {
             .string_bytes_clone()
             .ok_or(ProtocolError::InvalidArgument("key"))?;
 
-        let milliseconds = items[2].try_parse_u64()?;
+        let milliseconds = items[2].try_parse_canonical_i64()?;
 
-        let condition = if items.len() >= 4 {
-            let flag = items[3]
-                .as_str_lossy()
-                .ok_or(ProtocolError::WrongArgCount("pexpire"))?
-                .to_uppercase();
-
-            match flag.as_str() {
-                "NX" => Some(ExpireCondition::Nx),
-                "XX" => Some(ExpireCondition::Xx),
-                "GT" => Some(ExpireCondition::Gt),
-                "LT" => Some(ExpireCondition::Lt),
-                _ => return Err(ProtocolError::SyntaxError),
-            }
-        } else {
-            None
-        };
+        let condition = parse_expire_conditions(items)?;
 
         Ok(PExpireParams {
             key,
@@ -104,7 +89,7 @@ impl Command for PExpireCommand {
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct PExpireReq {
     pub key: Bytes,
-    pub expires_at: u64,
+    pub expires_at: i64,
     pub condition: Option<ExpireCondition>,
 }
 
@@ -134,28 +119,20 @@ impl ComputeCommand for PExpireReq {
         entry: EntrySnapshot<MyValue>,
         write_clock: u64,
     ) -> (MochaOperation<MyValue>, Value) {
-        let expires_at = self.expires_at + write_clock;
-        let should_update = match self.condition {
-            None => true,
-            Some(ref condition) => match condition {
-                ExpireCondition::Nx => entry.expire_at.is_none(),
-                ExpireCondition::Xx => entry.expire_at.is_some(),
-                ExpireCondition::Gt => {
-                    match entry.expire_at {
-                        None => false,                       // 无过期 = 无穷大，新过期不可能大于无穷大
-                        Some(expire) => expire < expires_at, // 旧 < 新，即新 > 旧
-                    }
-                }
-                ExpireCondition::Lt => {
-                    match entry.expire_at {
-                        None => true,                        // 无过期 = 无穷大，新过期一定小于无穷大
-                        Some(expire) => expire > expires_at, // 旧 > 新，即新 < 旧
-                    }
-                }
-            },
+        // Redis treats a non-positive timeout as an immediate deletion.
+        let expires_at = if self.expires_at <= 0 {
+            0
+        } else {
+            write_clock.saturating_add(self.expires_at as u64)
         };
+        let should_update = self.condition.as_ref().map_or(true, |condition| {
+            condition.allows(entry.expire_at, expires_at)
+        });
         if !should_update {
             return (MochaOperation::Abort, Value::Integer(0));
+        }
+        if expires_at <= write_clock {
+            return (MochaOperation::Remove, Value::Integer(1));
         }
         (
             MochaOperation::Insert {

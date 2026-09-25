@@ -24,13 +24,97 @@ pub enum ExpireCondition {
     Gt,
     /// LT - Only set expiration if new TTL is LESS than current TTL
     Lt,
+    /// A compatible combination of the flags above (for example XX GT).
+    Multiple(Vec<ExpireCondition>),
+}
+
+impl ExpireCondition {
+    pub(crate) fn allows(&self, current_expire: Option<u64>, new_expire: u64) -> bool {
+        match self {
+            Self::Nx => current_expire.is_none(),
+            Self::Xx => current_expire.is_some(),
+            Self::Gt => match current_expire {
+                None => false,
+                Some(expire) => expire < new_expire,
+            },
+            Self::Lt => match current_expire {
+                None => true,
+                Some(expire) => expire > new_expire,
+            },
+            Self::Multiple(conditions) => conditions
+                .iter()
+                .all(|condition| condition.allows(current_expire, new_expire)),
+        }
+    }
+}
+
+pub(crate) fn parse_expire_conditions(
+    items: &[Value],
+) -> Result<Option<ExpireCondition>, ProtocolError> {
+    if items.len() <= 3 {
+        return Ok(None);
+    }
+
+    let mut conditions = Vec::with_capacity(items.len() - 3);
+    let mut has_nx = false;
+    let mut has_xx = false;
+    let mut has_gt = false;
+    let mut has_lt = false;
+
+    for item in &items[3..] {
+        let flag = item
+            .as_str_lossy()
+            .ok_or(ProtocolError::SyntaxError)?
+            .to_uppercase();
+        let condition = match flag.as_str() {
+            "NX" => {
+                has_nx = true;
+                ExpireCondition::Nx
+            }
+            "XX" => {
+                has_xx = true;
+                ExpireCondition::Xx
+            }
+            "GT" => {
+                has_gt = true;
+                ExpireCondition::Gt
+            }
+            "LT" => {
+                has_lt = true;
+                ExpireCondition::Lt
+            }
+            _ => {
+                return Err(ProtocolError::response(format!(
+                    "ERR Unsupported option {flag}"
+                )));
+            }
+        };
+        conditions.push(condition);
+    }
+
+    if (has_nx && (has_xx || has_gt || has_lt)) || (has_gt && has_lt) {
+        if has_nx {
+            return Err(ProtocolError::response(
+                "ERR NX and XX, GT or LT options at the same time are not compatible",
+            ));
+        }
+        return Err(ProtocolError::response(
+            "ERR GT and LT options at the same time are not compatible",
+        ));
+    }
+
+    Ok(if conditions.len() == 1 {
+        Some(conditions.pop().expect("one condition"))
+    } else {
+        Some(ExpireCondition::Multiple(conditions))
+    })
 }
 
 /// EXPIRE command parameters
 #[derive(Debug, Clone, PartialEq)]
 pub struct ExpireParams {
     pub key: Bytes,
-    pub seconds: u64,
+    pub seconds: i64,
     pub condition: Option<ExpireCondition>,
 }
 
@@ -47,25 +131,9 @@ impl ExpireParams {
             .string_bytes_clone()
             .ok_or(ProtocolError::InvalidArgument("key"))?;
 
-        let seconds = items[2].try_parse_u64()?;
+        let seconds = items[2].try_parse_canonical_i64()?;
 
-        // Parse optional condition flag
-        let condition = if items.len() >= 4 {
-            let flag = items[3]
-                .as_str_lossy()
-                .ok_or(ProtocolError::WrongArgCount("expire"))?
-                .to_uppercase();
-
-            match flag.as_str() {
-                "NX" => Some(ExpireCondition::Nx),
-                "XX" => Some(ExpireCondition::Xx),
-                "GT" => Some(ExpireCondition::Gt),
-                "LT" => Some(ExpireCondition::Lt),
-                _ => return Err(ProtocolError::SyntaxError),
-            }
-        } else {
-            None
-        };
+        let condition = parse_expire_conditions(items)?;
 
         Ok(ExpireParams {
             key,
@@ -81,6 +149,11 @@ pub struct ExpireCommand;
 impl RaftCommand for ExpireCommand {
     fn raft_request(&self, items: &[Value]) -> Result<Operation, ProtocolError> {
         let params = ExpireParams::parse(items)?;
+        if params.seconds.checked_mul(1000).is_none() {
+            return Err(ProtocolError::response(
+                "ERR invalid expire time in 'expire' command",
+            ));
+        }
         let req = ExpireReq {
             key: params.key,
             expires_at: params.seconds,
@@ -111,7 +184,7 @@ impl Command for ExpireCommand {
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct ExpireReq {
     pub key: Bytes,
-    pub expires_at: u64,
+    pub expires_at: i64,
     pub condition: Option<ExpireCondition>,
 }
 
@@ -141,28 +214,25 @@ impl ComputeCommand for ExpireReq {
         entry: EntrySnapshot<MyValue>,
         write_clock: u64,
     ) -> (MochaOperation<MyValue>, Value) {
-        let expires_at = self.expires_at * 1000 + write_clock;
-        let should_update = match self.condition {
-            None => true,
-            Some(ref condition) => match condition {
-                ExpireCondition::Nx => entry.expire_at.is_none(),
-                ExpireCondition::Xx => entry.expire_at.is_some(),
-                ExpireCondition::Gt => {
-                    match entry.expire_at {
-                        None => false,                       // 无过期 = 无穷大，新过期不可能大于无穷大
-                        Some(expire) => expire < expires_at, // 旧 < 新，即新 > 旧
-                    }
-                }
-                ExpireCondition::Lt => {
-                    match entry.expire_at {
-                        None => true,                        // 无过期 = 无穷大，新过期一定小于无穷大
-                        Some(expire) => expire > expires_at, // 旧 > 新，即新 < 旧
-                    }
-                }
-            },
+        // Redis treats a non-positive timeout as an immediate deletion.  Keep
+        // the deadline at zero for that case so the condition checks below
+        // still compare it as an earlier deadline than every live key.
+        let expires_at = if self.expires_at <= 0 {
+            0
+        } else {
+            let milliseconds = (self.expires_at as u64)
+                .checked_mul(1000)
+                .unwrap_or(u64::MAX);
+            write_clock.saturating_add(milliseconds)
         };
+        let should_update = self.condition.as_ref().map_or(true, |condition| {
+            condition.allows(entry.expire_at, expires_at)
+        });
         if !should_update {
             return (MochaOperation::Abort, Value::Integer(0));
+        }
+        if expires_at <= write_clock {
+            return (MochaOperation::Remove, Value::Integer(1));
         }
         (
             MochaOperation::Insert {

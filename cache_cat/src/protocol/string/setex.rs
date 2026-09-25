@@ -45,7 +45,12 @@ impl SetExCommand {
             .string_bytes_clone()
             .ok_or(ProtocolError::InvalidArgument("key"))?;
 
-        let seconds = items[2].try_parse_u64()?;
+        let seconds = items[2].try_parse_canonical_i64()?;
+        if seconds <= 0 {
+            return Err(ProtocolError::response(
+                "ERR invalid expire time in 'setex' command",
+            ));
+        }
 
         let value = items[3]
             .string_bytes_clone()
@@ -55,7 +60,9 @@ impl SetExCommand {
             key,
             value,
             // Convert seconds to milliseconds, continue reusing Px
-            expiration: seconds * 1000,
+            expiration: (seconds as u64).checked_mul(1000).ok_or_else(|| {
+                ProtocolError::response("ERR invalid expire time in 'setex' command")
+            })?,
         })
     }
 }

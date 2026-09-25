@@ -82,6 +82,22 @@ impl SetParams {
         }
     }
 
+    fn invalid_expire_time() -> ProtocolError {
+        ProtocolError::response("ERR invalid expire time in 'set' command")
+    }
+
+    fn parse_positive_expiration(value: &Value, unit: &str) -> Result<u64, ProtocolError> {
+        let value = value.try_parse_canonical_i64()?;
+        if value <= 0 {
+            return Err(Self::invalid_expire_time());
+        }
+        let value = value as u64;
+        if matches!(unit, "EX" | "EXAT") && value.checked_mul(1000).is_none() {
+            return Err(Self::invalid_expire_time());
+        }
+        Ok(value)
+    }
+
     /// Parse SET command parameters from RESP array items
     /// Format: SET key value [NX | XX] [GET] [EX seconds | PX milliseconds | EXAT timestamp | PXAT milliseconds-timestamp | KEEPTTL]
     fn parse(items: &[Value]) -> Result<Self, ProtocolError> {
@@ -131,7 +147,7 @@ impl SetParams {
                     if params.expiration.is_some() || i + 1 >= items.len() {
                         return Err(ProtocolError::SyntaxError);
                     }
-                    let seconds = items[i + 1].try_parse_u64()?;
+                    let seconds = Self::parse_positive_expiration(&items[i + 1], "EX")?;
                     params.expiration = Some(Expiration::Ex(seconds));
                     i += 2;
                 }
@@ -139,7 +155,7 @@ impl SetParams {
                     if params.expiration.is_some() || i + 1 >= items.len() {
                         return Err(ProtocolError::SyntaxError);
                     }
-                    let milliseconds = items[i + 1].try_parse_u64()?;
+                    let milliseconds = Self::parse_positive_expiration(&items[i + 1], "PX")?;
                     params.expiration = Some(Expiration::Px(milliseconds));
                     i += 2;
                 }
@@ -147,7 +163,7 @@ impl SetParams {
                     if params.expiration.is_some() || i + 1 >= items.len() {
                         return Err(ProtocolError::SyntaxError);
                     }
-                    let timestamp = items[i + 1].try_parse_u64()?;
+                    let timestamp = Self::parse_positive_expiration(&items[i + 1], "EXAT")?;
                     params.expiration = Some(Expiration::ExAt(timestamp));
                     i += 2;
                 }
@@ -155,7 +171,7 @@ impl SetParams {
                     if params.expiration.is_some() || i + 1 >= items.len() {
                         return Err(ProtocolError::SyntaxError);
                     }
-                    let timestamp = items[i + 1].try_parse_u64()?;
+                    let timestamp = Self::parse_positive_expiration(&items[i + 1], "PXAT")?;
                     params.expiration = Some(Expiration::PxAt(timestamp));
                     i += 2;
                 }

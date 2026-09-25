@@ -63,15 +63,18 @@ impl ReadCommand for TtlParams {
                     Some(expire_at) => {
                         // Get current time in milliseconds
                         let now = now_ms();
+                        if now >= expire_at {
+                            return Value::Integer(-2);
+                        }
                         // Calculate remaining TTL in milliseconds
-                        let ttl_ms = expire_at - now;
+                        let ttl_ms = expire_at.saturating_sub(now);
 
-                        // Convert milliseconds to seconds, rounding up
-                        // If TTL is positive but less than 1 second, return 1
-                        // to match Redis behavior
-                        let ttl_sec = ttl_ms.div_ceil(1000) as i64;
+                        // Redis reports TTL in seconds rounded to the nearest
+                        // second. Saturating avoids overflow at the upper
+                        // edge of the u64 timestamp range.
+                        let ttl_sec = ttl_ms.saturating_add(500) / 1000;
 
-                        Value::Integer(ttl_sec)
+                        Value::Integer(ttl_sec.min(i64::MAX as u64) as i64)
                     }
                 }
             }

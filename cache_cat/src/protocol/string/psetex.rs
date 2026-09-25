@@ -45,7 +45,12 @@ impl PSetExCommand {
             .string_bytes_clone()
             .ok_or(ProtocolError::InvalidArgument("key"))?;
 
-        let milliseconds = items[2].try_parse_u64()?;
+        let milliseconds = items[2].try_parse_canonical_i64()?;
+        if milliseconds <= 0 {
+            return Err(ProtocolError::response(
+                "ERR invalid expire time in 'psetex' command",
+            ));
+        }
 
         let value = items[3]
             .string_bytes_clone()
@@ -54,7 +59,7 @@ impl PSetExCommand {
         Ok(PSetExParams {
             key,
             value,
-            expiration: milliseconds,
+            expiration: milliseconds as u64,
         })
     }
 }

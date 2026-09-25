@@ -68,9 +68,9 @@ impl MyCache {
                 }
             }
             Some(exp) => match exp {
-                Expiration::Ex(seconds) => now + seconds * 1000,
-                Expiration::Px(millis) => now + millis,
-                Expiration::ExAt(timestamp) => timestamp * 1000,
+                Expiration::Ex(seconds) => now.saturating_add(seconds.saturating_mul(1000)),
+                Expiration::Px(millis) => now.saturating_add(millis),
+                Expiration::ExAt(timestamp) => timestamp.saturating_mul(1000),
                 Expiration::PxAt(timestamp) => timestamp,
                 Expiration::KeepTTL => unreachable!(), // Handled above
             },
@@ -182,7 +182,7 @@ impl MyCache {
 
         // SetExParams stores the parsed duration in milliseconds, matching
         // PSETEX and the logical clock units used by the cache.
-        let expires_at = now + params.expiration;
+        let expires_at = now.saturating_add(params.expiration);
 
         let set = SetReq {
             key: params.key,
@@ -199,7 +199,7 @@ impl MyCache {
         // The latest write logic time
         let now = update.write_clock;
 
-        let expires_at = now + params.expiration;
+        let expires_at = now.saturating_add(params.expiration);
 
         let set = SetReq {
             key: params.key,

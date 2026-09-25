@@ -63,9 +63,12 @@ impl ReadCommand for PTtlParams {
                     Some(expire_at) => {
                         // Get current time in milliseconds
                         let now = now_ms();
+                        if now >= expire_at {
+                            return Value::Integer(-2);
+                        }
                         // Calculate remaining TTL in milliseconds
-                        let ttl = (expire_at - now) as i64;
-                        Value::Integer(ttl)
+                        let ttl = expire_at.saturating_sub(now);
+                        Value::Integer(ttl.min(i64::MAX as u64) as i64)
                     }
                 }
             }
