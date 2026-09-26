@@ -17,7 +17,7 @@ use std::fmt::Display;
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct EvalParams {
     /// The Lua script to execute
-    pub script: String,
+    pub script: Bytes,
     /// Number of keys
     pub numkeys: usize,
     /// Key names
@@ -39,12 +39,9 @@ impl Display for EvalParams {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(
             f,
-            "EVAL {} ({} keys, {} args)",
-            if self.script.len() > 20 {
-                format!("{}...", &self.script[..20])
-            } else {
-                self.script.clone()
-            },
+            "EVAL {}{} ({} keys, {} args)",
+            String::from_utf8_lossy(&self.script[..self.script.len().min(20)]),
+            if self.script.len() > 20 { "..." } else { "" },
             self.numkeys,
             self.args.len()
         )
@@ -53,7 +50,7 @@ impl Display for EvalParams {
 
 impl EvalParams {
     /// Create a new EvalParams
-    pub fn new(script: String, numkeys: usize, keys: Vec<Bytes>, args: Vec<Bytes>) -> Self {
+    pub fn new(script: Bytes, numkeys: usize, keys: Vec<Bytes>, args: Vec<Bytes>) -> Self {
         Self {
             script,
             numkeys,
@@ -73,9 +70,8 @@ impl EvalParams {
 
         // Parse script
         let script = items[1]
-            .as_str_lossy()
-            .ok_or(ProtocolError::InvalidArgument("script"))?
-            .into_owned();
+            .string_bytes_clone()
+            .ok_or(ProtocolError::InvalidArgument("script"))?;
 
         // Parse numkeys
         let numkeys = items[2].try_parse_usize()?;
@@ -146,5 +142,85 @@ impl Command for EvalCommand {
         }
         let result = server.app.write(operation, client.db_number).await?;
         Ok(result)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::raft::types::core::mocha::core::{MyCache, Update, UpdateType};
+    use crate::raft::types::core::mocha::request_handler::do_request;
+
+    fn execute(cache: &MyCache, parts: &[&[u8]]) -> Value {
+        let items: Vec<_> = parts
+            .iter()
+            .map(|part| Value::BulkString(Some(Bytes::copy_from_slice(part))))
+            .collect();
+        let operation = EvalCommand.raft_request(&items).unwrap();
+        // Exercise the same serialization used for replicated operations.
+        let encoded = bincode2::serialize(&operation).unwrap();
+        let operation: Operation = bincode2::deserialize(&encoded).unwrap();
+        let mut update_type = UpdateType::None;
+        let mut update = Update {
+            db_number: 0,
+            write_clock: 0,
+            update_type: &mut update_type,
+        };
+        do_request(cache, operation, &mut update, true)
+    }
+
+    #[test]
+    fn lua_calls_preserve_binary_keys_and_values() {
+        let cache = MyCache::new(1).unwrap();
+        let key = b"key\xff\0\r\n";
+        let value = b"value\xfe\0\r\n";
+        for function in ["call", "pcall"] {
+            let script = format!(
+                "redis.{function}('SET', KEYS[1], ARGV[1]); return redis.{function}('GET', KEYS[1])"
+            );
+            assert_eq!(
+                execute(&cache, &[b"EVAL", script.as_bytes(), b"1", key, value]).encode(),
+                Value::BulkString(Some(Bytes::copy_from_slice(value))).encode()
+            );
+            // Lua numbers must still be accepted as command arguments.
+            let script = format!(
+                "redis.{function}('SET', KEYS[1], 123); return redis.{function}('GET', KEYS[1])"
+            );
+            assert_eq!(
+                execute(&cache, &[b"EVAL", script.as_bytes(), b"1", key]).encode(),
+                b"$3\r\n123\r\n"
+            );
+        }
+        assert_eq!(
+            execute(&cache, &[b"EVAL", b"return ARGV[1]", b"0", value]).encode(),
+            Value::BulkString(Some(Bytes::copy_from_slice(value))).encode()
+        );
+    }
+
+    #[test]
+    fn eval_preserves_binary_source_in_replication_and_compiled_cache() {
+        let cache = MyCache::new(1).unwrap();
+        for byte in [0xff, 0xfe, 0xff] {
+            let mut script = b"return \"".to_vec();
+            script.extend_from_slice(&[byte, b'"']);
+            assert_eq!(
+                execute(&cache, &[b"EVAL", &script, b"0"]).encode(),
+                vec![b'$', b'1', b'\r', b'\n', byte, b'\r', b'\n']
+            );
+        }
+    }
+
+    #[test]
+    fn eval_rejects_precompiled_lua_bytecode() {
+        let cache = MyCache::new(1).unwrap();
+        let bytecode = mlua::Lua::new()
+            .load("return 123")
+            .into_function()
+            .unwrap()
+            .dump(false);
+        assert!(matches!(
+            execute(&cache, &[b"EVAL", &bytecode, b"0"]),
+            Value::Error(_)
+        ));
     }
 }

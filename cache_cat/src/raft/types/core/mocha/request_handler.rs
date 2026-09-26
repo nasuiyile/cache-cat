@@ -367,7 +367,7 @@ mod tests {
                 operations: vec![xadd(&key, AddId::Auto)],
             })),
             Operation::Redis(RedisOperation::RedisEval(EvalParams {
-                script: "return redis.call('XADD', KEYS[1], '*', 'field', 'value')".to_owned(),
+                script: "return redis.call('XADD', KEYS[1], '*', 'field', 'value')".into(),
                 numkeys: 1,
                 keys: vec![key.clone()],
                 args: vec![],
@@ -456,7 +456,7 @@ mod tests {
                 ],
             })),
             Operation::Redis(RedisOperation::RedisEval(EvalParams {
-                script: "redis.call('XADD', KEYS[1], '*', 'field', 'value'); return redis.call('DEL', KEYS[1])".to_owned(),
+                script: "redis.call('XADD', KEYS[1], '*', 'field', 'value'); return redis.call('DEL', KEYS[1])".into(),
                 numkeys: 1,
                 keys: vec![key.clone()],
                 args: vec![],

@@ -13,7 +13,7 @@ pub struct HelloParam {
     /// its current protocol and the command just reports the context.
     pub proto_version: Option<u8>,
     pub username: Option<String>,
-    pub password: Option<String>,
+    pub password: Option<Bytes>,
     pub client_name: Option<String>,
 }
 
@@ -111,13 +111,13 @@ impl HelloParam {
                         return Err(ProtocolError::WrongArgCount("HELLO AUTH missing password"));
                     }
                     let auth_password = match &items[idx] {
-                        Value::BulkString(Some(data)) => String::from_utf8_lossy(data).to_string(),
+                        Value::BulkString(Some(data)) => data.clone(),
                         Value::BulkString(None) => {
                             return Err(ProtocolError::InvalidArgument(
                                 "AUTH password cannot be null",
                             ));
                         }
-                        Value::SimpleString(s) => s.clone(),
+                        Value::SimpleString(s) => Bytes::copy_from_slice(s.as_bytes()),
                         _ => {
                             return Err(ProtocolError::InvalidArgument(
                                 "AUTH password must be string",
@@ -185,7 +185,7 @@ impl Command for HelloCommand {
             // Validate password against server config
             match &server.app.config.password {
                 Some(configured_password) => {
-                    if password != configured_password {
+                    if password.as_ref() != configured_password.as_bytes() {
                         return Err(ProtocolError::AuthenticationFailed.into());
                     }
                     client.authenticated = true;

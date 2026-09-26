@@ -22,8 +22,8 @@ pub struct LuaEnv {
     lua: Lua,
     raft_command: RaftCommandFactory,
     // Script content → Cache of compiled functions
-    script_cache: Mutex<LruCache<String, mlua::Function>>,
-    pub script_map: Mutex<HashMap<String, String>>,
+    script_cache: Mutex<LruCache<Bytes, mlua::Function>>,
+    pub script_map: Mutex<HashMap<String, Bytes>>,
     // Set to false at runtime, set to true at end
     interrupt_flag: Arc<AtomicBool>,
 }
@@ -79,7 +79,7 @@ impl LuaEnv {
     pub fn exec_lua(
         &self,
         cache: &MyCache,
-        script: &str,
+        script: &[u8],
         keys: &[Bytes],
         args: &[Bytes],
         update: &mut Update,
@@ -117,7 +117,7 @@ impl LuaEnv {
             // Errors will be thrown directly upwards, interrupting script execution
             let call_resp = script_resp.clone();
             let redis_call =
-                scope.create_function_mut(move |_lua_ctx, args: Variadic<String>| {
+                scope.create_function_mut(move |_lua_ctx, args: Variadic<mlua::String>| {
                     if args.is_empty() {
                         return Err(LuaError::external(
                             "redis.call requires at least one argument",
@@ -125,7 +125,9 @@ impl LuaEnv {
                     }
                     let mut vec = Vec::new();
                     for param in args {
-                        vec.push(Value::SimpleString(param));
+                        vec.push(Value::BulkString(Some(Bytes::copy_from_slice(
+                            &param.as_bytes(),
+                        ))));
                     }
 
                     // SAFETY:
@@ -151,7 +153,7 @@ impl LuaEnv {
             // and the script can continue to execute
             let pcall_resp = script_resp.clone();
             let redis_pcall =
-                scope.create_function_mut(move |_lua_ctx, args: Variadic<String>| {
+                scope.create_function_mut(move |_lua_ctx, args: Variadic<mlua::String>| {
                     if args.is_empty() {
                         return Err(LuaError::external(
                             "redis.pcall requires at least one argument",
@@ -159,7 +161,9 @@ impl LuaEnv {
                     }
                     let mut vec = Vec::new();
                     for param in args {
-                        vec.push(Value::SimpleString(param));
+                        vec.push(Value::BulkString(Some(Bytes::copy_from_slice(
+                            &param.as_bytes(),
+                        ))));
                     }
                     let update = unsafe { &mut *update_ptr };
 
@@ -245,7 +249,7 @@ impl LuaEnv {
 
     /// Retrieve compiled functions from cache,
     /// if not available, compile and store them in cache (LRU elimination)
-    fn get_or_compile_script(&self, script: &str) -> Result<mlua::Function, ProtocolError> {
+    fn get_or_compile_script(&self, script: &[u8]) -> Result<mlua::Function, ProtocolError> {
         if let Some(func) = self.script_cache.lock().get(script) {
             return Ok(func.clone());
         }
@@ -253,12 +257,13 @@ impl LuaEnv {
         let func = self
             .lua
             .load(script)
+            .set_mode(mlua::ChunkMode::Text)
             .into_function()
             .map_err(|e| ProtocolError::ScriptCompileError(e.to_string()))?;
 
         self.script_cache
             .lock()
-            .put(script.to_owned(), func.clone());
+            .put(Bytes::copy_from_slice(script), func.clone());
 
         Ok(func)
     }

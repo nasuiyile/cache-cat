@@ -448,8 +448,10 @@ impl CommandFactory {
         match value {
             Value::Array(Some(items)) if !items.is_empty() => {
                 let name = match &items[0] {
-                    Value::BulkString(Some(data)) => String::from_utf8_lossy(data).to_uppercase(),
-                    Value::SimpleString(s) => s.to_uppercase(),
+                    Value::BulkString(Some(data)) => {
+                        String::from_utf8_lossy(data).to_ascii_uppercase()
+                    }
+                    Value::SimpleString(s) => s.to_ascii_uppercase(),
                     _ => {
                         return Err(ProtocolError::InvalidFormat(
                             "invalid command name".to_string(),
@@ -694,6 +696,25 @@ mod tests {
     use tokio::net::{TcpListener, TcpStream};
     use tokio::sync::broadcast;
     use tokio::time::timeout;
+
+    #[test]
+    fn command_names_use_ascii_case_insensitivity() {
+        let factory = CommandFactory::init();
+        for (name, recognized) in [("sEt", true), ("ſet", false), ("pıng", false)] {
+            for value in [
+                Value::BulkString(Some(name.into())),
+                Value::SimpleString(name.into()),
+            ] {
+                let parsed =
+                    CommandFactory::parse_command(&Value::Array(Some(vec![value]))).unwrap();
+                assert_eq!(
+                    factory.commands.contains_key(&parsed.name),
+                    recognized,
+                    "{name}"
+                );
+            }
+        }
+    }
 
     #[tokio::test]
     async fn connection_commands_preserve_state_and_validate_arguments() {

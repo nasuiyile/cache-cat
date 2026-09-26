@@ -243,8 +243,8 @@ impl RaftCommandFactory {
 
     pub fn parse_request(&self, items: &[Value]) -> Result<Operation, ProtocolError> {
         let cmd_name = match &items[0] {
-            Value::BulkString(Some(data)) => String::from_utf8_lossy(data).to_uppercase(),
-            Value::SimpleString(s) => s.to_uppercase(),
+            Value::BulkString(Some(data)) => String::from_utf8_lossy(data).to_ascii_uppercase(),
+            Value::SimpleString(s) => s.to_ascii_uppercase(),
             _ => return Err(ProtocolError::InvalidArgument("command")),
         };
         match self.commands.get(&cmd_name) {
@@ -267,6 +267,29 @@ impl RaftCommandFactory {
 mod tests {
     use super::*;
     use crate::raft::types::entry::base_operation::BaseOperation;
+
+    #[test]
+    fn lua_command_names_use_ascii_case_insensitivity() {
+        let factory = RaftCommandFactory::init_lua();
+        for name in ["sEt", "ſet"] {
+            for value in [
+                Value::BulkString(Some(name.into())),
+                Value::SimpleString(name.into()),
+            ] {
+                let args = [
+                    value,
+                    Value::BulkString(Some("key".into())),
+                    Value::BulkString(Some("value".into())),
+                ];
+                let result = factory.parse_request(&args);
+                if name == "sEt" {
+                    assert!(result.is_ok(), "{result:?}");
+                } else {
+                    assert!(matches!(result, Err(ProtocolError::UnknownCommand(_))));
+                }
+            }
+        }
+    }
 
     #[test]
     fn lua_factory_dispatches_hmset_to_its_compute_operation() {

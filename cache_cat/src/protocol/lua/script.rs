@@ -3,6 +3,7 @@ use crate::protocol::command::{Client, Command};
 use crate::raft::network::redis_server::RedisServer;
 use crate::raft::types::core::response_value::Value;
 use async_trait::async_trait;
+use bytes::Bytes;
 use serde::{Deserialize, Serialize};
 use sha1::{Digest, Sha1};
 use std::fmt;
@@ -10,7 +11,7 @@ use std::fmt;
 /// SCRIPT LOAD args
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ScriptLoadParams {
-    pub script: String,
+    pub script: Bytes,
 }
 
 /// SCRIPT EXISTS args
@@ -52,7 +53,7 @@ impl fmt::Display for ScriptParam {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             ScriptParam::Load(params) => {
-                write!(f, "LOAD {}", params.script)
+                write!(f, "LOAD {}", String::from_utf8_lossy(&params.script))
             }
             ScriptParam::Exists(params) => {
                 write!(f, "EXISTS {}", params.sha1s.join(" "))
@@ -93,7 +94,9 @@ impl ScriptParam {
                 if items.len() != 3 {
                     return Err(ProtocolError::WrongArgCount("script|load"));
                 }
-                let script = string_from_value(&items[2], "script")?;
+                let script = items[2]
+                    .string_bytes_clone()
+                    .ok_or(ProtocolError::InvalidArgument("script"))?;
                 Ok(ScriptParam::Load(ScriptLoadParams { script }))
             }
             "EXISTS" => {
@@ -152,6 +155,62 @@ impl ScriptParam {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::cfg::config::Config;
+    use crate::node::parsed_config::ParsedConfig;
+    use crate::node::raft_node::RaftNode;
+    use crate::raft::types::core::mocha::core::{Update, UpdateType};
+    use tokio::net::{TcpListener, TcpStream};
+    use tokio::sync::broadcast;
+
+    #[tokio::test]
+    async fn script_load_hashes_and_caches_original_binary_source() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut config = Config::default();
+        config.raft.log_path = dir.path().to_str().unwrap().to_owned();
+        config.raft.address = "127.0.0.1:0".into();
+        config.redis.databases = 1;
+        let config = ParsedConfig::from(&config).unwrap();
+        let (shutdown_tx, _) = broadcast::channel(1);
+        let node = RaftNode::create(config, shutdown_tx).await.unwrap();
+        let server =
+            RedisServer::new(node.app.clone(), "127.0.0.1:0".into(), &node.app.config).unwrap();
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let _socket = TcpStream::connect(listener.local_addr().unwrap())
+            .await
+            .unwrap();
+        let (connection, _) = listener.accept().await.unwrap();
+        let mut client = Client::new(1, connection, true);
+        let script = Bytes::from_static(b"return \"\xff\"");
+        let items = [
+            Value::BulkString(Some(Bytes::from_static(b"SCRIPT"))),
+            Value::BulkString(Some(Bytes::from_static(b"LOAD"))),
+            Value::BulkString(Some(script.clone())),
+        ];
+        let reply = ScriptCommand
+            .execute(&mut client, &items, &server)
+            .await
+            .unwrap();
+        let sha = "a79a7ce2535773ad42464318e1933c041f18e32f";
+        assert_eq!(reply.encode(), format!("$40\r\n{sha}\r\n").as_bytes());
+        let cache = &server.app.state_machine.data.kvs;
+        let loaded = cache.lua_env.script_map.lock().get(sha).unwrap().clone();
+        assert_eq!(loaded, script);
+        let mut update_type = UpdateType::None;
+        let mut update = Update {
+            db_number: 0,
+            write_clock: 0,
+            update_type: &mut update_type,
+        };
+        assert_eq!(
+            cache
+                .lua_env
+                .exec_lua(cache, &loaded, &[], &[], &mut update, 2)
+                .unwrap()
+                .encode(),
+            b"$1\r\n\xff\r\n"
+        );
+        node.app.cluster.shutdown().await.unwrap();
+    }
 
     #[test]
     fn rejects_missing_subcommand_and_script_hashes() {
