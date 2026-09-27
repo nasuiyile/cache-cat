@@ -7,6 +7,21 @@ use ordered_float::OrderedFloat;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeSet, HashMap};
 
+/// A score boundary used by the extended ZRANGE command.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct ScoreBound {
+    pub value: f64,
+    pub exclusive: bool,
+}
+
+/// A lexicographical boundary used by the extended ZRANGE command.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub enum LexBound {
+    NegativeInfinity,
+    PositiveInfinity,
+    Value { value: Bytes, exclusive: bool },
+}
+
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct SortedSet {
     /// 按 (score, member) 排序。
@@ -88,15 +103,30 @@ impl SortedSet {
     /// - -1 = 最后一个
     /// - -2 = 倒数第二个
     pub fn zrange(&self, start: i64, stop: i64) -> Vec<(Bytes, f64)> {
+        self.zrange_rank(start, stop, false)
+    }
+
+    /// ZRANGE by rank, optionally in reverse order.
+    pub fn zrange_rank(&self, start: i64, stop: i64, reverse: bool) -> Vec<(Bytes, f64)> {
         let len = self.tree.len() as i64;
 
         if len == 0 {
             return Vec::new();
         }
 
-        let mut start_idx = if start < 0 { len + start } else { start };
+        // Use a wider intermediate so i64::MIN cannot overflow when adding
+        // a negative index to the collection length.
+        let mut start_idx = if start < 0 {
+            len as i128 + start as i128
+        } else {
+            start as i128
+        };
 
-        let mut stop_idx = if stop < 0 { len + stop } else { stop };
+        let mut stop_idx = if stop < 0 {
+            len as i128 + stop as i128
+        } else {
+            stop as i128
+        };
 
         // Redis 语义：
         // start 过小则修正到 0
@@ -105,8 +135,8 @@ impl SortedSet {
         }
 
         // stop 超出末尾则修正到 len - 1
-        if stop_idx >= len {
-            stop_idx = len - 1;
+        if stop_idx >= len as i128 {
+            stop_idx = len as i128 - 1;
         }
 
         // stop 仍然 < 0，说明整个范围都在集合之前
@@ -114,18 +144,157 @@ impl SortedSet {
             return Vec::new();
         }
 
-        if start_idx >= len || start_idx > stop_idx {
+        if start_idx >= len as i128 || start_idx > stop_idx {
             return Vec::new();
         }
 
-        let count = (stop_idx - start_idx + 1) as usize;
+        let start_idx = start_idx as usize;
+        let count = (stop_idx - start_idx as i128 + 1) as usize;
 
-        self.tree
-            .iter()
-            .skip(start_idx as usize)
-            .take(count)
-            .map(|(score, member)| (member.clone(), score.0))
-            .collect()
+        if reverse {
+            self.tree
+                .iter()
+                .rev()
+                .skip(start_idx)
+                .take(count)
+                .map(|(score, member)| (member.clone(), score.0))
+                .collect()
+        } else {
+            self.tree
+                .iter()
+                .skip(start_idx)
+                .take(count)
+                .map(|(score, member)| (member.clone(), score.0))
+                .collect()
+        }
+    }
+
+    /// ZRANGE BYSCORE. `first` and `second` retain the command order: in
+    /// reverse mode the first boundary is the high score and the second is
+    /// the low score.
+    pub fn zrange_score(
+        &self,
+        first: &ScoreBound,
+        second: &ScoreBound,
+        reverse: bool,
+        limit: Option<(i64, i64)>,
+    ) -> Vec<(Bytes, f64)> {
+        if self.tree.is_empty() {
+            return Vec::new();
+        }
+
+        let (lower, upper) = if reverse {
+            (second, first)
+        } else {
+            (first, second)
+        };
+        let lower_matches = |score: f64| {
+            if lower.exclusive {
+                score > lower.value
+            } else {
+                score >= lower.value
+            }
+        };
+        let upper_matches = |score: f64| {
+            if upper.exclusive {
+                score < upper.value
+            } else {
+                score <= upper.value
+            }
+        };
+
+        if let Some((offset, _)) = limit {
+            if offset < 0 {
+                return Vec::new();
+            }
+        }
+        if matches!(limit, Some((_, 0))) {
+            return Vec::new();
+        }
+
+        if reverse {
+            // The tuple tree has no finite member sentinel for an inclusive
+            // upper score, so start from the end and discard scores above the
+            // requested upper bound before taking the bounded range.
+            let iter = self
+                .tree
+                .iter()
+                .rev()
+                .skip_while(|(score, _)| !upper_matches(score.0))
+                .take_while(|(score, _)| lower_matches(score.0))
+                .map(|(score, member)| (member.clone(), score.0));
+            collect_zrange_limit(iter, limit)
+        } else {
+            // Bytes::new() is the smallest member for a given score, which
+            // lets us avoid scanning entries below the lower score.
+            let start = (OrderedFloat(lower.value), Bytes::new());
+            let iter = self
+                .tree
+                .range(start..)
+                .filter(|(score, _)| lower_matches(score.0))
+                .take_while(|(score, _)| upper_matches(score.0))
+                .map(|(score, member)| (member.clone(), score.0));
+            collect_zrange_limit(iter, limit)
+        }
+    }
+
+    /// ZRANGE BYLEX. Redis defines this mode for sorted sets whose members
+    /// have the same score. We still compare raw member bytes, as Redis does,
+    /// and keep the scan deterministic for sets with mixed scores.
+    pub fn zrange_lex(
+        &self,
+        first: &LexBound,
+        second: &LexBound,
+        reverse: bool,
+        limit: Option<(i64, i64)>,
+    ) -> Vec<(Bytes, f64)> {
+        let (lower, upper) = if reverse {
+            (second, first)
+        } else {
+            (first, second)
+        };
+        let in_range = |member: &Bytes| {
+            let lower_ok = match lower {
+                LexBound::NegativeInfinity => true,
+                LexBound::PositiveInfinity => false,
+                LexBound::Value { value, exclusive } => {
+                    if *exclusive {
+                        member > value
+                    } else {
+                        member >= value
+                    }
+                }
+            };
+            let upper_ok = match upper {
+                LexBound::NegativeInfinity => false,
+                LexBound::PositiveInfinity => true,
+                LexBound::Value { value, exclusive } => {
+                    if *exclusive {
+                        member < value
+                    } else {
+                        member <= value
+                    }
+                }
+            };
+            lower_ok && upper_ok
+        };
+
+        if reverse {
+            let iter = self
+                .tree
+                .iter()
+                .rev()
+                .filter(|(_, member)| in_range(member))
+                .map(|(score, member)| (member.clone(), score.0));
+            collect_zrange_limit(iter, limit)
+        } else {
+            let iter = self
+                .tree
+                .iter()
+                .filter(|(_, member)| in_range(member))
+                .map(|(score, member)| (member.clone(), score.0));
+            collect_zrange_limit(iter, limit)
+        }
     }
 
     #[inline]
@@ -351,5 +520,24 @@ impl SortedSet {
         hash_memory
             .saturating_add(tree_memory)
             .saturating_add(member_payload)
+    }
+}
+
+fn collect_zrange_limit<I, T>(iter: I, limit: Option<(i64, i64)>) -> Vec<T>
+where
+    I: Iterator<Item = T>,
+{
+    match limit {
+        None => iter.collect(),
+        Some((offset, _)) if offset < 0 => Vec::new(),
+        Some((_, 0)) => Vec::new(),
+        Some((offset, count)) => {
+            let offset = offset as usize;
+            if count < 0 {
+                iter.skip(offset).collect()
+            } else {
+                iter.skip(offset).take(count as usize).collect()
+            }
+        }
     }
 }
