@@ -21,7 +21,7 @@ mod tests {
     use super::*;
     use crate::mocha::EntrySnapshot;
     use crate::raft::types::core::mocha::cas::{ComputeCommand, MultiReadComputeCommand};
-    use crate::raft::types::core::mocha::core::MyValue;
+    use crate::raft::types::core::mocha::core::{MyCache, MyValue, Update, UpdateType};
     use crate::raft::types::core::value_object::ValueObject;
 
     #[test]
@@ -97,5 +97,34 @@ mod tests {
         .mutate_writes(vec![None, None], 0);
         assert!(writes.is_empty());
         assert_eq!(reply.encode(), b"-ERR no such key\r\n");
+    }
+
+    #[test]
+    fn expire_overflow_is_rejected_before_missing_key_lookup() {
+        let cache = MyCache::new(1).expect("cache");
+        let mut update_type = UpdateType::None;
+        let mut update = Update {
+            db_number: 0,
+            write_clock: i64::MAX as u64,
+            update_type: &mut update_type,
+        };
+        let reply = cache.expire(
+            expire::ExpireReq {
+                key: "missing".into(),
+                expires_at: 1,
+                condition: None,
+            },
+            &mut update,
+        );
+        assert_eq!(
+            reply.encode(),
+            b"-ERR invalid expire time in 'expire' command\r\n"
+        );
+        assert!(
+            cache.databases[0]
+                .mocha
+                .get_entry(&b"missing"[..])
+                .is_none()
+        );
     }
 }

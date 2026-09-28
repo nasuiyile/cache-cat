@@ -91,11 +91,10 @@ impl SetParams {
         if value <= 0 {
             return Err(Self::invalid_expire_time());
         }
-        let value = value as u64;
         if matches!(unit, "EX" | "EXAT") && value.checked_mul(1000).is_none() {
             return Err(Self::invalid_expire_time());
         }
-        Ok(value)
+        Ok(value as u64)
     }
 
     /// Parse SET command parameters from RESP array items
@@ -284,5 +283,31 @@ impl ComputeCommand for SetReq {
         };
         let value = MyValue::new(data);
         (MochaOperation::Insert { value, expire }, Value::ok())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn bulk(value: &str) -> Value {
+        Value::BulkString(Some(Bytes::copy_from_slice(value.as_bytes())))
+    }
+
+    #[test]
+    fn rejects_second_expiration_when_millisecond_conversion_overflows() {
+        let items = [
+            bulk("SET"),
+            bulk("key"),
+            bulk("value"),
+            bulk("EX"),
+            bulk("9223372036854776"),
+        ];
+        assert_eq!(
+            SetParams::parse(&items),
+            Err(ProtocolError::response(
+                "ERR invalid expire time in 'set' command"
+            ))
+        );
     }
 }

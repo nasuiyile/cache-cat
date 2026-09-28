@@ -44,10 +44,16 @@ impl MyCache {
     }
 
     pub fn expire(&self, param: ExpireReq, update: &mut Update) -> Value {
+        if let Err(error) = param.checked_deadline(update.write_clock) {
+            return error.into();
+        }
         self.execute_compute(param, update)
     }
 
     pub fn p_expire(&self, param: PExpireReq, update: &mut Update) -> Value {
+        if let Err(error) = param.checked_deadline(update.write_clock) {
+            return error.into();
+        }
         self.execute_compute(param, update)
     }
 

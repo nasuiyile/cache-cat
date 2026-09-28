@@ -346,9 +346,9 @@ impl Parser {
             -1 if allow_null => return Some((pos, None)),
             // TODO: Handle the Error
             ..0 => return None,
-            len => len as usize,
+            len => usize::try_from(len).ok()?,
         };
-        let full = pos + len + 2;
+        let full = pos.checked_add(len)?.checked_add(2)?;
         if full > buffer.len() {
             // the data is not completed
             return None;
@@ -398,7 +398,7 @@ impl Parser {
             }
             // TODO: Handle the Error
             ..0 => return None,
-            count => count as usize,
+            count => usize::try_from(count).ok()?,
         };
         let element_count = match kind {
             AggregateKind::Map | AggregateKind::Attribute => count.checked_mul(2)?,
@@ -409,7 +409,7 @@ impl Parser {
         for _ in 0..element_count {
             let meta = Self::parse_meta(&buffer[full..])?;
             let len = meta.len();
-            full += len;
+            full = full.checked_add(len)?;
             elements.push(meta);
         }
         Some(Parser::Aggregate {
@@ -434,7 +434,7 @@ impl Parser {
         };
         // Parse the element that follows the attribute map.
         let inner = Self::parse_meta(&buffer[attr_len..])?;
-        let full = attr_len + inner.len();
+        let full = attr_len.checked_add(inner.len())?;
         elements.push(inner);
         Some(Parser::Aggregate {
             kind: AggregateKind::Attribute,
@@ -461,6 +461,11 @@ mod tests {
         assert!(matches!(decode(b":42\r\n"), Some(Value::Integer(42))));
         assert!(matches!(decode(b"$-1\r\n"), Some(Value::BulkString(None))));
         assert!(matches!(decode(b"*-1\r\n"), Some(Value::Array(None))));
+    }
+
+    #[test]
+    fn oversized_blob_lengths_are_rejected_without_arithmetic_overflow() {
+        assert!(decode(b"$9223372036854775807\r\n").is_none());
     }
 
     #[test]

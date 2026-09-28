@@ -10,6 +10,7 @@ use crate::raft::types::core::response_value::Value;
 use crate::raft::types::entry::base_operation::BaseOperation;
 use crate::raft::types::entry::base_operation::BaseOperation::PExpire;
 use crate::raft::types::entry::request::Operation;
+use crate::utils::checked_redis_deadline;
 use async_trait::async_trait;
 use bytes::Bytes;
 use serde::{Deserialize, Serialize};
@@ -120,10 +121,9 @@ impl ComputeCommand for PExpireReq {
         write_clock: u64,
     ) -> (MochaOperation<MyValue>, Value) {
         // Redis treats a non-positive timeout as an immediate deletion.
-        let expires_at = if self.expires_at <= 0 {
-            0
-        } else {
-            write_clock.saturating_add(self.expires_at as u64)
+        let expires_at = match self.checked_deadline(write_clock) {
+            Ok(expires_at) => expires_at,
+            Err(error) => return (MochaOperation::Abort, error.into()),
         };
         let should_update = self.condition.as_ref().map_or(true, |condition| {
             condition.allows(entry.expire_at, expires_at)
@@ -145,5 +145,55 @@ impl ComputeCommand for PExpireReq {
 
     fn init(self) -> (MochaOperation<MyValue>, Value) {
         (MochaOperation::Abort, Value::Integer(0))
+    }
+}
+
+impl PExpireReq {
+    pub(crate) fn checked_deadline(&self, write_clock: u64) -> Result<u64, ProtocolError> {
+        if self.expires_at <= 0 {
+            return Ok(0);
+        }
+        checked_redis_deadline(write_clock, self.expires_at as u64)
+            .ok_or_else(|| ProtocolError::response("ERR invalid expire time in 'pexpire' command"))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::raft::types::core::value_object::ValueObject;
+
+    fn entry() -> EntrySnapshot<MyValue> {
+        EntrySnapshot {
+            value: MyValue::new(ValueObject::String(Bytes::from_static(b"value"))),
+            expire_at: None,
+        }
+    }
+
+    #[test]
+    fn logical_clock_addition_overflow_aborts_without_mutating() {
+        let (operation, reply) = PExpireReq {
+            key: Bytes::from_static(b"key"),
+            expires_at: 1,
+            condition: None,
+        }
+        .mutate(entry(), u64::MAX);
+        assert!(matches!(operation, MochaOperation::Abort));
+        assert_eq!(
+            reply.encode(),
+            b"-ERR invalid expire time in 'pexpire' command\r\n"
+        );
+    }
+
+    #[test]
+    fn minimum_negative_timeout_deletes_immediately() {
+        let (operation, reply) = PExpireReq {
+            key: Bytes::from_static(b"key"),
+            expires_at: i64::MIN,
+            condition: None,
+        }
+        .mutate(entry(), 123);
+        assert!(matches!(operation, MochaOperation::Remove));
+        assert_eq!(reply.encode(), b":1\r\n");
     }
 }

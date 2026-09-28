@@ -150,6 +150,25 @@ mod tests {
     }
 
     #[test]
+    fn hincrby_requires_a_canonical_increment() {
+        for increment in ["+1", "01", "-0", " 1 "] {
+            let args = [
+                Value::BulkString(Some("HINCRBY".into())),
+                Value::BulkString(Some("h".into())),
+                Value::BulkString(Some("f".into())),
+                Value::BulkString(Some(increment.into())),
+            ];
+            assert!(
+                matches!(
+                    hincrby::HIncrByCommand.raft_request(&args),
+                    Err(ProtocolError::NotAnInteger)
+                ),
+                "increment {increment:?}"
+            );
+        }
+    }
+
+    #[test]
     fn fixed_arity_hash_commands_reject_extra_arguments() {
         let commands: [(&dyn RaftCommand, usize); 6] = [
             (&hget::HGetCommand, 3),

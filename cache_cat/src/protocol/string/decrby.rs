@@ -34,9 +34,10 @@ impl DecrByParams {
 
         // getLongLongFromObjectOrReply: the argument must be a canonical integer.
         let decrement = items[2].try_parse_canonical_i64()?;
-        // decrbyCommand: negating i64::MIN overflows, whatever the key holds.
+        // Redis rejects LLONG_MIN before negating the decrement, using the
+        // same overflow reply as the other increment/decrement commands.
         if decrement == i64::MIN {
-            return Err(ProtocolError::response("ERR decrement would overflow"));
+            return Err(ProtocolError::Overflow);
         }
 
         Ok(DecrByParams { key, decrement })
@@ -199,10 +200,7 @@ mod tests {
     #[test]
     fn negating_i64_min_is_rejected_before_touching_the_key() {
         let result = DecrByParams::parse(&args(b"-9223372036854775808"));
-        assert_eq!(
-            result,
-            Err(ProtocolError::response("ERR decrement would overflow"))
-        );
+        assert_eq!(result, Err(ProtocolError::Overflow));
         assert!(DecrByParams::parse(&args(b"-9223372036854775807")).is_ok());
     }
 }

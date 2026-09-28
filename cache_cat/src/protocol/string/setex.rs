@@ -60,9 +60,12 @@ impl SetExCommand {
             key,
             value,
             // Convert seconds to milliseconds, continue reusing Px
-            expiration: (seconds as u64).checked_mul(1000).ok_or_else(|| {
-                ProtocolError::response("ERR invalid expire time in 'setex' command")
-            })?,
+            expiration: seconds
+                .checked_mul(1000)
+                .map(|milliseconds| milliseconds as u64)
+                .ok_or_else(|| {
+                    ProtocolError::response("ERR invalid expire time in 'setex' command")
+                })?,
         })
     }
 }
@@ -91,8 +94,31 @@ impl Command for SetExCommand {
         server
             .app
             .write(Operation::Redis(RedisSetEx(params)), client.db_number)
-            .await?;
+            .await
+    }
+}
 
-        Ok(Value::ok())
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn bulk(value: &str) -> Value {
+        Value::BulkString(Some(Bytes::copy_from_slice(value.as_bytes())))
+    }
+
+    #[test]
+    fn rejects_second_expiration_when_millisecond_conversion_overflows() {
+        let items = [
+            bulk("SETEX"),
+            bulk("key"),
+            bulk("9223372036854776"),
+            bulk("value"),
+        ];
+        assert_eq!(
+            SetExCommand::parse(&items),
+            Err(ProtocolError::response(
+                "ERR invalid expire time in 'setex' command"
+            ))
+        );
     }
 }

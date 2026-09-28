@@ -65,10 +65,10 @@ impl SubCommand for ClientInfoCommand {
 
         map.insert("name".to_string(), client.name.to_string());
 
-        let age = (now_ms() - client.connection_time) / 1000;
+        let age = now_ms().saturating_sub(client.connection_time) / 1000;
         map.insert("age".to_string(), age.to_string());
 
-        let idle = (now_ms() - client.last_interaction) / 1000;
+        let idle = now_ms().saturating_sub(client.last_interaction) / 1000;
         map.insert("idle".to_string(), idle.to_string());
 
         map.insert("flags".to_string(), client.flag.to_string());

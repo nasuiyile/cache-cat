@@ -87,8 +87,6 @@ impl Command for PSetExCommand {
         server
             .app
             .write(Operation::Redis(RedisPSetEx(params)), client.db_number)
-            .await?;
-
-        Ok(Value::ok())
+            .await
     }
 }

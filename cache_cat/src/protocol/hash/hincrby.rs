@@ -68,7 +68,9 @@ impl HIncrByCommand {
             .ok_or(ProtocolError::InvalidArgument("field"))?;
 
         // Parse increment
-        let increment = items[3].try_parse_i64()?;
+        // Redis parses HINCRBY increments with getLongLongFromObjectOrReply,
+        // which accepts only the canonical decimal representation.
+        let increment = items[3].try_parse_canonical_i64()?;
 
         Ok(HIncrByParams {
             key,

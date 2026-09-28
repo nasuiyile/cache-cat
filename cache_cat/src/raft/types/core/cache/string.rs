@@ -1,4 +1,5 @@
 use crate::error::ProtocolError;
+use crate::protocol::NO_EXPIRATION;
 use crate::protocol::string::append::AppendReq;
 use crate::protocol::string::decr::DecrReq;
 use crate::protocol::string::decrby::DecrByReq;
@@ -11,10 +12,10 @@ use crate::protocol::string::psetex::PSetExParams;
 use crate::protocol::string::set::{Expiration, SetMode, SetParams, SetReq};
 use crate::protocol::string::setex::SetExParams;
 use crate::protocol::string::setnx::SetNxParams;
-use crate::protocol::NO_EXPIRATION;
 use crate::raft::types::core::mocha::core::{MyCache, Update};
 use crate::raft::types::core::response_value::Value;
 use crate::raft::types::core::value_object::ValueObject;
+use crate::utils::{checked_redis_deadline, checked_redis_timestamp};
 use bytes::Bytes;
 
 impl MyCache {
@@ -68,10 +69,42 @@ impl MyCache {
                 }
             }
             Some(exp) => match exp {
-                Expiration::Ex(seconds) => now.saturating_add(seconds.saturating_mul(1000)),
-                Expiration::Px(millis) => now.saturating_add(millis),
-                Expiration::ExAt(timestamp) => timestamp.saturating_mul(1000),
-                Expiration::PxAt(timestamp) => timestamp,
+                Expiration::Ex(seconds) => {
+                    let Some(milliseconds) = seconds.checked_mul(1000) else {
+                        return ProtocolError::response("ERR invalid expire time in 'set' command")
+                            .into();
+                    };
+                    let Some(expires_at) = checked_redis_deadline(now, milliseconds) else {
+                        return ProtocolError::response("ERR invalid expire time in 'set' command")
+                            .into();
+                    };
+                    expires_at
+                }
+                Expiration::Px(millis) => {
+                    let Some(expires_at) = checked_redis_deadline(now, millis) else {
+                        return ProtocolError::response("ERR invalid expire time in 'set' command")
+                            .into();
+                    };
+                    expires_at
+                }
+                Expiration::ExAt(timestamp) => {
+                    let Some(expires_at) = timestamp.checked_mul(1000) else {
+                        return ProtocolError::response("ERR invalid expire time in 'set' command")
+                            .into();
+                    };
+                    let Some(expires_at) = checked_redis_timestamp(expires_at) else {
+                        return ProtocolError::response("ERR invalid expire time in 'set' command")
+                            .into();
+                    };
+                    expires_at
+                }
+                Expiration::PxAt(timestamp) => {
+                    let Some(timestamp) = checked_redis_timestamp(timestamp) else {
+                        return ProtocolError::response("ERR invalid expire time in 'set' command")
+                            .into();
+                    };
+                    timestamp
+                }
                 Expiration::KeepTTL => unreachable!(), // Handled above
             },
             None => NO_EXPIRATION, // No expiration
@@ -182,7 +215,9 @@ impl MyCache {
 
         // SetExParams stores the parsed duration in milliseconds, matching
         // PSETEX and the logical clock units used by the cache.
-        let expires_at = now.saturating_add(params.expiration);
+        let Some(expires_at) = checked_redis_deadline(now, params.expiration) else {
+            return ProtocolError::response("ERR invalid expire time in 'setex' command").into();
+        };
 
         let set = SetReq {
             key: params.key,
@@ -199,7 +234,9 @@ impl MyCache {
         // The latest write logic time
         let now = update.write_clock;
 
-        let expires_at = now.saturating_add(params.expiration);
+        let Some(expires_at) = checked_redis_deadline(now, params.expiration) else {
+            return ProtocolError::response("ERR invalid expire time in 'psetex' command").into();
+        };
 
         let set = SetReq {
             key: params.key,
@@ -479,5 +516,26 @@ mod tests {
         );
         let incr = BaseOperation::Incr(IncrReq { key: "k".into() });
         assert_eq!(apply(&cache, Operation::Base(incr)), b":11\r\n");
+    }
+
+    #[test]
+    fn relative_set_expiration_overflow_aborts_without_writing() {
+        let cache = MyCache::new(1).expect("cache");
+        let mut update_type = UpdateType::None;
+        let mut update = Update {
+            db_number: 0,
+            write_clock: i64::MAX as u64,
+            update_type: &mut update_type,
+        };
+        let params = SetParams {
+            expiration: Some(Expiration::Px(1)),
+            ..SetParams::new("k", "v")
+        };
+
+        assert_eq!(
+            cache.redis_set(params, &mut update).encode(),
+            b"-ERR invalid expire time in 'set' command\r\n"
+        );
+        assert!(cache.databases[0].mocha.get_entry(&b"k"[..]).is_none());
     }
 }

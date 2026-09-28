@@ -10,6 +10,7 @@ use crate::raft::types::core::value_object::ValueObject;
 use crate::raft::types::entry::base_operation::BaseOperation;
 use crate::raft::types::entry::base_operation::BaseOperation::BitField;
 use crate::raft::types::entry::request::Operation;
+use crate::utils::parse_canonical_i64;
 use async_trait::async_trait;
 use bytes::{Bytes, BytesMut};
 use serde::{Deserialize, Serialize};
@@ -723,18 +724,13 @@ fn parse_offset(value: &Value, encoding: BitFieldEncoding) -> Result<u64, Protoc
         return Err(ProtocolError::response(ERR_INVALID_OFFSET));
     }
 
-    let number_string = std::str::from_utf8(number_bytes)
-        .map_err(|_| ProtocolError::response(ERR_INVALID_OFFSET))?;
-
-    /*
-     * 使用 u64 解析：
-     *
-     * - 自动拒绝负数；
-     * - 自动拒绝超出 u64 的数字。
-     */
-    let base_offset = number_string
-        .parse::<u64>()
-        .map_err(|_| ProtocolError::response(ERR_INVALID_OFFSET))?;
+    // Redis parses offsets as canonical signed integers, then rejects
+    // negative values. This keeps `+1`, leading zeroes and `-0` consistent
+    // with the other integer arguments accepted by Redis.
+    let base_offset = parse_canonical_i64(number_bytes)
+        .filter(|offset| *offset >= 0)
+        .map(|offset| offset as u64)
+        .ok_or(ProtocolError::response(ERR_INVALID_OFFSET))?;
 
     let offset = if multiply_by_width {
         base_offset
@@ -766,12 +762,7 @@ fn parse_i64_argument(value: &Value) -> Result<i64, ProtocolError> {
         .string_bytes_clone()
         .ok_or(ProtocolError::response(ERR_INVALID_INTEGER))?;
 
-    let string =
-        std::str::from_utf8(&bytes).map_err(|_| ProtocolError::response(ERR_INVALID_INTEGER))?;
-
-    string
-        .parse::<i64>()
-        .map_err(|_| ProtocolError::response(ERR_INVALID_INTEGER))
+    parse_canonical_i64(&bytes).ok_or(ProtocolError::response(ERR_INVALID_INTEGER))
 }
 
 fn parse_overflow(value: &Value) -> Result<BitFieldOverflow, ProtocolError> {

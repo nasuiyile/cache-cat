@@ -8,6 +8,7 @@ use crate::raft::types::core::mocha::core::MyValue;
 use crate::raft::types::core::response_value::Value;
 use crate::raft::types::entry::base_operation::BaseOperation;
 use crate::raft::types::entry::request::Operation;
+use crate::utils::checked_redis_deadline;
 use async_trait::async_trait;
 use bytes::Bytes;
 use serde::{Deserialize, Serialize};
@@ -149,7 +150,10 @@ pub struct ExpireCommand;
 impl RaftCommand for ExpireCommand {
     fn raft_request(&self, items: &[Value]) -> Result<Operation, ProtocolError> {
         let params = ExpireParams::parse(items)?;
-        if params.seconds.checked_mul(1000).is_none() {
+        // Redis treats non-positive timeouts as immediate deletion. Only a
+        // positive seconds value needs conversion to milliseconds, and only
+        // that conversion can overflow.
+        if params.seconds > 0 && params.seconds.checked_mul(1000).is_none() {
             return Err(ProtocolError::response(
                 "ERR invalid expire time in 'expire' command",
             ));
@@ -217,13 +221,9 @@ impl ComputeCommand for ExpireReq {
         // Redis treats a non-positive timeout as an immediate deletion.  Keep
         // the deadline at zero for that case so the condition checks below
         // still compare it as an earlier deadline than every live key.
-        let expires_at = if self.expires_at <= 0 {
-            0
-        } else {
-            let milliseconds = (self.expires_at as u64)
-                .checked_mul(1000)
-                .unwrap_or(u64::MAX);
-            write_clock.saturating_add(milliseconds)
+        let expires_at = match self.checked_deadline(write_clock) {
+            Ok(expires_at) => expires_at,
+            Err(error) => return (MochaOperation::Abort, error.into()),
         };
         let should_update = self.condition.as_ref().map_or(true, |condition| {
             condition.allows(entry.expire_at, expires_at)
@@ -245,5 +245,88 @@ impl ComputeCommand for ExpireReq {
 
     fn init(self) -> (MochaOperation<MyValue>, Value) {
         (MochaOperation::Abort, Value::Integer(0))
+    }
+}
+
+impl ExpireReq {
+    pub(crate) fn checked_deadline(&self, write_clock: u64) -> Result<u64, ProtocolError> {
+        if self.expires_at <= 0 {
+            return Ok(0);
+        }
+        let milliseconds = (self.expires_at as u64).checked_mul(1000).ok_or_else(|| {
+            ProtocolError::response("ERR invalid expire time in 'expire' command")
+        })?;
+        checked_redis_deadline(write_clock, milliseconds)
+            .ok_or_else(|| ProtocolError::response("ERR invalid expire time in 'expire' command"))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::protocol::raft_command::RaftCommand;
+    use crate::raft::types::core::value_object::ValueObject;
+
+    fn bulk(value: &'static str) -> Value {
+        Value::BulkString(Some(Bytes::from_static(value.as_bytes())))
+    }
+
+    fn entry() -> EntrySnapshot<MyValue> {
+        EntrySnapshot {
+            value: MyValue::new(ValueObject::String(Bytes::from_static(b"value"))),
+            expire_at: None,
+        }
+    }
+
+    #[test]
+    fn minimum_negative_timeout_is_accepted_as_immediate_expiration() {
+        let args = [
+            Value::BulkString(Some("EXPIRE".into())),
+            Value::BulkString(Some("key".into())),
+            Value::BulkString(Some(i64::MIN.to_string().into())),
+        ];
+
+        let params = ExpireParams::parse(&args).expect("canonical integer");
+        assert_eq!(params.seconds, i64::MIN);
+        assert!(ExpireCommand.raft_request(&args).is_ok());
+    }
+
+    #[test]
+    fn negative_minimum_timeout_is_accepted_and_deletes_immediately() {
+        let args = [bulk("EXPIRE"), bulk("key"), bulk("-9223372036854775808")];
+        assert!(ExpireCommand.raft_request(&args).is_ok());
+
+        let (operation, reply) = ExpireReq {
+            key: Bytes::from_static(b"key"),
+            expires_at: i64::MIN,
+            condition: None,
+        }
+        .mutate(entry(), 123);
+        assert!(matches!(operation, MochaOperation::Remove));
+        assert_eq!(reply.encode(), b":1\r\n");
+    }
+
+    #[test]
+    fn positive_seconds_overflow_is_rejected_before_replication() {
+        let args = [bulk("EXPIRE"), bulk("key"), bulk("9223372036854776")];
+        assert!(matches!(
+            ExpireCommand.raft_request(&args),
+            Err(ProtocolError::Response(_))
+        ));
+    }
+
+    #[test]
+    fn logical_clock_addition_overflow_aborts_without_mutating() {
+        let (operation, reply) = ExpireReq {
+            key: Bytes::from_static(b"key"),
+            expires_at: 1,
+            condition: None,
+        }
+        .mutate(entry(), u64::MAX);
+        assert!(matches!(operation, MochaOperation::Abort));
+        assert_eq!(
+            reply.encode(),
+            b"-ERR invalid expire time in 'expire' command\r\n"
+        );
     }
 }
