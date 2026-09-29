@@ -34,11 +34,11 @@ impl ReadCommand for GetBitParams {
     }
 
     fn execute(&self, value: Option<EntrySnapshot<MyValue>>) -> Value {
-        let bytes: Vec<u8> = match value {
+        let bytes: Bytes = match value {
             None => return Value::Integer(0),
             Some(value) => match value.value.data {
-                ValueObject::String(s) => s.to_vec(),
-                ValueObject::Int(i) => i.to_string().into_bytes(),
+                ValueObject::String(s) => s,
+                ValueObject::Int(i) => i.to_string().into(),
                 _ => return ProtocolError::WrongType.into(),
             },
         };

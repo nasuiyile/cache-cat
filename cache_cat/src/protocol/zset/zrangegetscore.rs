@@ -2,10 +2,12 @@ use crate::error::{CacheCatError, ProtocolError};
 use crate::mocha::EntrySnapshot;
 use crate::protocol::command::{Client, Command};
 use crate::protocol::raft_command::{RaftCommand, ReadRaftCommand};
+use crate::protocol::zset::zrange::parse_score_bound;
 use crate::raft::network::redis_server::RedisServer;
 use crate::raft::types::core::mocha::core::MyValue;
 use crate::raft::types::core::mocha::read_command::ReadCommand;
 use crate::raft::types::core::response_value::Value;
+use crate::raft::types::core::structure::sorted_set::ScoreBound;
 use crate::raft::types::core::value_object::ValueObject::ZSet;
 use crate::raft::types::entry::read_operation::ReadOperation;
 use async_trait::async_trait;
@@ -34,10 +36,10 @@ pub struct ZRangeByScoreCommand;
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ZRangeByScoreParams {
     pub key: Bytes,
-    pub min: f64,
-    pub max: f64,
+    pub min: ScoreBound,
+    pub max: ScoreBound,
     pub with_scores: bool,
-    pub limit: Option<(usize, usize)>, // (offset, count)
+    pub limit: Option<(i64, i64)>, // (offset, count)
 }
 
 impl ReadCommand for ZRangeByScoreParams {
@@ -51,7 +53,7 @@ impl ReadCommand for ZRangeByScoreParams {
             Some(v) => match v.value.data {
                 ZSet(list) => {
                     let zset = list.lock();
-                    let res = zset.zrangebyscore(self.min, self.max, self.limit);
+                    let res = zset.zrange_score(&self.min, &self.max, false, self.limit);
 
                     if self.with_scores {
                         // WITHSCORES: RESP2 flat [m1, s1, ...] with bulk-string
@@ -74,7 +76,7 @@ impl Display for ZRangeByScoreParams {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(
             f,
-            "ZRangeByScoreParams {{ key: {}, min: {}, max: {}, with_scores: {}, limit: {:?} }}",
+            "ZRangeByScoreParams {{ key: {}, min: {:?}, max: {:?}, with_scores: {}, limit: {:?} }}",
             String::from_utf8_lossy(&self.key),
             self.min,
             self.max,
@@ -97,14 +99,14 @@ impl ZRangeByScoreCommand {
             .ok_or(ProtocolError::InvalidArgument("key"))?;
 
         // Parse min score
-        let min = Self::parse_score(&items[2])?;
+        let min = parse_score_bound(&items[2])?;
 
         // Parse max score
-        let max = Self::parse_score(&items[3])?;
+        let max = parse_score_bound(&items[3])?;
 
         // Parse optional arguments
         let mut with_scores = false;
-        let mut limit: Option<(usize, usize)> = None;
+        let mut limit = None;
 
         if items.len() > 4 {
             let mut i = 4;
@@ -124,8 +126,8 @@ impl ZRangeByScoreCommand {
                             return Err(ProtocolError::SyntaxError);
                         }
 
-                        let offset = Self::parse_usize(&items[i + 1])?;
-                        let count = Self::parse_usize(&items[i + 2])?;
+                        let offset = items[i + 1].try_parse_canonical_i64()?;
+                        let count = items[i + 2].try_parse_canonical_i64()?;
                         limit = Some((offset, count));
                         i += 3;
                     }
@@ -143,54 +145,6 @@ impl ZRangeByScoreCommand {
             with_scores,
             limit,
         })
-    }
-
-    /// Parse a score value, supporting -inf and +inf
-    fn parse_score(value: &Value) -> Result<f64, ProtocolError> {
-        match value {
-            Value::BulkString(Some(data)) => {
-                let s = String::from_utf8_lossy(data);
-                Self::parse_score_string(&s)
-            }
-            Value::SimpleString(s) => Self::parse_score_string(s),
-            Value::Integer(n) => Ok(*n as f64),
-            _ => Err(ProtocolError::response("ERR min or max is not a float")),
-        }
-    }
-
-    fn parse_score_string(s: &str) -> Result<f64, ProtocolError> {
-        let s_upper = s.to_uppercase();
-        match s_upper.as_str() {
-            "-INF" | "-INFINITY" => Ok(f64::NEG_INFINITY),
-            "+INF" | "+INFINITY" => Ok(f64::INFINITY),
-            _ => {
-                let score = s
-                    .parse::<f64>()
-                    .map_err(|_| ProtocolError::response("ERR min or max is not a float"))?;
-                if score.is_nan() {
-                    return Err(ProtocolError::response("ERR min or max is not a float"));
-                }
-                Ok(score)
-            }
-        }
-    }
-
-    /// Parse usize from a Value
-    fn parse_usize(value: &Value) -> Result<usize, ProtocolError> {
-        match value {
-            Value::BulkString(Some(data)) => {
-                let s = String::from_utf8_lossy(data);
-                s.parse::<usize>().map_err(|_| ProtocolError::NotAnInteger)
-            }
-            Value::SimpleString(s) => s.parse::<usize>().map_err(|_| ProtocolError::NotAnInteger),
-            Value::Integer(n) => {
-                if *n < 0 {
-                    return Err(ProtocolError::InvalidArgument("limit"));
-                }
-                Ok(*n as usize)
-            }
-            _ => Err(ProtocolError::NotAnInteger),
-        }
     }
 }
 
@@ -221,12 +175,93 @@ impl Command for ZRangeByScoreCommand {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::protocol::zset::zadd::ZAddReq;
+    use crate::raft::types::core::structure::sorted_set::SortedSet;
+    use parking_lot::Mutex;
+    use std::sync::Arc;
 
     fn args(values: &[&str]) -> Vec<Value> {
         values
             .iter()
             .map(|value| Value::BulkString(Some(Bytes::copy_from_slice(value.as_bytes()))))
             .collect()
+    }
+
+    fn execute(values: &[&str]) -> Value {
+        let mut zset = SortedSet::new();
+        zset.zadd(ZAddReq {
+            key: Bytes::from_static(b"key"),
+            nx: false,
+            xx: false,
+            gt: false,
+            lt: false,
+            ch: false,
+            members: vec![
+                (Bytes::from_static(b"a"), 1.0),
+                (Bytes::from_static(b"b"), 2.0),
+                (Bytes::from_static(b"c"), 3.0),
+            ],
+        });
+        ZRangeByScoreCommand::parse_args(&args(values))
+            .unwrap()
+            .execute(Some(EntrySnapshot {
+                value: MyValue::new(ZSet(Arc::new(Mutex::new(zset)))),
+                expire_at: None,
+            }))
+    }
+
+    #[test]
+    fn excludes_open_score_boundaries_and_preserves_score_replies() {
+        let reply = execute(&["ZRANGEBYSCORE", "key", "(1", "(3", "WITHSCORES"]);
+        assert_eq!(reply.encode_proto(2), b"*2\r\n$1\r\nb\r\n$1\r\n2\r\n");
+        assert_eq!(reply.encode_proto(3), b"*1\r\n*2\r\n$1\r\nb\r\n,2\r\n");
+        assert_eq!(
+            execute(&["ZRANGEBYSCORE", "key", "(2", "2"]).encode(),
+            b"*0\r\n"
+        );
+    }
+
+    #[test]
+    fn signed_limits_match_redis_semantics() {
+        for count in ["-1", "-2", "-9223372036854775808"] {
+            assert_eq!(
+                execute(&["ZRANGEBYSCORE", "key", "-inf", "+inf", "LIMIT", "1", count]).encode(),
+                b"*2\r\n$1\r\nb\r\n$1\r\nc\r\n"
+            );
+        }
+        for (offset, count) in [("-1", "2"), ("0", "0")] {
+            assert_eq!(
+                execute(&[
+                    "ZRANGEBYSCORE",
+                    "key",
+                    "-inf",
+                    "+inf",
+                    "LIMIT",
+                    offset,
+                    count,
+                ])
+                .encode(),
+                b"*0\r\n"
+            );
+        }
+        for invalid in ["+1", "01", "-0", "9223372036854775808"] {
+            for (offset, count) in [(invalid, "1"), ("0", invalid)] {
+                assert_eq!(
+                    ZRangeByScoreCommand::parse_args(&args(&[
+                        "ZRANGEBYSCORE",
+                        "key",
+                        "-inf",
+                        "+inf",
+                        "LIMIT",
+                        offset,
+                        count,
+                    ]))
+                    .unwrap_err()
+                    .to_string(),
+                    "ERR value is not an integer or out of range"
+                );
+            }
+        }
     }
 
     #[test]
@@ -246,7 +281,7 @@ mod tests {
 
     #[test]
     fn rejects_nan_scores() {
-        for boundary in ["NaN", "nan", "-nan", "invalid"] {
+        for boundary in ["NaN", "nan", "-nan", "(NaN", "(", "invalid"] {
             for bounds in [[boundary, "+inf"], ["-inf", boundary]] {
                 assert_eq!(
                     ZRangeByScoreCommand::parse_args(&args(&[

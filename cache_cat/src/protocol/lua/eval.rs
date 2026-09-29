@@ -132,13 +132,13 @@ impl Command for EvalCommand {
         items: &[Value],
         server: &RedisServer,
     ) -> Result<Value, CacheCatError> {
-        if let Some(vec) = client.transaction_queue.as_mut() {
-            vec.push(self.raft_request(items)?);
-            return Ok(Value::queued());
-        }
         let mut operation = self.raft_request(items)?;
         if let Operation::Redis(RedisEval(ref mut params)) = operation {
             params.proto = client.framed.codec().proto_version();
+        }
+        if let Some(vec) = client.transaction_queue.as_mut() {
+            vec.push(operation);
+            return Ok(Value::queued());
         }
         let result = server.app.write(operation, client.db_number).await?;
         Ok(result)
@@ -148,8 +148,78 @@ impl Command for EvalCommand {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::cfg::config::Config;
+    use crate::node::parsed_config::ParsedConfig;
+    use crate::node::raft_node::RaftNode;
+    use crate::protocol::transaction::exec::ExecParams;
+    use crate::protocol::transaction::multi::MultiCommand;
     use crate::raft::types::core::mocha::core::{MyCache, Update, UpdateType};
     use crate::raft::types::core::mocha::request_handler::do_request;
+    use crate::raft::types::entry::request::RedisOperation;
+    use tokio::net::{TcpListener, TcpStream};
+    use tokio::sync::broadcast;
+
+    #[tokio::test]
+    async fn queued_eval_preserves_client_response_protocol() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut config = Config::default();
+        config.raft.log_path = dir.path().to_str().unwrap().to_owned();
+        config.raft.address = "127.0.0.1:0".into();
+        config.redis.databases = 1;
+        let config = ParsedConfig::from(&config).unwrap();
+        let (shutdown_tx, _) = broadcast::channel(1);
+        let node = RaftNode::create(config.clone(), shutdown_tx).await.unwrap();
+        let server = RedisServer::new(node.app.clone(), "127.0.0.1:0".into(), &config).unwrap();
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let _socket = TcpStream::connect(listener.local_addr().unwrap())
+            .await
+            .unwrap();
+        let (connection, _) = listener.accept().await.unwrap();
+        let mut client = Client::new(1, connection, true);
+
+        for proto in [2, 3] {
+            if proto == 3 {
+                client.framed.codec_mut().switch_resp3();
+            }
+            MultiCommand
+                .execute(&mut client, &[Value::SimpleString("MULTI".into())], &server)
+                .await
+                .unwrap();
+            for script in ["return true", "return false"] {
+                let items = ["EVAL", script, "0"]
+                    .map(|part| Value::BulkString(Some(Bytes::copy_from_slice(part.as_bytes()))));
+                let reply = EvalCommand
+                    .execute(&mut client, &items, &server)
+                    .await
+                    .unwrap();
+                assert_eq!(reply.encode(), b"+QUEUED\r\n");
+            }
+            let operation = Operation::Redis(RedisOperation::RedisExec(ExecParams {
+                operations: client.transaction_queue.take().unwrap(),
+            }));
+            let encoded = bincode2::serialize(&operation).unwrap();
+            let operation: Operation = bincode2::deserialize(&encoded).unwrap();
+            let mut update_type = UpdateType::None;
+            let mut update = Update {
+                db_number: 0,
+                write_clock: 0,
+                update_type: &mut update_type,
+            };
+            let reply = do_request(
+                &node.app.state_machine.data.kvs,
+                operation,
+                &mut update,
+                true,
+            );
+            let expected = if proto == 3 {
+                b"*2\r\n#t\r\n#f\r\n".as_slice()
+            } else {
+                b"*2\r\n:1\r\n$-1\r\n".as_slice()
+            };
+            assert_eq!(reply.encode_proto(proto), expected);
+        }
+        node.app.cluster.shutdown().await.unwrap();
+    }
 
     fn execute(cache: &MyCache, parts: &[&[u8]]) -> Value {
         let items: Vec<_> = parts

@@ -210,7 +210,7 @@ fn option_string(value: &Value) -> Result<String, ProtocolError> {
         .to_ascii_uppercase())
 }
 
-fn parse_score_bound(value: &Value) -> Result<ScoreBound, ProtocolError> {
+pub(super) fn parse_score_bound(value: &Value) -> Result<ScoreBound, ProtocolError> {
     if let Value::Integer(number) = value {
         return Ok(ScoreBound {
             value: *number as f64,

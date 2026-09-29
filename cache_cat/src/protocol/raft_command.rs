@@ -84,6 +84,7 @@ use crate::protocol::string::setex::SetExCommand;
 use crate::protocol::string::setnx::SetNxCommand;
 use crate::protocol::zset::zadd::ZAddCommand;
 use crate::protocol::zset::zcard::ZCardCommand;
+use crate::protocol::zset::zcount::ZCountCommand;
 use crate::protocol::zset::zincrby::ZIncrByCommand;
 use crate::protocol::zset::zpopmin::ZPopMinCommand;
 use crate::protocol::zset::zrange::ZRangeCommand;
@@ -216,6 +217,7 @@ impl RaftCommandFactory {
         factory.register("KEYS", KeysCommand);
         factory.register("ZSCORE", ZScoreCommand);
         factory.register("ZCARD", ZCardCommand);
+        factory.register("ZCOUNT", ZCountCommand);
         factory.register("ZRANK", ZRankCommand);
         factory.register("ZPOPMIN", ZPopMinCommand);
         factory.register("UNLINK", UnlinkCommand);

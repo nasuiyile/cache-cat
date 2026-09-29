@@ -83,6 +83,63 @@ async fn round_trip(
 }
 
 #[tokio::test]
+async fn zcount_dispatches_in_transactions_and_lua() {
+    let (_dir, node, server, mut client, mut replies) = test_connection().await;
+    assert_eq!(
+        round_trip(&server, &mut client, &mut replies, &["MULTI"])
+            .await
+            .encode(),
+        b"+OK\r\n"
+    );
+    for parts in [
+        vec!["ZADD", "scores", "1", "a", "2", "b", "3", "c"],
+        vec!["ZCOUNT", "scores", "(1", "+inf"],
+    ] {
+        assert_eq!(
+            round_trip(&server, &mut client, &mut replies, &parts)
+                .await
+                .encode(),
+            b"+QUEUED\r\n"
+        );
+    }
+
+    let cache = &node.app.state_machine.data.kvs;
+    let mut update_type = UpdateType::None;
+    let mut update = Update {
+        db_number: 0,
+        write_clock: 1,
+        update_type: &mut update_type,
+    };
+    let reply = do_request(
+        cache,
+        Operation::Redis(RedisOperation::RedisExec(
+            crate::protocol::transaction::exec::ExecParams {
+                operations: client.transaction_queue.take().unwrap(),
+            },
+        )),
+        &mut update,
+        true,
+    );
+    assert_eq!(reply.encode(), b"*2\r\n:3\r\n:2\r\n");
+
+    let reply = do_request(
+        cache,
+        Operation::Redis(RedisOperation::RedisEval(
+            crate::protocol::lua::eval::EvalParams::new(
+                "return redis.call('ZCOUNT', KEYS[1], '-inf', '2')".into(),
+                1,
+                vec!["scores".into()],
+                Vec::new(),
+            ),
+        )),
+        &mut update,
+        true,
+    );
+    assert_eq!(reply.encode(), b":2\r\n");
+    node.app.cluster.shutdown().await.unwrap();
+}
+
+#[tokio::test]
 async fn malformed_queued_command_aborts_exec_and_discards_writes() {
     let (_dir, node, server, mut client, mut replies) = test_connection().await;
 
