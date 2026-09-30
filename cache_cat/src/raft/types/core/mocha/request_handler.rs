@@ -237,8 +237,9 @@ pub fn do_request(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::mocha::ExpirePolicy;
+    use crate::mocha::{EntrySnapshot, ExpirePolicy};
     use crate::protocol::key::del::DelReq;
+    use crate::protocol::key::persist::PersistReq;
     use crate::protocol::lua::eval::EvalParams;
     use crate::protocol::stream::xadd::XAddReq;
     use crate::protocol::stream::xread::{XReadId, XReadParams};
@@ -265,6 +266,54 @@ mod tests {
             update_type: &mut update_type,
         };
         do_request(cache, operation, &mut update, true)
+    }
+
+    #[test]
+    fn snapshot_restore_replays_persist_before_expiration() {
+        let cache = MyCache::new(1).unwrap();
+        let key = Bytes::from_static(b"restore-key");
+
+        // Make the existing time wheel use a clock newer than the snapshot.
+        cache.set_write_clock(1_000);
+        cache.databases[0].mocha.active_expire_cycle_blocking();
+        cache.pause_expire_workers();
+        cache.reset_write_clock();
+
+        cache.databases[0].mocha.insert_snapshot(
+            key.clone(),
+            EntrySnapshot {
+                value: MyValue::new(ValueObject::String(Bytes::from_static(b"v"))),
+                expire_at: Some(500),
+            },
+        );
+
+        // Force the worker to process its queue at a clock beyond the deadline:
+        // even then, a paused worker must not delete the key before replay.
+        cache.set_write_clock(1_000);
+        cache.databases[0].mocha.active_expire_cycle_blocking();
+        cache.reset_write_clock();
+        cache.set_write_clock(400);
+
+        let mut update_type = UpdateType::CAS(2);
+        let mut update = Update {
+            db_number: 0,
+            write_clock: 400,
+            update_type: &mut update_type,
+        };
+        let reply = base_request(
+            &cache,
+            BaseOperation::Persist(PersistReq { key: key.clone() }),
+            &mut update,
+        );
+        assert!(matches!(reply, Value::Integer(1)));
+
+        cache.set_write_clock(1_000);
+        cache.resume_expire_workers();
+        let entry = cache.databases[0]
+            .mocha
+            .get_entry(&key)
+            .expect("persisted snapshot key");
+        assert_eq!(entry.expire_at, None);
     }
 
     fn read_params(key: &Bytes) -> XReadParams {

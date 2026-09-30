@@ -111,7 +111,7 @@ where
 pub async fn load_cache_from_path<P>(
     cache: Arc<MyCache>,
     path: P,
-) -> Result<Option<(SnapshotMeta, Vec<AtomicRequest>)>, io::Error>
+) -> Result<Option<(SnapshotMeta, Vec<AtomicRequest>, u64)>, io::Error>
 where
     P: AsRef<Path>,
 {
@@ -158,8 +158,8 @@ where
 
     let meta: CacheCatSnapshotMeta = bincode2::deserialize(&meta_buf)
         .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
-    cache.set_write_clock(meta.write_clock);
-    Ok(Some((meta.meta, queue)))
+    // Publish the final clock only after the incremental queue has replayed.
+    Ok(Some((meta.meta, queue, meta.write_clock)))
 }
 pub async fn dump_operation_queue_to_writer<W>(
     writer: &mut W,
@@ -308,4 +308,112 @@ async fn test_dump_and_load_with_data() {
         }
         _ => panic!("key2 type mismatch"),
     }
+}
+
+#[tokio::test]
+async fn install_snapshot_replays_persist_before_resuming_expiration() {
+    use crate::protocol::key::persist::PersistReq;
+    use crate::raft::store::statemachine::{StateMachineData, StateMachineStore};
+    use crate::raft::types::core::mocha::core::MyValue;
+    use crate::raft::types::core::value_object::ValueObject;
+    use crate::raft::types::entry::base_operation::BaseOperation;
+    use crate::raft::types::file_operator::FileOperator;
+    use bytes::Bytes;
+    use openraft::storage::RaftStateMachine;
+    use tokio::sync::broadcast;
+
+    let path = tempfile::tempdir().unwrap();
+    let snapshot_dir = path.path().join("snapshot");
+    fs::create_dir_all(&snapshot_dir).await.unwrap();
+    let full = MyCache::new(1).unwrap();
+    let persist_key = Bytes::from_static(b"persist");
+    let future_key = Bytes::from_static(b"future");
+    for (key, expire_at) in [
+        (persist_key.clone(), 500),
+        (Bytes::from_static(b"due"), 500),
+        (future_key.clone(), 1_500),
+    ] {
+        full.databases[0].mocha.insert_absolute(
+            key,
+            MyValue::new(ValueObject::String(Bytes::from_static(b"value"))),
+            expire_at,
+        );
+    }
+
+    // The full pass saw the old TTL, then PERSIST ran at 400 before the
+    // snapshot's final clock reached 1000.
+    let meta = CacheCatSnapshotMeta {
+        meta: SnapshotMeta {
+            last_log_id: None,
+            last_membership: Default::default(),
+        },
+        write_clock: 1_000,
+    };
+    let meta_bytes = bincode2::serialize(&meta).unwrap();
+    let mut writer = BufWriter::new(
+        File::create(snapshot_dir.join(get_snapshot_file_name()))
+            .await
+            .unwrap(),
+    );
+    writer.write_all(CACHE_MAGIC_NUM).await.unwrap();
+    writer.write_u8(VERSION).await.unwrap();
+    writer.write_u32(meta_bytes.len() as u32).await.unwrap();
+    writer.write_all(&meta_bytes).await.unwrap();
+    writer
+        .write_all(&vec![0; PLACEHOLDER_LENGTH - 4 - meta_bytes.len()])
+        .await
+        .unwrap();
+    full.dump_cache_to_writer(&mut writer).await.unwrap();
+    write_operation_queue_to_writer(
+        &mut writer,
+        &[AtomicRequest {
+            request: BaseOperation::Persist(PersistReq {
+                key: persist_key.clone(),
+            }),
+            version: 2,
+            write_clock: 400,
+            db_number: 0,
+        }],
+    )
+    .await
+    .unwrap();
+    writer.flush().await.unwrap();
+    writer.get_ref().sync_all().await.unwrap();
+    drop(writer);
+
+    let snapshot = FileOperator::new(path.path()).await.unwrap().unwrap();
+    fs::copy(
+        snapshot.get_hard_link_buf(),
+        snapshot.get_local_hard_link_buf(path.path()),
+    )
+    .await
+    .unwrap();
+    let cache = Arc::new(MyCache::new(1).unwrap());
+    cache.set_write_clock(2_000);
+    cache.databases[0].mocha.active_expire_cycle_blocking();
+    let mut store = StateMachineStore {
+        data: StateMachineData {
+            kvs: cache.clone(),
+            incremental_operation_queue: Default::default(),
+            raft_meta_data: Default::default(),
+            snapshot_message: broadcast::channel(2).0,
+        },
+        path: path.path().to_path_buf(),
+        node_id: 1,
+    };
+    store.install_snapshot(&meta.meta, snapshot).await.unwrap();
+
+    assert_eq!(cache.get_write_clock(), 1_000);
+    let mocha = &cache.databases[0].mocha;
+    // Check physical deletion before any read can perform lazy expiration.
+    assert_eq!(mocha.len(), 2);
+    let persisted = mocha.get_entry(&persist_key).unwrap();
+    assert_eq!(persisted.expire_at, None);
+    assert_eq!(persisted.value.version, 2);
+    assert_eq!(mocha.get_entry(&future_key).unwrap().expire_at, Some(1_500));
+
+    cache.set_write_clock(1_500);
+    mocha.active_expire_cycle_blocking();
+    assert_eq!(mocha.len(), 1);
+    assert!(mocha.get_entry(&persist_key).is_some());
 }

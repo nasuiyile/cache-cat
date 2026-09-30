@@ -80,6 +80,8 @@ enum ExpireCommand<K> {
     Advance,
     AdvanceAndWait(Sender<()>),
     HasExpiredByLocalClock { now: u64, done: Sender<bool> },
+    Pause(Sender<()>),
+    ResumeAndWait(Sender<()>),
 }
 
 #[derive(Debug)]
@@ -480,6 +482,7 @@ where
         expire_rx: Receiver<ExpireCommand<K>>,
     ) {
         let mut wheel = HierarchicalTimeWheel::new(logic_clock.load(Ordering::Relaxed));
+        let mut paused = false;
 
         loop {
             select! {
@@ -488,10 +491,10 @@ where
                         return;
                     };
 
-                    Self::handle_expire_command(&map, &logic_clock, &mut wheel, cmd);
+                    Self::handle_expire_command(&map, &logic_clock, &mut wheel, &mut paused, cmd);
 
                     while let Ok(cmd) = expire_rx.try_recv() {
-                        Self::handle_expire_command(&map, &logic_clock, &mut wheel, cmd);
+                        Self::handle_expire_command(&map, &logic_clock, &mut wheel, &mut paused, cmd);
                     }
                 }
             }
@@ -502,9 +505,48 @@ where
         map: &HashMap<K, Entry<V>>,
         logic_clock: &AtomicU64,
         wheel: &mut HierarchicalTimeWheel<K>,
+        paused: &mut bool,
         cmd: ExpireCommand<K>,
     ) {
         match cmd {
+            ExpireCommand::Pause(done) => {
+                *paused = true;
+                // All timers from the pre-restore map are stale. Starting at
+                // zero also handles a snapshot whose logical clock is older
+                // than this node's clock.
+                *wheel = HierarchicalTimeWheel::new(0);
+                let _ = done.send(());
+            }
+            ExpireCommand::ResumeAndWait(done) => {
+                *paused = false;
+                // Visit every pending timer, including deadlines at zero.
+                wheel.advance_large(logic_clock.load(Ordering::Relaxed), |key, expire_at| {
+                    Self::remove_expired_if_current_from(map, logic_clock, key, expire_at);
+                });
+                let _ = done.send(());
+            }
+            cmd if *paused => match cmd {
+                // Keep schedules generated while loading the snapshot. They
+                // are evaluated only after the replay has completed.
+                ExpireCommand::Schedule { key, expire_at } => {
+                    wheel.insert(TimerItem { key, expire_at });
+                }
+                ExpireCommand::ScheduleBatch { items } => {
+                    for item in items {
+                        wheel.insert(item);
+                    }
+                }
+                ExpireCommand::Advance => {}
+                ExpireCommand::AdvanceAndWait(done) => {
+                    let _ = done.send(());
+                }
+                ExpireCommand::HasExpiredByLocalClock { done, .. } => {
+                    let _ = done.send(false);
+                }
+                ExpireCommand::Pause(done) | ExpireCommand::ResumeAndWait(done) => {
+                    let _ = done.send(());
+                }
+            },
             ExpireCommand::Schedule { key, expire_at } => {
                 Self::advance_wheel(map, logic_clock, wheel);
 
@@ -565,6 +607,30 @@ where
 
     pub fn trigger_expire_cycle(&self) {
         let _ = self.expire_tx.send(ExpireCommand::Advance);
+    }
+
+    /// Pause physical expiration while a snapshot replaces the map. The
+    /// worker acknowledges only after all commands sent before this call have
+    /// been processed, so no old timer can race with snapshot loading.
+    pub fn pause_expire_worker_blocking(&self) {
+        let (done_tx, done_rx) = bounded(1);
+        if self.expire_tx.send(ExpireCommand::Pause(done_tx)).is_ok() {
+            let _ = done_rx.recv();
+        }
+    }
+
+    /// Resume expiration after snapshot data and its incremental queue have
+    /// been restored. The acknowledgement is sent after one expiration pass
+    /// at the restored logical clock.
+    pub fn resume_expire_worker_blocking(&self) {
+        let (done_tx, done_rx) = bounded(1);
+        if self
+            .expire_tx
+            .send(ExpireCommand::ResumeAndWait(done_tx))
+            .is_ok()
+        {
+            let _ = done_rx.recv();
+        }
     }
 
     pub async fn active_expire_cycle(&self) {

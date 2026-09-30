@@ -198,6 +198,18 @@ impl MyCache {
             db.mocha.clear();
         }
     }
+
+    pub fn pause_expire_workers(&self) {
+        for db in &self.databases {
+            db.mocha.pause_expire_worker_blocking();
+        }
+    }
+
+    pub fn resume_expire_workers(&self) {
+        for db in &self.databases {
+            db.mocha.resume_expire_worker_blocking();
+        }
+    }
 }
 
 pub struct Update<'a> {

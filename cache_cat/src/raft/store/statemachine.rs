@@ -21,6 +21,7 @@ use openraft::storage::RaftStateMachine;
 use std::io;
 use std::path::PathBuf;
 use std::sync::Arc;
+use tokio::fs;
 use tokio::sync::{Mutex, broadcast};
 
 //快照存在三个阶段，开始，收尾，结束
@@ -138,17 +139,17 @@ impl StateMachineStore {
             path: path.clone(),
         };
         let filename = get_snapshot_file_name();
+        sm.data.kvs.pause_expire_workers();
         let res = load_cache_from_path(cache, path.join("snapshot").join(filename)).await?;
         match res {
             None => {}
             Some(data) => {
-                let snapshot_clock = sm.data.kvs.get_write_clock();
-                sm.data.kvs.reset_write_clock();
                 sm.replay_snapshot_queue(&data.1).await;
-                sm.data.kvs.set_write_clock(snapshot_clock);
+                sm.data.kvs.set_write_clock(data.2);
                 sm.update_meta_data(data.0).await;
             }
         }
+        sm.data.kvs.resume_expire_workers();
         Ok(sm)
     }
     pub async fn update_meta_data(&mut self, metadata: SnapshotMeta) {
@@ -245,14 +246,27 @@ impl RaftStateMachine<TypeConfig> for StateMachineStore {
     ) -> Result<(), io::Error> {
         tracing::info!("node {} snapshot start!!!!", self.node_id);
         let path_buf = snapshot.get_local_hard_link_buf(&self.path);
-        //理论上快照一定会存在
+        //理论上快照一定会存在 暂时不进行过期。
+        self.data.kvs.pause_expire_workers();
+        {
+            // Drain reads that may have captured the old clock before loading
+            // new entries. Subsequent reads use zero or a replay clock.
+            let _read_lock = self.data.kvs.read_lock.write();
+            self.data.kvs.reset_write_clock();
+        }
+        // A failed load leaves a partial map; keep expiration paused on error.
         let res = load_cache_from_path(self.data.kvs.clone(), &path_buf)
             .await?
             .ok_or(io::Error::other("meta data is empty"))?;
-        let snapshot_clock = self.data.kvs.get_write_clock();
-        self.data.kvs.reset_write_clock();
         self.replay_snapshot_queue(&res.1).await;
-        self.data.kvs.set_write_clock(snapshot_clock);
+        self.data.kvs.set_write_clock(res.2);
+        //快照结束后恢复过期逻辑。
+        self.data.kvs.resume_expire_workers();
+        // The received file lives under a UUID-specific temporary name.  Publish
+        // it only after the state machine has accepted the snapshot so a restart
+        // can use the same snapshot that was just installed.
+        let snapshot_path = self.path.join("snapshot");
+        fs::rename(&path_buf, snapshot_path.join(get_snapshot_file_name())).await?;
         self.update_meta_data(res.0).await;
         Ok(())
     }
