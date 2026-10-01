@@ -9,7 +9,7 @@ pub fn read_request(
     my_cache: &MyCache,
     read_operation: ReadOperation,
     db_number: u16,
-    read_clock: Option<u64>,
+    read_clock: u64,
 ) -> Value {
     match read_operation {
         ReadOperation::Exists(param) => my_cache.execute_multi_read(param, db_number, read_clock),
@@ -42,7 +42,7 @@ pub fn read_request(
         ReadOperation::SInter(param) => my_cache.execute_multi_read(param, db_number, read_clock),
         ReadOperation::SUnion(param) => my_cache.execute_multi_read(param, db_number, read_clock),
         ReadOperation::SDiff(param) => my_cache.execute_multi_read(param, db_number, read_clock),
-        ReadOperation::Keys(param) => my_cache.keys(param, db_number, read_clock),
+        ReadOperation::Keys(param) => my_cache.keys(param, db_number, Some(read_clock)),
         ReadOperation::ZScore(param) => my_cache.execute_read(param, db_number, read_clock),
         ReadOperation::ZCard(param) => my_cache.execute_read(param, db_number, read_clock),
         ReadOperation::ZCount(param) => my_cache.execute_read(param, db_number, read_clock),
@@ -145,7 +145,8 @@ pub fn do_request(
     external: bool, //用来防止多次加锁
 ) -> Value {
     let result = match operation {
-        Operation::Read(read) => read_request(my_cache, read, update.db_number, None),
+        // Reads inside EXEC/Lua share the log's clock, including TTL replies.
+        Operation::Read(read) => read_request(my_cache, read, update.db_number, update.write_clock),
         Operation::Base(base) => base_request(my_cache, base, update),
         Operation::Redis(redis) => match redis {
             RedisOperation::RedisDel(param) => my_cache.redis_del(param, update, external),
@@ -225,8 +226,7 @@ pub fn do_request(
         let ready = std::mem::take(&mut *my_cache.ready_streams.lock());
         for key in ready {
             my_cache.blocking_keys.wake_ready(&key, |params| {
-                let result =
-                    my_cache.execute_multi_read(params.clone(), key.0, Some(update.write_clock));
+                let result = my_cache.execute_multi_read(params.clone(), key.0, update.write_clock);
                 (!matches!(result, Value::Array(None))).then_some(result)
             });
         }

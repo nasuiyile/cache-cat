@@ -18,7 +18,6 @@ use crate::raft::types::core::mocha::core::MyValue;
 use crate::raft::types::core::mocha::read_command::ReadCommand;
 use crate::raft::types::core::response_value::Value;
 use crate::raft::types::entry::read_operation::ReadOperation;
-use crate::utils::now_ms;
 use async_trait::async_trait;
 use bytes::Bytes;
 use serde::{Deserialize, Serialize};
@@ -49,7 +48,12 @@ impl ReadCommand for TtlParams {
         &self.key
     }
 
-    fn execute(&self, value: Option<EntrySnapshot<MyValue>>) -> Value {
+    fn execute(&self, _value: Option<EntrySnapshot<MyValue>>) -> Value {
+        // MyCache calls execute_with_clock; a raw value has no clock context.
+        Value::error("ERR TTL requires a logical clock")
+    }
+
+    fn execute_with_clock(&self, value: Option<EntrySnapshot<MyValue>>, now: u64) -> Value {
         match value {
             // Key does not exist
             None => Value::Integer(-2),
@@ -61,8 +65,6 @@ impl ReadCommand for TtlParams {
 
                     // Key exists and has an expire time
                     Some(expire_at) => {
-                        // Get current time in milliseconds
-                        let now = now_ms();
                         if now >= expire_at {
                             return Value::Integer(-2);
                         }

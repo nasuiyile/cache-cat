@@ -130,7 +130,7 @@ impl CacheCatApp {
             &self.state_machine.data.kvs,
             param,
             db_number,
-            Some(read_clock),
+            read_clock,
         ))
     }
 
@@ -147,7 +147,7 @@ impl CacheCatApp {
             &self.state_machine.data.kvs,
             param,
             db_number,
-            Some(read_clock),
+            read_clock,
         ))
     }
 }
