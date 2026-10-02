@@ -178,8 +178,12 @@ impl MyCache {
         }
     }
 
-    pub fn flush_db(&self, req: FlushDBReq, update: &mut Update) -> Value {
-        let _lock = self.read_lock.write();
+    pub fn flush_db(&self, req: FlushDBReq, update: &mut Update, external: bool) -> Value {
+        let _lock = if external {
+            Some(self.read_lock.write())
+        } else {
+            None
+        };
         let cache = match self.get_cache(update.db_number) {
             Err(err) => return err,
             Ok(cache) => &cache.mocha,
@@ -204,8 +208,12 @@ impl MyCache {
         Value::ok()
     }
 
-    pub fn flush_all(&self, req: FlushAllReq, update: &mut Update) -> Value {
-        let _lock = self.read_lock.write();
+    pub fn flush_all(&self, req: FlushAllReq, update: &mut Update, external: bool) -> Value {
+        let _lock = if external {
+            Some(self.read_lock.write())
+        } else {
+            None
+        };
         match update.update_type {
             UpdateType::None => {
                 for database in &self.databases {

@@ -67,6 +67,16 @@ pub fn base_request(
     base_operation: BaseOperation,
     update: &mut Update,
 ) -> Value {
+    // Snapshot replay has no outer Lua/EXEC lock to reuse.
+    base_request_inner(my_cache, base_operation, update, true)
+}
+
+fn base_request_inner(
+    my_cache: &MyCache,
+    base_operation: BaseOperation,
+    update: &mut Update,
+    external: bool,
+) -> Value {
     match base_operation {
         BaseOperation::Empty => {
             for db in &my_cache.databases {
@@ -119,8 +129,8 @@ pub fn base_request(
         BaseOperation::Decr(param) => my_cache.decr(param, update),
         BaseOperation::ZRem(param) => my_cache.z_rem(param, update),
         BaseOperation::LTrim(param) => my_cache.l_trim(param, update),
-        BaseOperation::FlushDB(param) => my_cache.flush_db(param, update),
-        BaseOperation::FlushAll(param) => my_cache.flush_all(param, update),
+        BaseOperation::FlushDB(param) => my_cache.flush_db(param, update, external),
+        BaseOperation::FlushAll(param) => my_cache.flush_all(param, update, external),
         BaseOperation::BitField(param) => my_cache.bit_field(param, update),
         BaseOperation::SPop(param) => my_cache.s_pop(param, update),
         BaseOperation::ZPopMin(param) => my_cache.z_pop_min(param, update),
@@ -147,7 +157,7 @@ pub fn do_request(
     let result = match operation {
         // Reads inside EXEC/Lua share the log's clock, including TTL replies.
         Operation::Read(read) => read_request(my_cache, read, update.db_number, update.write_clock),
-        Operation::Base(base) => base_request(my_cache, base, update),
+        Operation::Base(base) => base_request_inner(my_cache, base, update, external),
         Operation::Redis(redis) => match redis {
             RedisOperation::RedisDel(param) => my_cache.redis_del(param, update, external),
             RedisOperation::RedisSet(param) => my_cache.redis_set(param, update),
