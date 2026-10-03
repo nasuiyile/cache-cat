@@ -23,7 +23,7 @@ use async_trait::async_trait;
 use bytes::Bytes;
 use serde::{Deserialize, Serialize};
 use std::fmt::{Display, Formatter};
-use tokio::sync::watch;
+use tokio::sync::mpsc;
 
 /// PSUBSCRIBE command parameters
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -70,13 +70,16 @@ impl BlockCommand for PsubscribeCommand {
         client: &mut Client,
         items: &[Value],
         server: &RedisServer,
-    ) -> Result<(Value, watch::Receiver<Option<Value>>), CacheCatError> {
+    ) -> Result<(Value, mpsc::UnboundedReceiver<Value>), CacheCatError> {
         let params = PsubscribeParams::parse(items)?;
-        client.flag.in_sub = true;
-        Ok(server
+        let (reply, receiver) = server
             .broadcast
             .psubscribe(params.patterns, client.id)
-            .await)
+            .await;
+        let receiver = receiver
+            .ok_or_else(|| CacheCatError::internal("subscription receiver already taken"))?;
+        client.flag.in_sub = true;
+        Ok((reply, receiver))
     }
 
     async fn execute_during_block(

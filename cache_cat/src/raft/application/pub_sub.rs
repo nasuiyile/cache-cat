@@ -2,11 +2,11 @@ use crate::raft::types::core::response_value::Value;
 use bytes::Bytes;
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
-use tokio::sync::{RwLock, watch};
+use tokio::sync::{RwLock, mpsc};
 
 // Client status
 struct ClientState {
-    sender: watch::Sender<Option<Value>>,
+    sender: mpsc::UnboundedSender<Value>,
     // Record which channels the client has subscribed to,
     // and clear them when unsubscribing all channels
     subscribed_channels: HashSet<Bytes>,
@@ -28,20 +28,21 @@ impl PubSub {
         Self::default()
     }
 
-    /// Retrieve or create status for the client and return a new Receiver
-    async fn get_or_create_client(&self, client_id: u64) -> watch::Receiver<Option<Value>> {
+    /// Return the receiver only for the first subscription. Further
+    /// subscriptions reuse the queue consumed by the connection's existing loop.
+    async fn get_or_create_client(&self, client_id: u64) -> Option<mpsc::UnboundedReceiver<Value>> {
         let mut clients = self.clients.write().await;
-        let state = clients.entry(client_id).or_insert_with(|| {
-            let (tx, _) = watch::channel(None);
+        let mut receiver = None;
+        clients.entry(client_id).or_insert_with(|| {
+            let (tx, rx) = mpsc::unbounded_channel();
+            receiver = Some(rx);
             ClientState {
                 sender: tx,
                 subscribed_channels: HashSet::new(),
                 subscribed_patterns: HashSet::new(),
             }
         });
-        // watch::Sender can create a new Receiver using the subscribe() method
-        // All receivers created through subscribe() will receive subsequent messages
-        state.sender.subscribe()
+        receiver
     }
 
     /// Build a pub/sub confirmation / notification frame.
@@ -69,7 +70,7 @@ impl PubSub {
         &self,
         channels: Vec<Bytes>,
         client_id: u64,
-    ) -> (Value, watch::Receiver<Option<Value>>) {
+    ) -> (Value, Option<mpsc::UnboundedReceiver<Value>>) {
         let rx = self.get_or_create_client(client_id).await;
 
         // Register the subscriptions
@@ -129,8 +130,7 @@ impl PubSub {
                         Self::client_sub_total(state),
                     ));
                 }
-                // If the client no longer has any subscriptions,
-                // send a close signal and clear it
+                // Drop the sender when the client has no subscriptions left.
                 Self::cleanup_client_if_empty(&mut clients, client_id);
             } else {
                 for channel in channels {
@@ -210,7 +210,7 @@ impl PubSub {
         &self,
         patterns: Vec<Bytes>,
         client_id: u64,
-    ) -> (Value, watch::Receiver<Option<Value>>) {
+    ) -> (Value, Option<mpsc::UnboundedReceiver<Value>>) {
         let rx = self.get_or_create_client(client_id).await;
 
         // Register the pattern subscriptions
@@ -273,7 +273,7 @@ impl PubSub {
         // Send to precise subscribers
         for client_id in &exact_subs {
             if let Some(state) = clients.get(client_id)
-                && state.sender.send(Some(exact_msg.clone())).is_ok()
+                && state.sender.send(exact_msg.clone()).is_ok()
             {
                 delivered_clients.insert(*client_id);
             }
@@ -290,7 +290,7 @@ impl PubSub {
 
             for client_id in set {
                 if let Some(state) = clients.get(client_id)
-                    && state.sender.send(Some(pmessage.clone())).is_ok()
+                    && state.sender.send(pmessage.clone()).is_ok()
                 {
                     delivered_clients.insert(*client_id);
                 }
@@ -320,11 +320,8 @@ impl PubSub {
         });
         drop(patterns);
 
-        // Forcefully remove the client state and send an empty message to notify all receivers first
+        // Dropping the sender closes the queue after its pending messages.
         let mut clients = self.clients.write().await;
-        if let Some(state) = clients.get_mut(&client_id) {
-            let _ = state.sender.send(None); // Send a shutdown signal
-        }
         clients.remove(&client_id);
     }
 
@@ -487,7 +484,7 @@ impl PubSub {
     // ------------------ Private auxiliary function ------------------
 
     /// When the client no longer has any subscriptions,
-    /// send an empty message and remove the client state.
+    /// remove its state and close the queue without discarding pending messages.
     /// Before calling, it is necessary to ensure that the write lock for 'clients'
     /// is already held and the subscription collection has been updated.
     fn cleanup_client_if_empty(clients: &mut HashMap<u64, ClientState>, client_id: u64) {
@@ -495,9 +492,6 @@ impl PubSub {
             && state.subscribed_channels.is_empty()
             && state.subscribed_patterns.is_empty()
         {
-            // Send a 'None' as a shutdown signal to notify all receivers
-            // that the subscription has ended
-            let _ = state.sender.send(None);
             clients.remove(&client_id);
         }
     }

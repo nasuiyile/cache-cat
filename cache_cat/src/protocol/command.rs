@@ -135,7 +135,7 @@ use std::collections::HashMap;
 use std::fmt;
 use std::fmt::{Display, Formatter};
 use tokio::select;
-use tokio::sync::watch;
+use tokio::sync::mpsc;
 use tokio_util::codec::Framed;
 use tracing::{error, warn};
 
@@ -153,13 +153,13 @@ pub trait Command: Send + Sync {
 #[async_trait]
 pub trait BlockCommand: Send + Sync {
     /// Execute the command with given RESP items and server context
-    /// Returns initial response and a watch receiver for subsequent messages
+    /// Returns initial response and a queue receiver for subsequent messages
     async fn execute(
         &self,
         client: &mut Client,
         items: &[Value],
         server: &RedisServer,
-    ) -> Result<(Value, watch::Receiver<Option<Value>>), CacheCatError>;
+    ) -> Result<(Value, mpsc::UnboundedReceiver<Value>), CacheCatError>;
     async fn execute_during_block(
         &self,
         client: &mut Client,
@@ -496,7 +496,7 @@ impl CommandFactory {
         client: &mut Client,
         server: &RedisServer,
         block_cmd: &dyn BlockCommand,
-    ) -> Result<(), CacheCatError> {
+    ) -> Result<Value, CacheCatError> {
         // RESP3 semantics: a subscribed client may issue *any* command, not
         // just the subscribe-family ones. RESP2 clients stay restricted.
         if client.framed.codec().proto_version() == 3
@@ -511,21 +511,17 @@ impl CommandFactory {
                         Value::from(e)
                     }
                 };
-                client.framed.send(resp).await?;
-                return Ok(());
+                return Ok(resp);
             }
 
             client.mark_transaction_failed();
             let resp = Value::from(ProtocolError::UnknownCommand(parsed.name));
-            client.framed.send(resp).await?;
-            return Ok(());
+            return Ok(resp);
         }
 
-        let resp = block_cmd
+        block_cmd
             .execute_during_block(client, &parsed, server)
-            .await?;
-        client.framed.send(resp).await?;
-        Ok(())
+            .await
     }
 
     /// Process the blocking command subscription stream
@@ -535,7 +531,7 @@ impl CommandFactory {
         server: &RedisServer,
         block_cmd: &dyn BlockCommand,
         initial_resp: Value,
-        mut stream: watch::Receiver<Option<Value>>,
+        mut stream: mpsc::UnboundedReceiver<Value>,
     ) -> Result<(), CacheCatError> {
         // Send initial response
         client.framed.send(initial_resp).await?;
@@ -543,18 +539,10 @@ impl CommandFactory {
         loop {
             select! {
                 // Subscription stream has new data
-                change = stream.changed() => {
-                    match change {
-                        Ok(_) => {
-                            let val = stream.borrow().clone();
-                            match val {
-                                None => return Ok(()), // Subscription ended
-                                Some(v) => {
-                                    client.framed.send(v).await?;
-                                }
-                            }
-                        }
-                        Err(_) => return Ok(()), // Sender dropped
+                message = stream.recv() => {
+                    match message {
+                        Some(value) => client.framed.send(value).await?,
+                        None => return Ok(()), // Subscription ended
                     }
                 }
 
@@ -570,13 +558,21 @@ impl CommandFactory {
                                 }
                             };
 
-                            self.handle_command_in_blocking_context(
+                            let resp = self.handle_command_in_blocking_context(
                                 parsed,
                                 client,
                                 server,
                                 block_cmd,
                             ).await?;
-                            if client.closed{
+                            if stream.is_closed() {
+                                // Deliver queued messages before the final unsubscribe
+                                // reply, then leave this loop before a new SUBSCRIBE.
+                                while let Some(value) = stream.recv().await {
+                                    client.framed.send(value).await?;
+                                }
+                            }
+                            client.framed.send(resp).await?;
+                            if client.closed || stream.is_closed() {
                                 return Ok(());
                             }
                         }

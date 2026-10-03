@@ -270,6 +270,134 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn pubsub_preserves_bursts_and_pipelined_resubscriptions() {
+        async fn expect_push(
+            client: &mut Framed<TcpStream, RespCodec>,
+            proto: u8,
+            parts: &[&[u8]],
+            count: Option<i64>,
+        ) {
+            let reply = timeout(Duration::from_secs(2), client.next())
+                .await
+                .unwrap()
+                .unwrap()
+                .unwrap();
+            assert_eq!(matches!(&reply, Value::Push(_)), proto == 3);
+            let mut values: Vec<_> = parts
+                .iter()
+                .map(|part| Value::BulkString(Some(Bytes::copy_from_slice(part))))
+                .collect();
+            values.extend(count.map(Value::Integer));
+            assert_eq!(reply.encode(), Value::Push(values).encode());
+        }
+
+        let (_dir, node, _) = test_node().await;
+        let server = Arc::new(
+            RedisServer::new(node.app.clone(), "127.0.0.1:0".into(), &node.app.config).unwrap(),
+        );
+        for proto in [2, 3] {
+            let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let socket = TcpStream::connect(listener.local_addr().unwrap())
+                .await
+                .unwrap();
+            let (connection, addr) = listener.accept().await.unwrap();
+            let handler = tokio::spawn(server.clone().handle_connection_pipeline(
+                connection,
+                addr,
+                u64::from(proto),
+            ));
+            let mut client = Framed::new(socket, RespCodec::new());
+            if proto == 3 {
+                client.send(command(&[b"HELLO", b"3"])).await.unwrap();
+                let reply = timeout(Duration::from_secs(2), client.next())
+                    .await
+                    .unwrap()
+                    .unwrap()
+                    .unwrap();
+                assert!(matches!(reply, Value::Map(_)));
+                client.codec_mut().switch_resp3();
+            }
+            for (cmd, kind, target, count) in [
+                (
+                    b"SUBSCRIBE".as_slice(),
+                    b"subscribe".as_slice(),
+                    b"first".as_slice(),
+                    1,
+                ),
+                (
+                    b"SUBSCRIBE".as_slice(),
+                    b"subscribe".as_slice(),
+                    b"updates".as_slice(),
+                    2,
+                ),
+                (
+                    b"PSUBSCRIBE".as_slice(),
+                    b"psubscribe".as_slice(),
+                    b"updates*".as_slice(),
+                    3,
+                ),
+            ] {
+                client.send(command(&[cmd, target])).await.unwrap();
+                expect_push(&mut client, proto, &[kind, target], Some(count)).await;
+            }
+            // Publish the entire burst before reading, including both delivery forms.
+            for i in 0..32 {
+                server
+                    .broadcast
+                    .publish(Bytes::from_static(b"updates"), Bytes::from(i.to_string()))
+                    .await;
+            }
+            for i in 0..32 {
+                let payload = i.to_string();
+                expect_push(
+                    &mut client,
+                    proto,
+                    &[b"message", b"updates", payload.as_bytes()],
+                    None,
+                )
+                .await;
+                expect_push(
+                    &mut client,
+                    proto,
+                    &[b"pmessage", b"updates*", b"updates", payload.as_bytes()],
+                    None,
+                )
+                .await;
+            }
+            // The final unsubscribe closes the old queue; the next command needs a new one.
+            client
+                .feed(command(&[b"UNSUBSCRIBE", b"first", b"updates"]))
+                .await
+                .unwrap();
+            client
+                .feed(command(&[b"PUNSUBSCRIBE", b"updates*"]))
+                .await
+                .unwrap();
+            client
+                .feed(command(&[b"SUBSCRIBE", b"updates"]))
+                .await
+                .unwrap();
+            client.flush().await.unwrap();
+            expect_push(&mut client, proto, &[b"unsubscribe", b"first"], Some(2)).await;
+            expect_push(&mut client, proto, &[b"unsubscribe", b"updates"], Some(1)).await;
+            expect_push(&mut client, proto, &[b"punsubscribe", b"updates*"], Some(0)).await;
+            expect_push(&mut client, proto, &[b"subscribe", b"updates"], Some(1)).await;
+            server
+                .broadcast
+                .publish(Bytes::from_static(b"updates"), Bytes::from_static(b"new"))
+                .await;
+            expect_push(&mut client, proto, &[b"message", b"updates", b"new"], None).await;
+            drop(client);
+            timeout(Duration::from_secs(2), handler)
+                .await
+                .unwrap()
+                .unwrap()
+                .unwrap();
+        }
+        node.app.cluster.shutdown().await.unwrap();
+    }
+
+    #[tokio::test]
     async fn disconnect_cleans_up_subscriptions_even_on_read_error() {
         let (_dir, node, _) = test_node().await;
         let server = Arc::new(
