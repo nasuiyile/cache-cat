@@ -123,6 +123,7 @@ mod tests {
     use crate::protocol::key::ttl::TtlParams;
     use crate::protocol::lua::eval::EvalParams;
     use crate::protocol::string::get::GetParams;
+    use crate::protocol::transaction::QueuedOperation;
     use crate::protocol::transaction::exec::ExecParams;
     use crate::raft::types::core::mocha::core::{MyCache, Update, UpdateType};
     use crate::raft::types::core::mocha::request_handler::do_request;
@@ -183,9 +184,15 @@ mod tests {
         )));
         let exec = Operation::Redis(RedisOperation::RedisExec(ExecParams {
             operations: vec![
-                Operation::Read(ReadOperation::PTtl(PTtlParams { key: "key".into() })),
-                Operation::Read(ReadOperation::Ttl(TtlParams { key: "key".into() })),
-                eval.clone(),
+                QueuedOperation::new(
+                    0,
+                    Operation::Read(ReadOperation::PTtl(PTtlParams { key: "key".into() })),
+                ),
+                QueuedOperation::new(
+                    0,
+                    Operation::Read(ReadOperation::Ttl(TtlParams { key: "key".into() })),
+                ),
+                QueuedOperation::new(0, eval.clone()),
             ],
         }));
         for (operation, expected) in [

@@ -22,6 +22,7 @@ mod tests {
     use crate::mocha::EntrySnapshot;
     use crate::protocol::lua::eval::EvalParams;
     use crate::protocol::raft_command::RaftCommandFactory;
+    use crate::protocol::transaction::QueuedOperation;
     use crate::protocol::transaction::exec::ExecParams;
     use crate::raft::types::core::mocha::cas::{ComputeCommand, MultiReadComputeCommand};
     use crate::raft::types::core::mocha::core::{MyCache, MyValue, Update, UpdateType};
@@ -106,7 +107,7 @@ mod tests {
                 cases.push((eval.clone(), false, "*2\r\n+OK\r\n$3\r\nnew\r\n"));
                 cases.push((
                     Operation::Redis(RedisOperation::RedisExec(ExecParams {
-                        operations: vec![eval],
+                        operations: vec![QueuedOperation::new(1, eval)],
                     })),
                     false,
                     "*1\r\n*2\r\n+OK\r\n$3\r\nnew\r\n",
@@ -116,9 +117,9 @@ mod tests {
                 cases.push((
                     Operation::Redis(RedisOperation::RedisExec(ExecParams {
                         operations: vec![
-                            Operation::Base(flush(all)),
-                            command(&["SET", "after", "new"]),
-                            command(&["GET", "after"]),
+                            QueuedOperation::new(1, Operation::Base(flush(all))),
+                            QueuedOperation::new(1, command(&["SET", "after", "new"])),
+                            QueuedOperation::new(1, command(&["GET", "after"])),
                         ],
                     })),
                     all,

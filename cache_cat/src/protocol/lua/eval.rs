@@ -195,7 +195,7 @@ mod tests {
                 assert_eq!(reply.encode(), b"+QUEUED\r\n");
             }
             let operation = Operation::Redis(RedisOperation::RedisExec(ExecParams {
-                operations: client.transaction_queue.take().unwrap(),
+                operations: client.transaction_queue.take().unwrap().operations,
             }));
             let encoded = bincode2::serialize(&operation).unwrap();
             let operation: Operation = bincode2::deserialize(&encoded).unwrap();

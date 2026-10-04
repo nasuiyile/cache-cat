@@ -109,6 +109,7 @@ use crate::protocol::string::psetex::PSetExCommand;
 use crate::protocol::string::set::SetCommand;
 use crate::protocol::string::setex::SetExCommand;
 use crate::protocol::string::setnx::SetNxCommand;
+use crate::protocol::transaction::TransactionQueue;
 use crate::protocol::transaction::discard::DiscardCommand;
 use crate::protocol::transaction::exec::ExecCommand;
 use crate::protocol::transaction::multi::MultiCommand;
@@ -126,7 +127,6 @@ use crate::protocol::zset::zscore::ZScoreCommand;
 use crate::raft::network::connection::Connection;
 use crate::raft::network::redis_server::{RedisServer, RespCodec};
 use crate::raft::types::core::response_value::Value;
-use crate::raft::types::entry::request::Operation;
 use crate::utils::now_ms;
 use async_trait::async_trait;
 use futures::SinkExt;
@@ -182,7 +182,7 @@ pub trait SubCommand: Send + Sync {
 pub struct Client {
     pub id: u64,
     pub db_number: u16,
-    pub transaction_queue: Option<Vec<Operation>>,
+    pub transaction_queue: Option<TransactionQueue>,
     /// Whether command validation failed while a MULTI transaction was open.
     ///
     /// Redis keeps the transaction queue after a queue-time error, but marks

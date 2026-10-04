@@ -220,13 +220,18 @@ pub fn do_request(
                     None
                 };
                 let mut vec = Vec::new();
-                for operation in param.operations {
-                    vec.push(do_request(my_cache, operation, update, false));
+                for queued in param.operations {
+                    update.db_number = queued.db_number;
+                    vec.push(do_request(my_cache, queued.operation, update, false));
                 }
                 Value::Array(Some(vec))
             }
             RedisOperation::RedisUnlink(param) => my_cache.redis_unlink(param, update, external),
             RedisOperation::RedisReply(value) => value,
+            RedisOperation::RedisEvalSha { .. } => {
+                // Unresolved hashes must never consult replica-local script caches.
+                Value::error("unresolved EVALSHA in replicated request")
+            }
         },
     };
     if external {
@@ -253,6 +258,7 @@ mod tests {
     use crate::protocol::lua::eval::EvalParams;
     use crate::protocol::stream::xadd::XAddReq;
     use crate::protocol::stream::xread::{XReadId, XReadParams};
+    use crate::protocol::transaction::QueuedOperation;
     use crate::protocol::transaction::exec::ExecParams;
     use crate::raft::types::core::mocha::core::{MyValue, UpdateType};
     use crate::raft::types::core::structure::stream::StreamId;
@@ -419,21 +425,27 @@ mod tests {
 
     #[tokio::test]
     async fn xadd_in_exec_and_lua_notifies_readers() {
-        let cache = MyCache::new(1).unwrap();
+        let cache = MyCache::new(2).unwrap();
         let key = Bytes::from_static(b"stream");
         let operations = [
-            Operation::Redis(RedisOperation::RedisExec(ExecParams {
-                operations: vec![xadd(&key, AddId::Auto)],
-            })),
-            Operation::Redis(RedisOperation::RedisEval(EvalParams {
-                script: "return redis.call('XADD', KEYS[1], '*', 'field', 'value')".into(),
-                numkeys: 1,
-                keys: vec![key.clone()],
-                args: vec![],
-                proto: 2,
-            })),
+            (
+                Operation::Redis(RedisOperation::RedisExec(ExecParams {
+                    operations: vec![QueuedOperation::new(0, xadd(&key, AddId::Auto))],
+                })),
+                1,
+            ),
+            (
+                Operation::Redis(RedisOperation::RedisEval(EvalParams {
+                    script: "return redis.call('XADD', KEYS[1], '*', 'field', 'value')".into(),
+                    numkeys: 1,
+                    keys: vec![key.clone()],
+                    args: vec![],
+                    proto: 2,
+                })),
+                0,
+            ),
         ];
-        for operation in operations {
+        for (operation, db_number) in operations {
             let mut params = read_params(&key);
             if let Some(entry) = cache.databases[0].mocha.get_entry(&key) {
                 let ValueObject::Stream(stream) = entry.value.data else {
@@ -445,7 +457,7 @@ mod tests {
                 .blocking_keys
                 .register_with(vec![(0, key.clone())], None, params)
                 .unwrap();
-            let result = apply(&cache, operation, 0, 1234);
+            let result = apply(&cache, operation, db_number, 1234);
             assert!(!matches!(result, Value::Error(_)), "{result:?}");
             let result = tokio::time::timeout(Duration::from_secs(1), reader.wait())
                 .await
@@ -453,6 +465,7 @@ mod tests {
             let (ready_key, reply) = result.unwrap();
             assert_eq!(ready_key, (0, key.clone()));
             assert!(matches!(reply, Value::MapWithResp2 { .. }));
+            assert!(cache.databases[1].mocha.get_entry(&key).is_none());
         }
     }
 
@@ -510,8 +523,11 @@ mod tests {
         let operations = [
             Operation::Redis(RedisOperation::RedisExec(ExecParams {
                 operations: vec![
-                    xadd(&key, AddId::Auto),
-                    Operation::Base(BaseOperation::Del(DelReq { key: key.clone() })),
+                    QueuedOperation::new(0, xadd(&key, AddId::Auto)),
+                    QueuedOperation::new(
+                        0,
+                        Operation::Base(BaseOperation::Del(DelReq { key: key.clone() })),
+                    ),
                 ],
             })),
             Operation::Redis(RedisOperation::RedisEval(EvalParams {

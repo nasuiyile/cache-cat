@@ -1,5 +1,6 @@
 use crate::error::{CacheCatError, ProtocolError};
 use crate::protocol::command::{Client, Command};
+use crate::protocol::transaction::TransactionQueue;
 use crate::raft::network::redis_server::RedisServer;
 use crate::raft::types::core::response_value::Value;
 use async_trait::async_trait;
@@ -21,7 +22,7 @@ impl Command for MultiCommand {
         if client.transaction_queue.is_some() {
             return Err(ProtocolError::response("ERR MULTI calls can not be nested").into());
         }
-        client.transaction_queue = Some(vec![]);
+        client.transaction_queue = Some(TransactionQueue::new(client.db_number));
         client.transaction_failed = false;
         client.flag.multi = true;
         Ok(Value::ok())
