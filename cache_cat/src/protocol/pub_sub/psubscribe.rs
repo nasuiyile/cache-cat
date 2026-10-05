@@ -119,10 +119,16 @@ impl BlockCommand for PsubscribeCommand {
             Ok(result)
         } else if cmd.name == "PING" {
             let params = PingParam::parse(&cmd.items)?;
-            return Ok(Value::Array(Some(vec![
-                Value::SimpleString("PONG".to_string()),
-                Value::BulkString(params.message),
-            ])));
+            if client.framed.codec().proto_version() == 2 {
+                return Ok(Value::Array(Some(vec![
+                    Value::BulkString(Some(Bytes::from_static(b"pong"))),
+                    Value::BulkString(Some(params.message.unwrap_or_default())),
+                ])));
+            }
+            return Ok(match params.message {
+                None => Value::SimpleString("PONG".to_string()),
+                Some(message) => Value::BulkString(Some(message)),
+            });
         } else if cmd.name == "QUIT" {
             client.closed = true;
             return Ok(Value::ok());

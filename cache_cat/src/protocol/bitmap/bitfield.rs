@@ -178,7 +178,7 @@ impl Display for BitFieldOverflow {
 
 /// OVERFLOW 本身不产生返回值。
 ///
-/// 解析时会把当前 OVERFLOW 策略复制到后续 SET/INCRBY 子命令中，
+/// 解析时会把当前 OVERFLOW 策略复制到后续 INCRBY 子命令中，
 /// 从而保证 Raft 日志包含完整、确定的执行语义。
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 pub enum BitFieldSubCommand {
@@ -191,7 +191,6 @@ pub enum BitFieldSubCommand {
         encoding: BitFieldEncoding,
         offset: u64,
         value: i64,
-        overflow: BitFieldOverflow,
     },
 
     IncrBy {
@@ -237,13 +236,8 @@ impl Display for BitFieldSubCommand {
                 encoding,
                 offset,
                 value,
-                overflow,
             } => {
-                write!(
-                    f,
-                    "SET {} {} {} OVERFLOW {}",
-                    encoding, offset, value, overflow
-                )
+                write!(f, "SET {} {} {}", encoding, offset, value)
             }
 
             BitFieldSubCommand::IncrBy {
@@ -349,24 +343,12 @@ impl BitFieldReq {
                     encoding,
                     offset,
                     value,
-                    overflow,
                 } => {
                     let old_value = read_bitfield(bytes, encoding, offset);
-                    let normalized = encoding.normalize(value as i128, overflow);
-
-                    match normalized {
-                        Some(new_value) => {
-                            write_bitfield(bytes, encoding, offset, new_value);
-
-                            // SET 返回写入前的旧值。
-                            replies.push(Value::Integer(old_value));
-                        }
-
-                        None => {
-                            // OVERFLOW FAIL：不修改对应字段，返回 nil。
-                            replies.push(null_value());
-                        }
-                    }
+                    // Redis SET always stores the low bits. OVERFLOW only
+                    // controls INCRBY; it must not saturate or reject SET.
+                    write_bitfield(bytes, encoding, offset, value);
+                    replies.push(Value::Integer(old_value));
                 }
 
                 BitFieldSubCommand::IncrBy {
@@ -467,6 +449,60 @@ mod tests {
     use super::*;
 
     #[test]
+    fn set_truncates_bits_while_overflow_still_controls_following_increments() {
+        for (encoding, value, stored, saturated) in [("u8", "300", 44, 255), ("i8", "255", -1, 127)]
+        {
+            for (mode, increment_reply, final_value) in [
+                ("WRAP", Value::Integer(stored), stored),
+                ("SAT", Value::Integer(saturated), saturated),
+                ("FAIL", Value::BulkString(None), stored),
+            ] {
+                let items = [
+                    "BITFIELD", "key", "OVERFLOW", mode, "SET", encoding, "0", value, "GET",
+                    encoding, "0", "INCRBY", encoding, "0", "256", "GET", encoding, "0",
+                ]
+                .map(|arg| Value::BulkString(Some(Bytes::copy_from_slice(arg.as_bytes()))));
+                let params = BitFieldCommand::parse_args(&items).unwrap();
+                let req = BitFieldReq {
+                    key: params.key,
+                    operations: params.operations,
+                };
+                for existing in [false, true] {
+                    let (operation, reply) = if existing {
+                        req.clone().mutate(
+                            EntrySnapshot {
+                                value: MyValue::new(ValueObject::String(Bytes::from_static(&[7]))),
+                                expire_at: Some(10_000),
+                            },
+                            1_000,
+                        )
+                    } else {
+                        req.clone().init()
+                    };
+                    let expected = Value::Array(Some(vec![
+                        Value::Integer(if existing { 7 } else { 0 }),
+                        Value::Integer(stored),
+                        increment_reply.clone(),
+                        Value::Integer(final_value),
+                    ]));
+                    assert_eq!(reply.encode(), expected.encode(), "{encoding} {mode}");
+                    let MochaOperation::Insert { value, expire } = operation else {
+                        panic!("SET must write its truncated value");
+                    };
+                    let ValueObject::String(bytes) = value.data else {
+                        panic!("BITFIELD must store a string");
+                    };
+                    assert_eq!(bytes.as_ref(), &[final_value as u8]);
+                    assert!(matches!(
+                        (existing, expire),
+                        (true, ExpirePolicy::Absolute(10_000)) | (false, ExpirePolicy::Persistent)
+                    ));
+                }
+            }
+        }
+    }
+
+    #[test]
     fn overflow_fail_returns_null_bulk_and_preserves_field() {
         let req = BitFieldReq {
             key: Bytes::from_static(b"key"),
@@ -475,7 +511,6 @@ mod tests {
                     encoding: BitFieldEncoding::unsigned(8),
                     offset: 0,
                     value: 255,
-                    overflow: BitFieldOverflow::Wrap,
                 },
                 BitFieldSubCommand::IncrBy {
                     encoding: BitFieldEncoding::unsigned(8),
@@ -617,7 +652,6 @@ impl BitFieldCommand {
                         encoding,
                         offset,
                         value,
-                        overflow,
                     });
 
                     index += 4;

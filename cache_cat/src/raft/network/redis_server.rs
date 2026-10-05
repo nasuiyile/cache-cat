@@ -295,7 +295,7 @@ mod tests {
         let server = Arc::new(
             RedisServer::new(node.app.clone(), "127.0.0.1:0".into(), &node.app.config).unwrap(),
         );
-        for proto in [2, 3] {
+        for (proto, pattern_first) in [(2, false), (2, true), (3, false), (3, true)] {
             let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
             let socket = TcpStream::connect(listener.local_addr().unwrap())
                 .await
@@ -317,28 +317,51 @@ mod tests {
                 assert!(matches!(reply, Value::Map(_)));
                 client.codec_mut().switch_resp3();
             }
-            for (cmd, kind, target, count) in [
+            let mut subscriptions = [
                 (
                     b"SUBSCRIBE".as_slice(),
                     b"subscribe".as_slice(),
                     b"first".as_slice(),
-                    1,
                 ),
                 (
                     b"SUBSCRIBE".as_slice(),
                     b"subscribe".as_slice(),
                     b"updates".as_slice(),
-                    2,
                 ),
                 (
                     b"PSUBSCRIBE".as_slice(),
                     b"psubscribe".as_slice(),
                     b"updates*".as_slice(),
-                    3,
                 ),
-            ] {
+            ];
+            if pattern_first {
+                subscriptions.rotate_right(1);
+            }
+            for (index, (cmd, kind, target)) in subscriptions.into_iter().enumerate() {
                 client.send(command(&[cmd, target])).await.unwrap();
-                expect_push(&mut client, proto, &[kind, target], Some(count)).await;
+                expect_push(&mut client, proto, &[kind, target], Some(index as i64 + 1)).await;
+            }
+            for message in [None, Some(b"payload".as_slice())] {
+                let mut parts = vec![b"PING".as_slice()];
+                parts.extend(message);
+                client.send(command(&parts)).await.unwrap();
+                let reply = timeout(Duration::from_secs(2), client.next())
+                    .await
+                    .unwrap()
+                    .unwrap()
+                    .unwrap();
+                let expected = if proto == 2 {
+                    Value::Array(Some(vec![
+                        Value::BulkString(Some(Bytes::from_static(b"pong"))),
+                        Value::BulkString(Some(Bytes::from_static(message.unwrap_or_default()))),
+                    ]))
+                } else {
+                    match message {
+                        None => Value::SimpleString("PONG".into()),
+                        Some(message) => Value::BulkString(Some(Bytes::from_static(message))),
+                    }
+                };
+                assert_eq!(reply.encode_proto(proto), expected.encode_proto(proto));
             }
             // Publish the entire burst before reading, including both delivery forms.
             for i in 0..32 {

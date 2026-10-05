@@ -627,7 +627,7 @@ impl CommandFactory {
             }
         };
         client.last_cmd = parsed.name.clone();
-        if !client.authenticated && parsed.name != "AUTH" && parsed.name != "QUIT" {
+        if !client.authenticated && !matches!(parsed.name.as_str(), "AUTH" | "HELLO" | "QUIT") {
             client
                 .framed
                 .send(Value::from(ProtocolError::NotAuthenticated))
@@ -712,6 +712,105 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[tokio::test]
+    async fn hello_authentication_reaches_handler_without_bypassing_access_checks() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut config = Config::default();
+        config.raft.log_path = dir.path().to_str().unwrap().to_owned();
+        config.raft.address = "127.0.0.1:0".into();
+        config.redis.databases = 1;
+        config.redis.requirepass = Some("secret".into());
+        let config = ParsedConfig::from(&config).unwrap();
+        let (shutdown_tx, _) = broadcast::channel(1);
+        let node = RaftNode::create(config, shutdown_tx).await.unwrap();
+        let server =
+            RedisServer::new(node.app.clone(), "127.0.0.1:0".into(), &node.app.config).unwrap();
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let socket = TcpStream::connect(listener.local_addr().unwrap())
+            .await
+            .unwrap();
+        let (connection, _) = listener.accept().await.unwrap();
+        let mut client = Client::new(1, connection, false);
+        let mut replies = Framed::new(socket, RespCodec::new());
+        let command = |parts: &[&str]| {
+            Value::Array(Some(
+                parts
+                    .iter()
+                    .map(|part| Value::BulkString(Some(part.to_string().into())))
+                    .collect(),
+            ))
+        };
+
+        let cases: &[(&[&str], &[u8])] = &[
+            (&["GET", "key"], b"-NOAUTH "),
+            (&["HELLO", "3", "SETNAME", "rejected"], b"-NOAUTH "),
+            (
+                &[
+                    "HELLO", "3", "AUTH", "default", "wrong", "SETNAME", "rejected",
+                ],
+                b"-WRONGPASS ",
+            ),
+            (
+                &["HELLO", "3", "AUTH", "unknown-user", "secret"],
+                b"-WRONGPASS ",
+            ),
+            (&["GET", "key"], b"-NOAUTH "),
+        ];
+        for (parts, expected_prefix) in cases {
+            server
+                .cmd_factory
+                .execute_command(&mut client, &server, command(parts))
+                .await
+                .unwrap();
+            let reply = timeout(Duration::from_secs(2), replies.next())
+                .await
+                .unwrap()
+                .unwrap()
+                .unwrap();
+            assert!(
+                reply.encode().starts_with(expected_prefix),
+                "{parts:?}: {reply:?}"
+            );
+            assert!(!client.authenticated);
+            assert_eq!(client.framed.codec().proto_version(), 2);
+            assert!(client.name.is_empty());
+        }
+
+        server
+            .cmd_factory
+            .execute_command(
+                &mut client,
+                &server,
+                command(&[
+                    "HELLO", "3", "AUTH", "default", "secret", "SETNAME", "accepted",
+                ]),
+            )
+            .await
+            .unwrap();
+        let reply = timeout(Duration::from_secs(2), replies.next())
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap();
+        assert!(matches!(reply, Value::Map(_)));
+        assert!(client.authenticated);
+        assert_eq!(client.framed.codec().proto_version(), 3);
+        assert_eq!(client.name, "accepted");
+
+        server
+            .cmd_factory
+            .execute_command(&mut client, &server, command(&["ECHO", "authenticated"]))
+            .await
+            .unwrap();
+        let reply = timeout(Duration::from_secs(2), replies.next())
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap();
+        assert_eq!(reply.encode(), b"$13\r\nauthenticated\r\n");
+        node.app.cluster.shutdown().await.unwrap();
     }
 
     #[tokio::test]

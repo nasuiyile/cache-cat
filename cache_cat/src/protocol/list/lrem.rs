@@ -158,53 +158,64 @@ impl ComputeCommand for LRemReq {
 impl LRemReq {
     /// Remove elements from the list based on count value
     fn remove_elements(&self, list: &mut VecDeque<Bytes>) -> i64 {
-        let mut removed = 0i64;
-
         match self.count.cmp(&0) {
             std::cmp::Ordering::Greater => {
-                // count > 0: 从头到尾移除count个匹配元素
-                let mut count = self.count;
-                let mut i = 0;
-                while i < list.len() && count > 0 {
-                    if list[i] == self.element {
-                        list.remove(i);
+                let mut removed = 0;
+                let mut end = 0;
+                while end < list.len() && removed < self.count as u64 {
+                    if list[end] == self.element {
                         removed += 1;
-                        count -= 1;
-                        // 移除后不需要增加i，因为下一个元素会移到当前位置
-                    } else {
-                        i += 1;
+                    }
+                    end += 1;
+                }
+                if removed == 0 {
+                    return 0;
+                }
+
+                // Compact only the scanned prefix towards its end, then drop
+                // the removed slots from the front. The suffix stays in place,
+                // so removing a few elements near the head remains cheap.
+                let mut write = end;
+                for read in (0..end).rev() {
+                    if list[read] != self.element {
+                        write -= 1;
+                        list.swap(read, write);
                     }
                 }
+                list.drain(..removed as usize);
+                removed as i64
             }
             std::cmp::Ordering::Less => {
-                // count < 0: 从尾到头移除|count|个匹配元素
-                let mut count = self.count.unsigned_abs();
-                let mut i = list.len();
-                while i > 0 && count > 0 {
-                    i -= 1;
-                    if list[i] == self.element {
-                        list.remove(i);
+                let mut removed = 0;
+                let mut start = list.len();
+                while start > 0 && removed < self.count.unsigned_abs() {
+                    start -= 1;
+                    if list[start] == self.element {
                         removed += 1;
-                        count -= 1;
-                        // 由于remove会调整索引，但我们已经从后往前遍历，所以不需要特殊处理
                     }
                 }
+                if removed == 0 {
+                    return 0;
+                }
+
+                // Compact the scanned suffix towards its start. Each survivor
+                // moves at most once, including when matches are interleaved.
+                let mut write = start;
+                for read in start..list.len() {
+                    if list[read] != self.element {
+                        list.swap(read, write);
+                        write += 1;
+                    }
+                }
+                list.truncate(list.len() - removed as usize);
+                removed as i64
             }
             std::cmp::Ordering::Equal => {
-                // count = 0: 移除所有匹配元素
-                let mut i = 0;
-                while i < list.len() {
-                    if list[i] == self.element {
-                        list.remove(i);
-                        removed += 1;
-                    } else {
-                        i += 1;
-                    }
-                }
+                let old_len = list.len();
+                list.retain(|value| value != &self.element);
+                (old_len - list.len()) as i64
             }
         }
-
-        removed
     }
 }
 
@@ -213,6 +224,64 @@ mod tests {
     use super::*;
     use parking_lot::Mutex;
     use std::sync::Arc;
+
+    #[test]
+    fn count_direction_preserves_survivor_order_in_wrapped_lists() {
+        for (count, expected_removed, expected) in [
+            (1, 1, vec!["b", "a", "c", "a", "d", "a"]),
+            (2, 2, vec!["b", "c", "a", "d", "a"]),
+            (-1, 1, vec!["a", "b", "a", "c", "a", "d"]),
+            (-2, 2, vec!["a", "b", "a", "c", "d"]),
+            (0, 4, vec!["b", "c", "d"]),
+            (i64::MAX, 4, vec!["b", "c", "d"]),
+            (i64::MIN, 4, vec!["b", "c", "d"]),
+        ] {
+            let mut list = VecDeque::with_capacity(7);
+            // Fill and advance the ring before adding the remaining values.
+            for value in ["padding", "padding", "padding", "padding", "a", "b", "a"] {
+                list.push_back(Bytes::from_static(value.as_bytes()));
+            }
+            list.drain(..4);
+            for value in ["c", "a", "d", "a"] {
+                list.push_back(Bytes::from_static(value.as_bytes()));
+            }
+            assert!(!list.as_slices().1.is_empty());
+
+            let removed = LRemReq {
+                key: "list".into(),
+                count,
+                element: "a".into(),
+            }
+            .remove_elements(&mut list);
+            assert_eq!(removed, expected_removed, "count {count}");
+            assert_eq!(
+                list,
+                expected
+                    .into_iter()
+                    .map(Bytes::from)
+                    .collect::<VecDeque<_>>(),
+                "count {count}"
+            );
+        }
+    }
+
+    #[test]
+    fn missing_matches_and_full_removal_handle_all_directions() {
+        for count in [0, 2, -2] {
+            let request = LRemReq {
+                key: "list".into(),
+                count,
+                element: "a".into(),
+            };
+            let mut list = VecDeque::from([Bytes::from_static(b"b"), Bytes::from_static(b"c")]);
+            assert_eq!(request.remove_elements(&mut list), 0);
+            assert_eq!(list, VecDeque::from(["b".into(), "c".into()]));
+            let mut list = VecDeque::from([Bytes::from_static(b"a"), Bytes::from_static(b"a")]);
+            assert_eq!(request.remove_elements(&mut list), 2);
+            assert!(list.is_empty());
+            assert_eq!(request.remove_elements(&mut list), 0);
+        }
+    }
 
     #[test]
     fn minimum_count_removes_from_tail_without_overflow() {

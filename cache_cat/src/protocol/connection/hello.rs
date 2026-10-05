@@ -182,6 +182,9 @@ impl Command for HelloCommand {
         };
         // Handle authentication if password provided
         if let Some(password) = &params.password {
+            if params.username.as_deref() != Some("default") {
+                return Err(ProtocolError::AuthenticationFailed.into());
+            }
             // Validate password against server config
             match &server.app.config.password {
                 Some(configured_password) => {
@@ -196,6 +199,12 @@ impl Command for HelloCommand {
                     client.authenticated = true;
                 }
             }
+        }
+        if !client.authenticated {
+            return Err(ProtocolError::response(
+                "NOAUTH HELLO must be called with the client already authenticated, otherwise the HELLO AUTH <user> <pass> option can be used to authenticate the client and select the RESP protocol version at the same time",
+            )
+            .into());
         }
         // Set client name if provided
         if let Some(name) = params.client_name {
