@@ -230,7 +230,7 @@ impl RaftCommandFactory {
         factory.register("BITOP", BitOpCommand);
         factory.register("XADD", XAddCommand);
         factory.register("XREAD", XReadCommand);
-        // factory.register("XGROUP", XGroupCommand);
+        factory.register("XGROUP", XGroupCommand);
         factory.register("BF.ADD", BfAddCommand);
         factory.register("BF.EXISTS", BfExistsCommand);
         factory.register("BF.MADD", BfMAddCommand);
