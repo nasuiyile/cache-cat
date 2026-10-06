@@ -441,7 +441,7 @@ impl CommandFactory {
         factory.register("XADD", XAddCommand);
         factory.register("XREAD", XReadCommand);
         factory.register("XREADGROUP", XReadGroupCommand);
-        factory.register("XGROUP", XGroupCommand);
+        // factory.register("XGROUP", XGroupCommand);
         factory
     }
 
