@@ -1,7 +1,7 @@
 mod test;
 
 use crate::utils::glob::GlobMatcher;
-use crate::utils::now_ms;
+use crate::utils::{OptionalU64, now_ms};
 use crossbeam_channel::{Receiver, Sender, bounded, select, unbounded};
 use papaya::{Compute, Equivalent, HashMap, LocalGuard, Operation};
 use serde::{Deserialize, Serialize};
@@ -45,7 +45,7 @@ impl<V> EntrySnapshot<V> {
 #[derive(Clone, Debug)]
 struct Entry<V> {
     value: V,
-    expire_at: Option<u64>,
+    expire_at: OptionalU64,
 }
 
 impl<V> Entry<V> {
@@ -55,7 +55,7 @@ impl<V> Entry<V> {
     {
         EntrySnapshot {
             value: self.value.clone(),
-            expire_at: self.expire_at,
+            expire_at: self.expire_at.get(),
         }
     }
 }
@@ -264,11 +264,15 @@ where
         now_ms()
     }
 
-    fn resolve_expire_at(&self, policy: ExpirePolicy) -> Option<u64> {
+    fn resolve_expire_at(&self, policy: ExpirePolicy) -> OptionalU64 {
+        // MAX is reserved for persistent entries. Saturate finite deadlines
+        // at MAX - 1; Redis deadlines are already limited to i64::MAX.
         match policy {
-            ExpirePolicy::Persistent => None,
-            ExpirePolicy::Absolute(at) => Some(at),
-            ExpirePolicy::Ttl(ttl) => Some(self.now_logical().saturating_add(ttl)),
+            ExpirePolicy::Persistent => OptionalU64::NONE,
+            ExpirePolicy::Absolute(at) => OptionalU64::some_saturating(at),
+            ExpirePolicy::Ttl(ttl) => {
+                OptionalU64::some_saturating(self.now_logical().saturating_add(ttl))
+            }
         }
     }
 
@@ -279,8 +283,8 @@ where
         }
     }
 
-    fn enqueue_expiry(&self, key: K, expire_at: Option<u64>) {
-        if let Some(expire_at) = expire_at {
+    fn enqueue_expiry(&self, key: K, expire_at: OptionalU64) {
+        if let Some(expire_at) = expire_at.get() {
             let _ = self
                 .expire_tx
                 .send(ExpireCommand::Schedule { key, expire_at });
@@ -292,8 +296,12 @@ where
         let snapshot = new_entry.snapshot();
         let expire_at = new_entry.expire_at;
         let mg = self.map.pin();
-        mg.insert(key.clone(), new_entry);
-        self.enqueue_expiry(key, expire_at);
+        let old_entry = mg.insert(key.clone(), new_entry);
+        // The old timer also covers a replacement with the same deadline.
+        // Use the entry actually replaced, without another map lookup.
+        if expire_at.is_some() && old_entry.is_none_or(|old| old.expire_at != expire_at) {
+            self.enqueue_expiry(key, expire_at);
+        }
         snapshot
     }
 
@@ -307,7 +315,9 @@ where
         let mg = map.pin();
         matches!(
             mg.compute(key, |entry| match entry {
-                Some((_, entry)) if entry.expire_at == Some(expire_at) && now >= expire_at => {
+                Some((_, entry))
+                    if entry.expire_at.get() == Some(expire_at) && now >= expire_at =>
+                {
                     Operation::Remove
                 }
                 _ => Operation::Abort(()),
@@ -321,7 +331,7 @@ where
 
         matches!(
             mg.get(key),
-            Some(entry) if entry.expire_at == Some(expire_at)
+            Some(entry) if entry.expire_at.get() == Some(expire_at)
         )
     }
 
@@ -353,14 +363,14 @@ where
         let now = self.now_logical();
         let mg = self.map.pin();
         let (expired_key, expired_at) = match mg.get_key_value(key) {
-            Some((stored_key, entry)) => match entry.expire_at {
+            Some((stored_key, entry)) => match entry.expire_at.get() {
                 Some(at) if now >= at => (stored_key.clone(), at),
                 _ => return Some(entry.snapshot()),
             },
             None => return None,
         };
         mg.compute(expired_key, |entry| match entry {
-            Some((_, entry)) if entry.expire_at == Some(expired_at) && now >= expired_at => {
+            Some((_, entry)) if entry.expire_at.get() == Some(expired_at) && now >= expired_at => {
                 Operation::Remove
             }
             _ => Operation::Abort(()),
@@ -432,20 +442,24 @@ where
         let now = self.now_logical();
         let mg = self.map.pin();
         let result = mg.compute(key.clone(), |entry| match entry {
-            Some((_, entry)) if entry.expire_at.is_some_and(|at| now >= at) => Operation::Remove,
+            Some((_, entry)) if entry.expire_at.get().is_some_and(|at| now >= at) => {
+                Operation::Remove
+            }
             Some((_, entry)) => Operation::Insert(self.make_entry(entry.value.clone(), policy)),
             None => Operation::Abort(()),
         });
-        let snapshot = match result {
+        match result {
             Compute::Updated {
-                new: (_, entry), ..
-            } => Some(entry.snapshot()),
+                old: (_, old),
+                new: (_, entry),
+            } => {
+                if entry.expire_at.is_some() && old.expire_at != entry.expire_at {
+                    self.enqueue_expiry(key.clone(), entry.expire_at);
+                }
+                Some(entry.snapshot())
+            }
             _ => None,
-        };
-        if let Some(snapshot) = &snapshot {
-            self.enqueue_expiry(key.clone(), snapshot.expire_at);
         }
-        snapshot
     }
 
     pub fn remove(&self, key: &K) -> Option<V> {
@@ -457,7 +471,7 @@ where
 
         let mg = self.map.pin();
         let removed = mg.remove(key)?;
-        let expired = removed.expire_at.is_some_and(|at| now >= at);
+        let expired = removed.expire_at.get().is_some_and(|at| now >= at);
 
         if expired {
             None
@@ -713,7 +727,7 @@ where
         let map = self.map.pin_owned();
         let now = self.now_logical();
         for (key, entry) in map.iter() {
-            if entry.expire_at.is_some_and(|at| now >= at) {
+            if entry.expire_at.get().is_some_and(|at| now >= at) {
                 continue;
             }
             let snapshot = entry.snapshot();
@@ -748,7 +762,7 @@ where
         let map = self.map.pin();
         map.iter()
             .filter_map(|(key, entry)| {
-                if let Some(expire_at) = entry.expire_at {
+                if let Some(expire_at) = entry.expire_at.get() {
                     // 第一层：按照当前写逻辑时钟判断。
                     // 对应 get_entry：
                     // write_clock >= expire_at 表示当前已经过期。
@@ -779,6 +793,7 @@ where
     }
     pub fn unlink_batch(&self, keys: &[K]) -> usize {
         let now = self.now_logical();
+        let expire_at = OptionalU64::some_saturating(now);
         let mg = self.map.pin();
 
         let mut items = Vec::with_capacity(keys.len());
@@ -787,13 +802,13 @@ where
             let result = mg.compute(key.clone(), |entry| match entry {
                 Some((_, entry)) => {
                     // 已经过期，不重复 unlink
-                    if entry.expire_at.is_some_and(|at| now >= at) {
+                    if entry.expire_at.get().is_some_and(|at| now >= at) {
                         return Operation::Abort(());
                     }
 
                     // 逻辑上立即过期
                     let mut new_entry = entry.clone();
-                    new_entry.expire_at = Some(now);
+                    new_entry.expire_at = expire_at;
 
                     Operation::Insert(new_entry)
                 }
@@ -803,7 +818,7 @@ where
             if matches!(result, Compute::Updated { .. }) {
                 items.push(TimerItem {
                     key: key.clone(),
-                    expire_at: now,
+                    expire_at: expire_at.into_raw(),
                 });
             }
         }
@@ -819,18 +834,19 @@ where
 
     pub fn unlink(&self, key: &K) -> bool {
         let now = self.now_logical();
+        let expire_at = OptionalU64::some_saturating(now);
         let mg = self.map.pin();
 
         let result = mg.compute(key.clone(), |entry| match entry {
             Some((_, entry)) => {
                 // 已经过期，视为不存在
-                if entry.expire_at.is_some_and(|at| now >= at) {
+                if entry.expire_at.get().is_some_and(|at| now >= at) {
                     return Operation::Abort(());
                 }
 
                 // 逻辑删除：立即设置为已过期
                 let mut new_entry = entry.clone();
-                new_entry.expire_at = Some(now);
+                new_entry.expire_at = expire_at;
 
                 Operation::Insert(new_entry)
             }
@@ -839,7 +855,7 @@ where
 
         if matches!(result, Compute::Updated { .. }) {
             // 交给后台 expire worker 做物理删除
-            self.enqueue_expiry(key.clone(), Some(now));
+            self.enqueue_expiry(key.clone(), expire_at);
             true
         } else {
             false

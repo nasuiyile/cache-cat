@@ -25,6 +25,12 @@ impl OptionalU64 {
         Self(value)
     }
 
+    /// 构造有值状态，将保留的 MAX 饱和到最大的可表示值 MAX - 1。
+    #[inline]
+    pub const fn some_saturating(value: u64) -> Self {
+        Self(if value == u64::MAX { value - 1 } else { value })
+    }
+
     #[inline]
     pub const fn is_none(self) -> bool {
         self.0 == u64::MAX

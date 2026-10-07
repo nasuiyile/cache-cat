@@ -1,7 +1,9 @@
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use crate::mocha::{EntrySnapshot, ExpirePolicy, Mocha};
+    use crate::mocha::{
+        Entry, EntrySnapshot, ExpireCommand, ExpirePolicy, HierarchicalTimeWheel, Mocha,
+    };
+    use crossbeam_channel::{Receiver, unbounded};
     use std::sync::Arc;
     use std::sync::atomic::{AtomicU64, Ordering};
     use std::thread;
@@ -17,6 +19,28 @@ mod tests {
     fn create_mocha_with_clock(initial_clock: u64) -> (Mocha<String, String>, Arc<AtomicU64>) {
         let logic_clock = Arc::new(AtomicU64::new(initial_clock));
         (Mocha::new(logic_clock.clone()), logic_clock)
+    }
+
+    // Retain the receiver so tests can count scheduling work without racing
+    // the background worker or adding instrumentation to production writes.
+    fn create_mocha_without_worker() -> (Mocha<String, String>, Receiver<ExpireCommand<String>>) {
+        let (expire_tx, expire_rx) = unbounded();
+        let mocha = Mocha {
+            map: Arc::new(papaya::HashMap::new()),
+            logic_clock: Arc::new(AtomicU64::new(0)),
+            expire_tx,
+        };
+        (mocha, expire_rx)
+    }
+
+    fn scheduled_deadlines(receiver: &Receiver<ExpireCommand<String>>) -> Vec<u64> {
+        receiver
+            .try_iter()
+            .map(|command| match command {
+                ExpireCommand::Schedule { expire_at, .. } => expire_at,
+                other => panic!("unexpected expiration command: {other:?}"),
+            })
+            .collect()
     }
 
     #[test]
@@ -527,16 +551,175 @@ mod tests {
         let result = mocha.get(&"key1".to_string());
         assert!(result.is_none());
 
-        // Test very large TTL
-        mocha.insert("key2".to_string(), "value2".to_string(), u64::MAX);
+        // The compact representation reserves MAX for persistence, so an
+        // out-of-Redis-range deadline saturates at the last finite value.
+        let entry = mocha.insert("key2".to_string(), "value2".to_string(), u64::MAX);
+        assert_eq!(entry.expire_at, Some(u64::MAX - 1));
 
         let result = mocha.get(&"key2".to_string());
         assert_eq!(result, Some("value2".to_string()));
 
         // Test that key is still there
-        clock.store(u64::MAX - 1, Ordering::Relaxed);
+        clock.store(u64::MAX - 2, Ordering::Relaxed);
         let result = mocha.get(&"key2".to_string());
         assert_eq!(result, Some("value2".to_string()));
+
+        clock.store(u64::MAX - 1, Ordering::Relaxed);
+        mocha.active_expire_cycle_blocking();
+        assert_eq!(mocha.len(), 0);
+    }
+
+    #[test]
+    fn test_retaining_long_ttl_schedules_once_and_expires_latest_value() {
+        let (mocha, receiver) = create_mocha_without_worker();
+        let key = "counter".to_string();
+        let deadline = 86_400_000;
+        mocha.insert(key.clone(), "0".to_string(), deadline);
+
+        // INCR and other ComputeCommands preserve this absolute deadline
+        // when their result reaches insert_entry.
+        for value in 1..=1000 {
+            let entry = mocha.get_entry(&key).unwrap();
+            mocha.insert_entry(key.clone(), value.to_string(), entry.get_expire_policy());
+        }
+        assert_eq!(mocha.get(&key), Some("1000".to_string()));
+
+        let mut wheel = HierarchicalTimeWheel::new(0);
+        let mut paused = false;
+        let commands: Vec<_> = receiver.try_iter().collect();
+        assert_eq!(commands.len(), 1);
+        for command in commands {
+            Mocha::handle_expire_command(
+                &mocha.map,
+                &mocha.logic_clock,
+                &mut wheel,
+                &mut paused,
+                command,
+            );
+        }
+        mocha.logic_clock.store(deadline, Ordering::Relaxed);
+        Mocha::advance_wheel(&mocha.map, &mocha.logic_clock, &mut wheel);
+        assert_eq!(mocha.len(), 0);
+    }
+
+    #[test]
+    fn test_same_deadline_across_snapshot_and_expire_policies_schedules_once() {
+        let (mocha, receiver) = create_mocha_without_worker();
+        let key = "key".to_string();
+        let snapshot = mocha.insert_absolute(key.clone(), "initial".to_string(), 100);
+        mocha.insert_snapshot(key.clone(), snapshot);
+        mocha.insert_absolute(key.clone(), "replacement".to_string(), 100);
+        mocha.set_expire_policy(&key, ExpirePolicy::Absolute(100));
+        mocha.logic_clock.store(10, Ordering::Relaxed);
+        mocha.set_expire_policy(&key, ExpirePolicy::Ttl(90));
+
+        assert_eq!(scheduled_deadlines(&receiver), vec![100]);
+        assert_eq!(mocha.get(&key), Some("replacement".to_string()));
+        assert_eq!(mocha.ttl_remaining(&key), Some(90));
+    }
+
+    #[test]
+    fn test_changed_deadline_persistence_and_recreation_schedule_as_needed() {
+        let (mocha, receiver) = create_mocha_without_worker();
+        let key = "key".to_string();
+        mocha.insert_absolute(key.clone(), "value".to_string(), 100);
+        mocha.set_expire_policy(&key, ExpirePolicy::Absolute(200));
+        mocha.set_expire_policy(&key, ExpirePolicy::Persistent);
+        mocha.insert_persistent(key.clone(), "persistent".to_string());
+        mocha.insert_absolute(key.clone(), "finite".to_string(), 100);
+        mocha.remove(&key);
+        mocha.insert_absolute(key.clone(), "recreated".to_string(), 100);
+        mocha.clear();
+        mocha.insert_absolute(key, "after clear".to_string(), 100);
+
+        assert_eq!(
+            scheduled_deadlines(&receiver),
+            vec![100, 200, 100, 100, 100]
+        );
+    }
+
+    #[test]
+    fn test_stale_timers_do_not_remove_extended_or_persistent_entries() {
+        let (mocha, clock) = create_mocha_with_clock(0);
+        let key = "key".to_string();
+        mocha.insert_absolute(key.clone(), "old".to_string(), 100);
+        mocha.insert_absolute(key.clone(), "extended".to_string(), 200);
+        clock.store(100, Ordering::Relaxed);
+        mocha.active_expire_cycle_blocking();
+        assert_eq!(mocha.get(&key), Some("extended".to_string()));
+
+        mocha.insert_persistent(key.clone(), "persistent".to_string());
+        clock.store(200, Ordering::Relaxed);
+        mocha.active_expire_cycle_blocking();
+        assert_eq!(mocha.get(&key), Some("persistent".to_string()));
+    }
+
+    #[test]
+    fn test_snapshot_restore_rebuilds_timer_and_reuses_it_during_replay() {
+        let (mocha, clock) = create_mocha_with_clock(0);
+        let key = "key".to_string();
+        let snapshot = mocha.insert_absolute(key.clone(), "snapshot".to_string(), 100);
+        mocha.pause_expire_worker_blocking();
+        mocha.clear();
+        mocha.insert_snapshot(key.clone(), snapshot);
+        mocha.insert_entry(key, "replayed".to_string(), ExpirePolicy::Absolute(100));
+        clock.store(100, Ordering::Relaxed);
+        mocha.resume_expire_worker_blocking();
+
+        // Check physical removal, without get_entry's lazy expiration.
+        assert_eq!(mocha.len(), 0);
+    }
+
+    #[test]
+    fn test_saturated_absolute_deadline_and_unlink_at_maximum_clock() {
+        let (mocha, clock) = create_mocha_with_clock(0);
+        let key = "key".to_string();
+        let snapshot = mocha.insert_absolute(key.clone(), "value".to_string(), u64::MAX);
+        assert_eq!(snapshot.expire_at, Some(u64::MAX - 1));
+        clock.store(u64::MAX, Ordering::Relaxed);
+        mocha.active_expire_cycle_blocking();
+        assert_eq!(mocha.len(), 0);
+
+        mocha.insert_persistent(key.clone(), "persistent".to_string());
+        assert!(mocha.unlink(&key));
+        mocha.active_expire_cycle_blocking();
+        assert_eq!(mocha.len(), 0);
+
+        mocha.insert_persistent(key.clone(), "persistent".to_string());
+        assert_eq!(mocha.unlink_batch(&[key]), 1);
+        mocha.active_expire_cycle_blocking();
+        assert_eq!(mocha.len(), 0);
+    }
+
+    #[test]
+    fn test_maximum_redis_deadline_remains_exact() {
+        let (mocha, clock) = create_mocha_with_clock(1);
+        let deadline = i64::MAX as u64;
+        let absolute = mocha.insert_absolute("absolute".to_string(), "value".to_string(), deadline);
+        let relative = mocha.insert("relative".to_string(), "value".to_string(), deadline - 1);
+        assert_eq!(absolute.expire_at, Some(deadline));
+        assert_eq!(relative.expire_at, Some(deadline));
+
+        clock.store(deadline - 1, Ordering::Relaxed);
+        mocha.active_expire_cycle_blocking();
+        assert_eq!(mocha.len(), 2);
+        clock.store(deadline, Ordering::Relaxed);
+        mocha.active_expire_cycle_blocking();
+        assert_eq!(mocha.len(), 0);
+    }
+
+    #[test]
+    fn test_entry_expiration_uses_one_u64() {
+        use crate::raft::types::core::mocha::core::MyValue;
+
+        assert_eq!(
+            std::mem::size_of::<Entry<u64>>(),
+            2 * std::mem::size_of::<u64>()
+        );
+        assert_eq!(
+            std::mem::size_of::<EntrySnapshot<MyValue>>() - std::mem::size_of::<Entry<MyValue>>(),
+            std::mem::size_of::<u64>()
+        );
     }
 
     #[test]

@@ -1,8 +1,10 @@
 pub mod glob;
 mod list;
 mod number;
-pub mod times;
 mod optional_u64;
+pub mod times;
+
+pub(crate) use optional_u64::OptionalU64;
 
 pub(crate) use number::merge_u64;
 
