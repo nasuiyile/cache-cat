@@ -50,6 +50,17 @@ impl ReadCommand for HKeysParams {
             },
         }
     }
+
+    fn execute_with_clock(&self, value: Option<EntrySnapshot<MyValue>>, _read_clock: u64) -> Value {
+        let mut reply = self.execute(value);
+        if let Value::Array(Some(fields)) = &mut reply {
+            fields.sort_unstable_by(|left, right| match (left, right) {
+                (Value::BulkString(Some(left)), Value::BulkString(Some(right))) => left.cmp(right),
+                _ => unreachable!("hash fields are bulk strings"),
+            });
+        }
+        reply
+    }
 }
 /// HKEYS command handler
 pub struct HKeysCommand;

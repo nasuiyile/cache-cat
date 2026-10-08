@@ -1,3 +1,4 @@
+use super::random::DeterministicRng;
 use crate::error::{CacheCatError, ProtocolError};
 use crate::mocha::{EntrySnapshot, MochaOperation};
 use crate::protocol::command::{Client, Command};
@@ -137,71 +138,7 @@ impl Display for SPopReq {
     }
 }
 
-/// 一个简单、确定性的伪随机数生成器。
-///
-/// 不能在 Raft 状态机的 mutate() 中使用 thread_rng()，因为每个节点
-/// 会生成不同的随机数，最终导致状态机数据不一致。
-///
-/// 这里采用 SplitMix64：
-///
-/// 1. 算法简单；
-/// 2. 不依赖额外 crate；
-/// 3. 给定相同 seed，所有节点产生完全相同的结果。
-#[derive(Debug, Clone)]
-struct DeterministicRng {
-    state: u64,
-}
-
-impl DeterministicRng {
-    fn new(seed: u64) -> Self {
-        Self { state: seed }
-    }
-
-    fn next_u64(&mut self) -> u64 {
-        self.state = self.state.wrapping_add(0x9E37_79B9_7F4A_7C15);
-
-        let mut value = self.state;
-
-        value = (value ^ (value >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
-
-        value = (value ^ (value >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
-
-        value ^ (value >> 31)
-    }
-
-    /// 返回 [0, upper_bound) 范围内的下标。
-    fn next_index(&mut self, upper_bound: usize) -> usize {
-        debug_assert!(upper_bound > 0);
-
-        /*
-         * 使用乘法高位映射代替直接取模。
-         *
-         * 对于 SPOP 来说不要求密码学随机性。
-         */
-        let random = self.next_u64() as u128;
-        let bound = upper_bound as u128;
-
-        ((random * bound) >> 64) as usize
-    }
-}
-
 impl SPopReq {
-    /// 根据 Raft 日志中的确定性 write_clock 和 key 构造随机种子。
-    ///
-    /// 对 key 进行混合的作用是：即使两个不同 key 在相同逻辑时刻执行，
-    /// 也尽量不会得到完全相同的随机序列。
-    fn random_seed(&self, write_clock: u64) -> u64 {
-        let mut hash = 0xCBF2_9CE4_8422_2325u64;
-
-        // FNV-1a，用于稳定地混合 key 字节。
-        for byte in self.key.as_ref() {
-            hash ^= u64::from(*byte);
-            hash = hash.wrapping_mul(0x0000_0100_0000_01B3);
-        }
-
-        hash ^ write_clock.rotate_left(17) ^ 0xA076_1D64_78BD_642F
-    }
-
     fn missing_key_response(&self) -> Value {
         match self.count {
             // SPOP key
@@ -307,7 +244,7 @@ impl ComputeCommand for SPopReq {
 
                 candidates.sort_unstable_by(|left, right| left.as_ref().cmp(right.as_ref()));
 
-                let mut rng = DeterministicRng::new(self.random_seed(write_clock));
+                let mut rng = DeterministicRng::for_key(&self.key, write_clock);
 
                 let mut popped = Vec::with_capacity(pop_count);
 
@@ -371,5 +308,39 @@ impl ComputeCommand for SPopReq {
         let response = self.missing_key_response();
 
         (MochaOperation::Abort, response)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use parking_lot::Mutex;
+    use std::collections::HashSet;
+    use std::sync::Arc;
+
+    #[test]
+    fn shared_rng_preserves_spop_sequence_and_remaining_members() {
+        let set: HashSet<Bytes> = ["h", "g", "f", "e", "d", "c", "b", "a"]
+            .into_iter()
+            .map(|value| Bytes::from_static(value.as_bytes()))
+            .collect();
+        let set = Arc::new(Mutex::new(set));
+        let entry = EntrySnapshot {
+            value: MyValue::new(ValueObject::Set(set.clone())),
+            expire_at: Some(100_000),
+        };
+        let (operation, result) = SPopReq {
+            key: Bytes::from_static(b"bag"),
+            count: Some(3),
+        }
+        .mutate(entry, 12_345);
+
+        assert_eq!(result.encode(), b"*3\r\n$1\r\nd\r\n$1\r\nh\r\n$1\r\nb\r\n");
+        assert!(matches!(operation, MochaOperation::Insert { .. }));
+        let expected: HashSet<Bytes> = ["a", "c", "e", "f", "g"]
+            .into_iter()
+            .map(|value| Bytes::from_static(value.as_bytes()))
+            .collect();
+        assert_eq!(*set.lock(), expected);
     }
 }

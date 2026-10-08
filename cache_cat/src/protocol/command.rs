@@ -611,7 +611,7 @@ impl CommandFactory {
     }
 
     /// Execute a single command, including handling blocking command subscription stream
-    async fn execute_command(
+    pub async fn execute_command(
         &self,
         client: &mut Client,
         server: &RedisServer,
@@ -679,9 +679,6 @@ impl CommandFactory {
     }
 }
 
-#[cfg(test)]
-#[path = "transaction_tests.rs"]
-mod transaction_tests;
 
 #[cfg(test)]
 mod tests {

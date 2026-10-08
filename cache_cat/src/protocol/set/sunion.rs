@@ -105,6 +105,14 @@ impl MultiReadCommand for SUnionParams {
         // Set reply (RESP2 *N, RESP3 ~N).
         Value::Set(results)
     }
+
+    fn execute_with_clock(
+        &self,
+        values: Vec<Option<EntrySnapshot<MyValue>>>,
+        _read_clock: u64,
+    ) -> Value {
+        super::canonical_set_reply(self.execute(values))
+    }
 }
 
 #[cfg(test)]

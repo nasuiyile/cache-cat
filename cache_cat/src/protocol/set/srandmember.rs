@@ -1,3 +1,4 @@
+use super::random::DeterministicRng;
 use crate::error::{CacheCatError, ProtocolError};
 use crate::mocha::EntrySnapshot;
 use crate::protocol::command::{Client, Command};
@@ -152,6 +153,62 @@ impl ReadCommand for SRandMemberParams {
             },
         }
     }
+
+    fn execute_with_clock(&self, value: Option<EntrySnapshot<MyValue>>, read_clock: u64) -> Value {
+        let Some(snapshot) = value else {
+            return self.empty_result();
+        };
+        let ValueObject::Set(set) = snapshot.value.data else {
+            return ProtocolError::WrongType.into();
+        };
+        if self.count == Some(0) {
+            return Value::Array(Some(Vec::new()));
+        }
+        let guard = set.lock();
+        if guard.is_empty() {
+            return self.empty_result();
+        }
+        let requested = match self.count {
+            None => 1,
+            Some(count) if count > 0 => (count as u64).min(guard.len() as u64) as usize,
+            Some(count) => match count
+                .checked_abs()
+                .and_then(|count| usize::try_from(count).ok())
+            {
+                Some(count) => count,
+                None => {
+                    return ProtocolError::response("ERR value is out of range, must be positive")
+                        .into();
+                }
+            },
+        };
+
+        // Sorting borrowed members removes HashSet layout and seed differences
+        // without cloning every member. Only returned members are cloned.
+        let mut members: Vec<&Bytes> = guard.iter().collect();
+        members.sort_unstable();
+        let mut rng = DeterministicRng::for_key(&self.key, read_clock);
+        if self.count.is_none() {
+            return Value::BulkString(Some(members[rng.next_index(members.len())].clone()));
+        }
+
+        let mut result = Vec::new();
+        if result.try_reserve(requested).is_err() {
+            return ProtocolError::response("ERR count is too large").into();
+        }
+        let allow_duplicates = self.count.is_some_and(|count| count < 0);
+        for _ in 0..requested {
+            let index = rng.next_index(members.len());
+            let member = if allow_duplicates {
+                members[index]
+            } else {
+                // Partial Fisher-Yates: a positive count cannot repeat a member.
+                members.swap_remove(index)
+            };
+            result.push(Value::BulkString(Some(member.clone())));
+        }
+        Value::Array(Some(result))
+    }
 }
 
 impl SRandMemberParams {
@@ -226,5 +283,148 @@ impl Command for SRandMemberCommand {
         let operation = self.read_operation(items)?;
 
         server.app.read(operation, client.db_number).await
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use parking_lot::Mutex;
+    use std::collections::HashSet;
+    use std::sync::Arc;
+
+    fn snapshot(reverse: bool, capacity: usize) -> EntrySnapshot<MyValue> {
+        let mut members: Vec<Bytes> = [
+            b"".as_slice(),
+            b"z".as_slice(),
+            b"10".as_slice(),
+            b"\xff".as_slice(),
+            b"a\0".as_slice(),
+            b"\x80".as_slice(),
+        ]
+        .into_iter()
+        .map(Bytes::copy_from_slice)
+        .collect();
+        if reverse {
+            members.reverse();
+        }
+        let mut set = HashSet::with_capacity(capacity);
+        set.extend(members);
+        EntrySnapshot {
+            value: MyValue::new(ValueObject::Set(Arc::new(Mutex::new(set)))),
+            expire_at: Some(100_000),
+        }
+    }
+
+    fn params(count: Option<i64>) -> SRandMemberParams {
+        SRandMemberParams {
+            key: Bytes::from_static(b"bag"),
+            count,
+        }
+    }
+
+    fn array_members(result: Value) -> Vec<Bytes> {
+        let Value::Array(Some(values)) = result else {
+            panic!("expected SRANDMEMBER count array, got {result:?}");
+        };
+        values
+            .into_iter()
+            .map(|value| match value {
+                Value::BulkString(Some(bytes)) => bytes,
+                other => panic!("expected bulk string, got {other:?}"),
+            })
+            .collect()
+    }
+
+    #[test]
+    fn deterministic_sampling_ignores_hash_layout_and_preserves_set_and_ttl() {
+        let left = snapshot(false, 8);
+        let right = snapshot(true, 128);
+        let ValueObject::Set(set) = &left.value.data else {
+            unreachable!();
+        };
+        let original = set.lock().clone();
+
+        for count in [None, Some(0), Some(1), Some(4), Some(100), Some(-20)] {
+            let command = params(count);
+            assert_eq!(
+                command
+                    .execute_with_clock(Some(left.clone()), 12_345)
+                    .encode(),
+                command
+                    .execute_with_clock(Some(right.clone()), 12_345)
+                    .encode(),
+                "different response for count {count:?}"
+            );
+        }
+        assert_eq!(*set.lock(), original);
+        assert_eq!(left.expire_at, Some(100_000));
+        assert_eq!(left.value.version, 1);
+    }
+
+    #[test]
+    fn deterministic_count_sign_preserves_sampling_semantics() {
+        let entry = snapshot(false, 8);
+        let unique = array_members(params(Some(4)).execute_with_clock(Some(entry.clone()), 42));
+        assert_eq!(unique.len(), 4);
+        assert_eq!(unique.iter().collect::<HashSet<_>>().len(), 4);
+
+        let all = array_members(params(Some(i64::MAX)).execute_with_clock(Some(entry.clone()), 42));
+        assert_eq!(all.len(), 6);
+        assert_eq!(all.iter().collect::<HashSet<_>>().len(), 6);
+
+        let repeated = array_members(params(Some(-20)).execute_with_clock(Some(entry.clone()), 42));
+        assert_eq!(repeated.len(), 20);
+        assert!(repeated.iter().collect::<HashSet<_>>().len() < repeated.len());
+        assert!(repeated.iter().all(|member| all.contains(member)));
+
+        let Value::BulkString(Some(member)) = params(None).execute_with_clock(Some(entry), 42)
+        else {
+            panic!("SRANDMEMBER without count must return a bulk string");
+        };
+        assert!(all.contains(&member));
+    }
+
+    #[test]
+    fn deterministic_sampling_uses_the_logical_clock() {
+        let entry = snapshot(false, 8);
+        let command = params(Some(-20));
+        let sequences: HashSet<_> = (1..=16)
+            .map(|clock| {
+                command
+                    .execute_with_clock(Some(entry.clone()), clock)
+                    .encode()
+            })
+            .collect();
+        assert!(sequences.len() > 1);
+    }
+
+    #[test]
+    fn deterministic_sampling_preserves_missing_wrong_type_and_overflow_replies() {
+        let empty = EntrySnapshot {
+            value: MyValue::new(ValueObject::Set(Arc::new(Mutex::new(HashSet::new())))),
+            expire_at: None,
+        };
+        let wrong_type = EntrySnapshot {
+            value: MyValue::new(ValueObject::String(Bytes::from_static(b"value"))),
+            expire_at: None,
+        };
+        for count in [None, Some(0), Some(2), Some(-2), Some(i64::MIN)] {
+            let command = params(count);
+            for entry in [None, Some(empty.clone()), Some(wrong_type.clone())] {
+                assert_eq!(
+                    command.execute_with_clock(entry.clone(), 42).encode(),
+                    command.execute(entry).encode()
+                );
+            }
+        }
+        let command = params(Some(i64::MIN));
+        let nonempty = snapshot(false, 8);
+        assert_eq!(
+            command
+                .execute_with_clock(Some(nonempty.clone()), 42)
+                .encode(),
+            command.execute(Some(nonempty)).encode()
+        );
     }
 }

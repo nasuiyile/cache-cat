@@ -27,6 +27,7 @@ use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::broadcast;
 use tokio::time::timeout;
 use tokio_util::codec::Framed;
+use crate::protocol::command::Client;
 
 fn command(parts: &[&str]) -> Value {
     Value::Array(Some(

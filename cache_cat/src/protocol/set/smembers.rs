@@ -54,6 +54,10 @@ impl ReadCommand for SMembersParams {
             },
         }
     }
+
+    fn execute_with_clock(&self, value: Option<EntrySnapshot<MyValue>>, _read_clock: u64) -> Value {
+        super::canonical_set_reply(self.execute(value))
+    }
 }
 
 impl SMembersCommand {

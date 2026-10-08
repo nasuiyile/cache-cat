@@ -249,15 +249,6 @@ impl MyCache {
     }
 
     pub fn keys(&self, param: KeysParams, db_number: u16, read_clock: Option<u64>) -> Value {
-        let cached = match self.get_cache(db_number) {
-            Err(err) => return err,
-            Ok(cache) => cache,
-        };
-        let keys = cached.mocha.keys(&param.pattern, read_clock);
-        let values: Vec<Value> = keys
-            .into_iter()
-            .map(|b| Value::BulkString(Some(b)))
-            .collect();
-        Value::Array(Some(values))
+        param.execute(self, db_number, read_clock)
     }
 }

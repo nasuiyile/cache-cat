@@ -864,4 +864,16 @@ where
     pub fn len(&self) -> usize {
         self.map.pin().len()
     }
+
+    /// Count keys visible at a fixed clock without cloning their keys or values.
+    /// The physical map length can differ between replicas while expired entries
+    /// await reclamation, so it must not feed replicated state-machine writes.
+    pub fn len_with_read_clock(&self, read_clock: u64) -> usize {
+        let clock = self.now_logical().max(read_clock);
+        self.map
+            .pin()
+            .iter()
+            .filter(|(_, entry)| entry.expire_at.get().is_none_or(|at| clock < at))
+            .count()
+    }
 }

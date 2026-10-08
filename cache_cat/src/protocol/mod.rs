@@ -18,9 +18,8 @@ mod raft_command;
 pub mod sentinel;
 pub mod server;
 pub mod stream;
+mod test;
 
 /// Special value indicating no expiration (0 means never expire)
 pub const NO_EXPIRATION: u64 = 0;
 
-#[cfg(test)]
-mod multi_compute_tests;

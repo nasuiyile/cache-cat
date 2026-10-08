@@ -1,4 +1,3 @@
-use super::raft_command::RaftCommandFactory;
 use crate::mocha::{ExpirePolicy, MochaOperation};
 use crate::raft::types::core::mocha::cas::ComputedWrite;
 use crate::raft::types::core::mocha::core::{MyCache, MyValue, Update, UpdateType};
@@ -11,6 +10,7 @@ use crate::raft::types::entry::request::{AtomicRequest, Operation};
 use bytes::Bytes;
 use std::collections::HashSet;
 use std::sync::Arc;
+use crate::protocol::raft_command::RaftCommandFactory;
 
 const DB: u16 = 1;
 const CLOCK: u64 = 1_000;

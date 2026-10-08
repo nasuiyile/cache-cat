@@ -54,6 +54,17 @@ impl ReadCommand for HGetAllParams {
             },
         }
     }
+
+    fn execute_with_clock(&self, value: Option<EntrySnapshot<MyValue>>, _read_clock: u64) -> Value {
+        let mut reply = self.execute(value);
+        if let Value::Map(fields) = &mut reply {
+            fields.sort_unstable_by(|(left, _), (right, _)| match (left, right) {
+                (Value::BulkString(Some(left)), Value::BulkString(Some(right))) => left.cmp(right),
+                _ => unreachable!("hash fields are bulk strings"),
+            });
+        }
+        reply
+    }
 }
 
 /// HGETALL command handler

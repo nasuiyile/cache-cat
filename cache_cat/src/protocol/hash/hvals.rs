@@ -52,6 +52,28 @@ impl ReadCommand for HValsParams {
             },
         }
     }
+
+    fn execute_with_clock(&self, value: Option<EntrySnapshot<MyValue>>, _read_clock: u64) -> Value {
+        let Some(entry) = value else {
+            return Value::Array(Some(Vec::new()));
+        };
+        let ValueObject::Hash(map) = entry.value.data else {
+            return CacheCatError::from(ProtocolError::WrongType).into();
+        };
+        let mut fields = map
+            .lock()
+            .iter()
+            .map(|(field, value)| (field.clone(), value.to_bytes()))
+            .collect::<Vec<_>>();
+        // Use the same field order as HKEYS/HGETALL, including binary fields.
+        fields.sort_unstable_by(|(left, _), (right, _)| left.cmp(right));
+        Value::Array(Some(
+            fields
+                .into_iter()
+                .map(|(_, value)| Value::BulkString(Some(value)))
+                .collect(),
+        ))
+    }
 }
 
 /// HVALS command handler

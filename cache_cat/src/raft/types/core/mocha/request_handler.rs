@@ -11,6 +11,15 @@ pub fn read_request(
     db_number: u16,
     read_clock: u64,
 ) -> Value {
+    read_request_inner::<false>(my_cache, read_operation, db_number, read_clock)
+}
+
+fn read_request_inner<const REPLICATED: bool>(
+    my_cache: &MyCache,
+    read_operation: ReadOperation,
+    db_number: u16,
+    read_clock: u64,
+) -> Value {
     match read_operation {
         ReadOperation::Exists(param) => my_cache.execute_multi_read(param, db_number, read_clock),
         ReadOperation::Get(param) => my_cache.execute_read(param, db_number, read_clock),
@@ -19,14 +28,22 @@ pub fn read_request(
         ReadOperation::XRead(param) => my_cache.execute_multi_read(param, db_number, read_clock),
         ReadOperation::ZRange(param) => my_cache.execute_read(param, db_number, read_clock),
         ReadOperation::HGet(param) => my_cache.execute_read(param, db_number, read_clock),
-        ReadOperation::SMembers(param) => my_cache.execute_read(param, db_number, read_clock),
+        ReadOperation::SMembers(param) => {
+            my_cache.execute_read_with_mode::<_, REPLICATED>(param, db_number, read_clock)
+        }
         ReadOperation::HMGet(param) => my_cache.execute_read(param, db_number, read_clock),
         ReadOperation::GetBit(param) => my_cache.execute_read(param, db_number, read_clock),
         ReadOperation::ZRangeByScore(param) => my_cache.execute_read(param, db_number, read_clock),
         ReadOperation::StrLen(param) => my_cache.execute_read(param, db_number, read_clock),
-        ReadOperation::HGetAll(param) => my_cache.execute_read(param, db_number, read_clock),
-        ReadOperation::HKeys(param) => my_cache.execute_read(param, db_number, read_clock),
-        ReadOperation::HVals(param) => my_cache.execute_read(param, db_number, read_clock),
+        ReadOperation::HGetAll(param) => {
+            my_cache.execute_read_with_mode::<_, REPLICATED>(param, db_number, read_clock)
+        }
+        ReadOperation::HKeys(param) => {
+            my_cache.execute_read_with_mode::<_, REPLICATED>(param, db_number, read_clock)
+        }
+        ReadOperation::HVals(param) => {
+            my_cache.execute_read_with_mode::<_, REPLICATED>(param, db_number, read_clock)
+        }
         ReadOperation::LLen(param) => my_cache.execute_read(param, db_number, read_clock),
         ReadOperation::Type(param) => my_cache.execute_read(param, db_number, read_clock),
         ReadOperation::LIndex(param) => my_cache.execute_read(param, db_number, read_clock),
@@ -38,17 +55,37 @@ pub fn read_request(
         ReadOperation::BitCount(param) => my_cache.execute_read(param, db_number, read_clock),
         ReadOperation::BitPos(param) => my_cache.execute_read(param, db_number, read_clock),
         ReadOperation::SCard(param) => my_cache.execute_read(param, db_number, read_clock),
-        ReadOperation::SRandMember(param) => my_cache.execute_read(param, db_number, read_clock),
-        ReadOperation::SInter(param) => my_cache.execute_multi_read(param, db_number, read_clock),
-        ReadOperation::SUnion(param) => my_cache.execute_multi_read(param, db_number, read_clock),
-        ReadOperation::SDiff(param) => my_cache.execute_multi_read(param, db_number, read_clock),
-        ReadOperation::Keys(param) => my_cache.keys(param, db_number, Some(read_clock)),
+        ReadOperation::SRandMember(param) => {
+            my_cache.execute_read_with_mode::<_, REPLICATED>(param, db_number, read_clock)
+        }
+        ReadOperation::SInter(param) => {
+            my_cache.execute_multi_read_with_mode::<_, REPLICATED>(param, db_number, read_clock)
+        }
+        ReadOperation::SUnion(param) => {
+            my_cache.execute_multi_read_with_mode::<_, REPLICATED>(param, db_number, read_clock)
+        }
+        ReadOperation::SDiff(param) => {
+            my_cache.execute_multi_read_with_mode::<_, REPLICATED>(param, db_number, read_clock)
+        }
+        ReadOperation::Keys(param) => {
+            if REPLICATED {
+                param.execute_with_clock(my_cache, db_number, read_clock)
+            } else {
+                my_cache.keys(param, db_number, Some(read_clock))
+            }
+        }
         ReadOperation::ZScore(param) => my_cache.execute_read(param, db_number, read_clock),
         ReadOperation::ZCard(param) => my_cache.execute_read(param, db_number, read_clock),
         ReadOperation::ZCount(param) => my_cache.execute_read(param, db_number, read_clock),
         ReadOperation::ZRank(param) => my_cache.execute_read(param, db_number, read_clock),
         ReadOperation::ZRevRank(param) => my_cache.execute_read(param, db_number, read_clock),
-        ReadOperation::DbSize(_param) => my_cache.dbsize(db_number),
+        ReadOperation::DbSize(param) => {
+            if REPLICATED {
+                param.execute_with_clock(my_cache, db_number, read_clock)
+            } else {
+                my_cache.dbsize(db_number)
+            }
+        }
         ReadOperation::MemoryUsage(param) => my_cache.execute_read(param, db_number, read_clock),
         ReadOperation::PFCount(param) => my_cache.execute_multi_read(param, db_number, read_clock),
         ReadOperation::BfExists(param) => my_cache.execute_read(param, db_number, read_clock),
@@ -155,8 +192,10 @@ pub fn do_request(
     external: bool, //用来防止多次加锁
 ) -> Value {
     let result = match operation {
-        // Reads inside EXEC/Lua share the log's clock, including TTL replies.
-        Operation::Read(read) => read_request(my_cache, read, update.db_number, update.write_clock),
+        // Reads inside EXEC/Lua share the log's clock and deterministic order/RNG.
+        Operation::Read(read) => {
+            read_request_inner::<true>(my_cache, read, update.db_number, update.write_clock)
+        }
         Operation::Base(base) => base_request_inner(my_cache, base, update, external),
         Operation::Redis(redis) => match redis {
             RedisOperation::RedisDel(param) => my_cache.redis_del(param, update, external),
