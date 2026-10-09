@@ -150,7 +150,10 @@ mod tests {
                 for replay in [false, true] {
                     let cache = seeded_cache();
                     let mut update_type = if replay {
-                        UpdateType::CAS(1)
+                        UpdateType::CAS {
+                            expected_revision: crate::utils::OptionalU64::NONE,
+                            revision: 1,
+                        }
                     } else {
                         UpdateType::None
                     };

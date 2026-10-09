@@ -1,4 +1,5 @@
-use crate::mocha::{ExpirePolicy, MochaOperation};
+use crate::mocha::{EntrySnapshot, ExpirePolicy, MochaOperation};
+use crate::protocol::raft_command::RaftCommandFactory;
 use crate::raft::types::core::mocha::cas::ComputedWrite;
 use crate::raft::types::core::mocha::core::{MyCache, MyValue, Update, UpdateType};
 use crate::raft::types::core::mocha::request_handler::{base_request, do_request};
@@ -7,10 +8,10 @@ use crate::raft::types::core::structure::hll::RedisHll;
 use crate::raft::types::core::value_object::ValueObject;
 use crate::raft::types::entry::base_operation::{BaseOperation, InsertReq};
 use crate::raft::types::entry::request::{AtomicRequest, Operation};
+use crate::utils::OptionalU64;
 use bytes::Bytes;
 use std::collections::HashSet;
 use std::sync::Arc;
-use crate::protocol::raft_command::RaftCommandFactory;
 
 const DB: u16 = 1;
 const CLOCK: u64 = 1_000;
@@ -53,7 +54,12 @@ fn apply(cache: &MyCache, operation: Operation) -> Value {
 
 fn snapshot(cache: &MyCache, args: &[&str]) -> (Value, Vec<AtomicRequest>) {
     let mut queue = Vec::new();
-    let mut update_type = UpdateType::Snapshot(&mut queue);
+    // The manually seeded live entries below use revisions no greater than 3.
+    let mut revision = 3;
+    let mut update_type = UpdateType::Snapshot {
+        queue: &mut queue,
+        revision: &mut revision,
+    };
     let mut update = Update {
         db_number: DB,
         write_clock: cache.set_write_clock(CLOCK),
@@ -74,7 +80,10 @@ fn replay(cache: &MyCache, queue: &[AtomicRequest]) {
             &atomic.request,
             BaseOperation::Insert(_) | BaseOperation::Del(_)
         ));
-        let mut update_type = UpdateType::CAS(atomic.version);
+        let mut update_type = UpdateType::CAS {
+            expected_revision: atomic.expected_revision,
+            revision: atomic.version,
+        };
         let mut update = Update {
             db_number: atomic.db_number,
             write_clock: cache.set_write_clock(atomic.write_clock),
@@ -85,18 +94,22 @@ fn replay(cache: &MyCache, queue: &[AtomicRequest]) {
     assert_eq!(cache.databases[0].mocha.len(), 0);
 }
 
-fn seed(cache: &MyCache, key: &str, value: ValueObject, expires_at: u64, version: u32) {
-    for _ in 0..version {
-        let response = apply(
-            cache,
-            Operation::Base(BaseOperation::Insert(InsertReq {
-                key: Bytes::copy_from_slice(key.as_bytes()),
-                value: value.clone(),
-                expires_at,
-            })),
-        );
-        assert_eq!(response.encode(), b"+OK\r\n");
+fn seed(cache: &MyCache, key: &str, value: ValueObject, expires_at: u64, version: u64) {
+    if version == 0 {
+        return;
     }
+    // Model an entry observed by a full scan, including its local revision.
+    cache.set_write_clock(CLOCK);
+    cache.databases[DB as usize].mocha.insert_snapshot(
+        Bytes::copy_from_slice(key.as_bytes()),
+        EntrySnapshot {
+            value: MyValue {
+                version,
+                data: value,
+            },
+            expire_at: (expires_at != 0).then_some(expires_at),
+        },
+    );
 }
 
 fn string(value: &str) -> ValueObject {
@@ -132,9 +145,10 @@ fn insert_record<'a>(
     queue: &'a [AtomicRequest],
     index: usize,
     key: &str,
-    version: u32,
+    expected_revision: Option<u64>,
 ) -> &'a InsertReq {
-    assert_eq!(queue[index].version, version);
+    assert_eq!(queue[index].expected_revision.get(), expected_revision);
+    assert!(queue[index].version > expected_revision.unwrap_or(0));
     let BaseOperation::Insert(insert) = &queue[index].request else {
         panic!("expected a concrete INSERT");
     };
@@ -161,10 +175,10 @@ fn all_set_stores_record_frozen_results_and_replay_without_sources() {
         assert_eq!(queue.len(), 1, "{command}");
         let expected = expected_members(&expected);
         assert_eq!(
-            members(&insert_record(&queue, 0, "dest", 4).value),
+            members(&insert_record(&queue, 0, "dest", Some(3)).value),
             expected
         );
-        assert_eq!(insert_record(&queue, 0, "dest", 4).expires_at, 0);
+        assert_eq!(insert_record(&queue, 0, "dest", Some(3)).expires_at, 0);
 
         // Sets use shared mutable storage: this must not alter the saved INSERT.
         apply(
@@ -174,7 +188,7 @@ fn all_set_stores_record_frozen_results_and_replay_without_sources() {
         apply(&cache, request(&["SADD", "left", "later-source-member"]));
         seed(&cache, "right", string("now the wrong type"), 0, 1);
         assert_eq!(
-            members(&insert_record(&queue, 0, "dest", 4).value),
+            members(&insert_record(&queue, 0, "dest", Some(3)).value),
             expected,
             "{command} payload changed after SADD"
         );
@@ -196,7 +210,7 @@ fn all_set_stores_record_frozen_results_and_replay_without_sources() {
             .get_entry(b"dest".as_slice())
             .unwrap();
         assert_eq!(members(&dest.value.data), expected, "{command}");
-        assert_eq!(dest.value.version, 4);
+        assert_eq!(dest.value.version, queue[0].version);
         assert_eq!(dest.expire_at, None);
     }
 }
@@ -214,7 +228,8 @@ fn empty_set_and_bitmap_results_record_versioned_deletes() {
         let (response, queue) = snapshot(&cache, &args);
         assert_eq!(response.encode(), b":0\r\n");
         assert_eq!(queue.len(), 1);
-        assert_eq!(queue[0].version, 4);
+        assert_eq!(queue[0].expected_revision, OptionalU64::some(3));
+        assert!(queue[0].version > 3);
         assert!(
             matches!(&queue[0].request, BaseOperation::Del(del) if del.key.as_ref() == b"dest")
         );
@@ -241,7 +256,7 @@ fn bitop_records_bytes_when_destination_is_also_a_source() {
     assert_eq!(response.encode(), b":1\r\n");
     assert_eq!(queue.len(), 1);
     assert_eq!(bytes_at(&cache, "dest").as_ref(), b"C");
-    assert_eq!(insert_record(&queue, 0, "dest", 4).expires_at, 0);
+    assert_eq!(insert_record(&queue, 0, "dest", Some(3)).expires_at, 0);
     seed(&cache, "source", string("changed"), 0, 1);
     let restored = MyCache::new(2).unwrap();
     seed(&restored, "dest", string("A"), EXPIRES_AT, 3);
@@ -255,7 +270,7 @@ fn bitop_records_bytes_when_destination_is_also_a_source() {
             .unwrap()
             .value
             .version,
-        4
+        queue[0].version
     );
 }
 
@@ -275,7 +290,10 @@ fn pfmerge_records_merged_hll_and_preserves_destination_expiration() {
     let (response, queue) = snapshot(&cache, &["PFMERGE", "dest", "source"]);
     assert_eq!(response.encode(), b"+OK\r\n");
     assert_eq!(queue.len(), 1);
-    assert_eq!(insert_record(&queue, 0, "dest", 4).expires_at, EXPIRES_AT);
+    assert_eq!(
+        insert_record(&queue, 0, "dest", Some(3)).expires_at,
+        EXPIRES_AT
+    );
     let merged = bytes_at(&cache, "dest");
     assert_eq!(RedisHll::decode(&merged).unwrap().cardinality(), 3);
     seed(&cache, "source", string("invalid HLL"), 0, 1);
@@ -289,7 +307,7 @@ fn pfmerge_records_merged_hll_and_preserves_destination_expiration() {
         .mocha
         .get_entry(b"dest".as_slice())
         .unwrap();
-    assert_eq!(dest.value.version, 4);
+    assert_eq!(dest.value.version, queue[0].version);
     assert_eq!(dest.expire_at, Some(EXPIRES_AT));
 }
 
@@ -311,11 +329,14 @@ fn rename_variants_record_ordered_delete_and_insert_with_independent_versions() 
         let (response, queue) = snapshot(&cache, &[command, "source", "dest"]);
         assert_eq!(response.encode(), reply);
         assert_eq!(queue.len(), 2);
-        assert_eq!(queue[0].version, 3);
+        assert_eq!(queue[0].expected_revision, OptionalU64::some(2));
+        assert!(queue[0].version > 2);
         assert!(
             matches!(&queue[0].request, BaseOperation::Del(del) if del.key.as_ref() == b"source")
         );
-        let insert = insert_record(&queue, 1, "dest", destination_version + 1);
+        let expected_destination = (destination_version != 0).then_some(destination_version);
+        let insert = insert_record(&queue, 1, "dest", expected_destination);
+        assert!(queue[1].version > queue[0].version);
         assert_eq!(insert.expires_at, EXPIRES_AT);
         assert!(
             cache.databases[DB as usize]
@@ -327,7 +348,13 @@ fn rename_variants_record_ordered_delete_and_insert_with_independent_versions() 
 
         let restored = MyCache::new(2).unwrap();
         // This source is from after the rename; its CAS delete must be skipped.
-        seed(&restored, "source", string("newer source"), 0, 5);
+        seed(
+            &restored,
+            "source",
+            string("newer source"),
+            0,
+            queue[1].version + 1,
+        );
         seed(
             &restored,
             "dest",
@@ -343,7 +370,7 @@ fn rename_variants_record_ordered_delete_and_insert_with_independent_versions() 
             .mocha
             .get_entry(b"dest".as_slice())
             .unwrap();
-        assert_eq!(dest.value.version, destination_version + 1);
+        assert_eq!(dest.value.version, queue[1].version);
         assert_eq!(dest.expire_at, Some(EXPIRES_AT));
     }
 }
@@ -430,12 +457,12 @@ fn new_mutable_destinations_do_not_share_storage_with_snapshot_inserts() {
         let insert_index = queue.len() - 1;
         let expected = expected_members(&["original"]);
         assert_eq!(
-            members(&insert_record(&queue, insert_index, "dest", 1).value),
+            members(&insert_record(&queue, insert_index, "dest", None).value),
             expected
         );
         apply(&cache, request(&["SADD", "dest", "later"]));
         assert_eq!(
-            members(&insert_record(&queue, insert_index, "dest", 1).value),
+            members(&insert_record(&queue, insert_index, "dest", None).value),
             expected,
             "{command} shared its new destination with the snapshot queue"
         );
@@ -483,7 +510,11 @@ fn normal_rename_moves_existing_container_without_cloning_its_contents() {
 fn computed_ttl_is_recorded_as_an_absolute_expiration() {
     let cache = MyCache::new(2).unwrap();
     let mut queue = Vec::new();
-    let mut update_type = UpdateType::Snapshot(&mut queue);
+    let mut revision = 0;
+    let mut update_type = UpdateType::Snapshot {
+        queue: &mut queue,
+        revision: &mut revision,
+    };
     let mut update = Update {
         db_number: DB,
         write_clock: cache.set_write_clock(CLOCK),
@@ -500,7 +531,10 @@ fn computed_ttl_is_recorded_as_an_absolute_expiration() {
         &mut update,
     );
     assert_eq!(queue.len(), 1);
-    assert_eq!(insert_record(&queue, 0, "dest", 1).expires_at, CLOCK + 25);
+    assert_eq!(
+        insert_record(&queue, 0, "dest", None).expires_at,
+        CLOCK + 25
+    );
     let restored = MyCache::new(2).unwrap();
     replay(&restored, &queue);
     for cache in [&cache, &restored] {
@@ -523,22 +557,20 @@ fn computed_ttl_is_recorded_as_an_absolute_expiration() {
 fn snapshot_replays_collection_removal_with_versioned_cas() {
     let cache = MyCache::new(2).unwrap();
     apply(&cache, request(&["SADD", "set", "member"]));
-    // Advance the value version while retaining the same logical member.
-    apply(&cache, request(&["SADD", "set", "member"]));
-    apply(&cache, request(&["SADD", "set", "member"]));
-
     let (response, queue) = snapshot(&cache, &["SREM", "set", "member"]);
     assert_eq!(response.encode(), b":1\r\n");
     assert_eq!(queue.len(), 1);
-    assert_eq!(queue[0].version, 4);
+    assert_eq!(queue[0].expected_revision, OptionalU64::some(0));
+    assert!(queue[0].version > 0);
     assert!(matches!(&queue[0].request, BaseOperation::SRem(_)));
 
     let restored = MyCache::new(2).unwrap();
     apply(&restored, request(&["SADD", "set", "member"]));
-    apply(&restored, request(&["SADD", "set", "member"]));
-    apply(&restored, request(&["SADD", "set", "member"]));
     for atomic in &queue {
-        let mut update_type = UpdateType::CAS(atomic.version);
+        let mut update_type = UpdateType::CAS {
+            expected_revision: atomic.expected_revision,
+            revision: atomic.version,
+        };
         let mut update = Update {
             db_number: atomic.db_number,
             write_clock: restored.set_write_clock(atomic.write_clock),

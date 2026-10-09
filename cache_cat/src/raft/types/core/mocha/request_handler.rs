@@ -349,7 +349,10 @@ mod tests {
         cache.reset_write_clock();
         cache.set_write_clock(400);
 
-        let mut update_type = UpdateType::CAS(2);
+        let mut update_type = UpdateType::CAS {
+            expected_revision: crate::utils::OptionalU64::some(0),
+            revision: 1,
+        };
         let mut update = Update {
             db_number: 0,
             write_clock: 400,

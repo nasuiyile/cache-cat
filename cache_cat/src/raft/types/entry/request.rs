@@ -17,7 +17,7 @@ use crate::protocol::transaction::exec::ExecParams;
 use crate::protocol::{key::del::DelParams, string::psetex::PSetExParams};
 use crate::raft::types::entry::base_operation::BaseOperation;
 use crate::raft::types::entry::read_operation::ReadOperation;
-use crate::utils::merge_u64;
+use crate::utils::{OptionalU64, merge_u64};
 use serde::{Deserialize, Serialize};
 use std::fmt;
 
@@ -222,7 +222,10 @@ impl fmt::Display for Request {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AtomicRequest {
     pub request: BaseOperation,
-    pub version: u32,
+    /// Required pre-state; NONE means the key did not exist when executed.
+    pub expected_revision: OptionalU64,
+    /// Node-local snapshot revision, also used as the cutoff for FLUSH.
+    pub version: u64,
     pub write_clock: u64,
     pub db_number: u16,
 }

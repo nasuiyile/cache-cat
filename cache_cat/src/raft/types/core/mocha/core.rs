@@ -6,7 +6,7 @@ use crate::raft::application::blocking_keys::BlockingKeys;
 use crate::raft::types::core::response_value::Value;
 use crate::raft::types::core::value_object::ValueObject;
 use crate::raft::types::entry::request::AtomicRequest;
-use crate::utils::now_ms;
+use crate::utils::{OptionalU64, now_ms};
 use bytes::Bytes;
 use parking_lot::RwLock;
 use serde::{Deserialize, Serialize};
@@ -19,14 +19,15 @@ use tokio::sync::Mutex;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct MyValue {
-    pub version: u32, //在快照期间每一次更新都会增加version 默认为1
+    /// Snapshot-only revision. Ordinary writes use 0; Start writes get unique revisions.
+    pub version: u64,
     pub data: ValueObject,
 }
 
 impl MyValue {
     pub fn new(value: ValueObject) -> Self {
         Self {
-            version: 1,
+            version: 0,
             data: value,
         }
     }
@@ -61,6 +62,14 @@ pub struct MyCache {
 
     read_logic_clock: Arc<AtomicU64>,  //读逻辑时钟
     write_logic_clock: Arc<AtomicU64>, //写逻辑时钟
+}
+
+/// Allocate through the exclusive borrow held by the state machine's existing
+/// metadata guard. The high watermark survives batches and snapshot failures.
+pub(crate) fn next_snapshot_revision(revision: &mut u64) -> u64 {
+    assert!(*revision < u64::MAX - 1, "snapshot revision exhausted");
+    *revision += 1;
+    *revision
 }
 
 impl MyCache {
@@ -222,7 +231,13 @@ pub enum UpdateType<'a> {
     //正常运行
     None,
     //进行快照
-    Snapshot(&'a mut Vec<AtomicRequest>),
+    Snapshot {
+        queue: &'a mut Vec<AtomicRequest>,
+        revision: &'a mut u64,
+    },
     //还原操作
-    CAS(u32),
+    CAS {
+        expected_revision: OptionalU64,
+        revision: u64,
+    },
 }

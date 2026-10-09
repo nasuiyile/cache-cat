@@ -17,7 +17,7 @@ use uuid::Uuid;
 
 const CACHE_MAGIC_NUM: &[u8; 4] = b"MCDC";
 
-const VERSION: u8 = 1;
+pub(crate) const VERSION: u8 = 1;
 
 // 预填充占位符
 const PLACEHOLDER_LENGTH: usize = 300;
@@ -29,9 +29,10 @@ pub fn get_snapshot_file_name() -> String {
 }
 
 #[derive(Serialize, Deserialize)]
-struct CacheCatSnapshotMeta {
+pub(crate) struct CacheCatSnapshotMeta {
     pub meta: SnapshotMeta,
     pub write_clock: u64,
+    pub snapshot_revision: u64,
 }
 
 pub async fn dump_cache_to_path<P>(
@@ -84,6 +85,7 @@ where
     let cache_cat_snapshot_meta = CacheCatSnapshotMeta {
         meta: snapshot_meta,
         write_clock: cache.get_write_clock(),
+        snapshot_revision: raft_meta_data.snapshot_revision,
     };
     let result = bincode2::serialize(&cache_cat_snapshot_meta)
         .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
@@ -111,7 +113,7 @@ where
 pub async fn load_cache_from_path<P>(
     cache: Arc<MyCache>,
     path: P,
-) -> Result<Option<(SnapshotMeta, Vec<AtomicRequest>, u64)>, io::Error>
+) -> Result<Option<(SnapshotMeta, Vec<AtomicRequest>, u64, u64)>, io::Error>
 where
     P: AsRef<Path>,
 {
@@ -146,6 +148,14 @@ where
     }
     let mut meta_buf = vec![0u8; meta_len];
     reader.read_exact(&mut meta_buf).await?;
+    let meta: CacheCatSnapshotMeta = bincode2::deserialize(&meta_buf)
+        .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
+    if meta.snapshot_revision == u64::MAX {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "invalid snapshot revision",
+        ));
+    }
     reader
         .seek(SeekFrom::Current(
             (PLACEHOLDER_LENGTH - (4 + meta_len)) as i64,
@@ -156,10 +166,16 @@ where
     //加载缓存下来的队列操作，但是不立即执行
     let queue = load_operation_queue_from_reader(&mut reader).await?;
 
-    let meta: CacheCatSnapshotMeta = bincode2::deserialize(&meta_buf)
-        .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
+    // Deletions and FLUSH operations also consume revisions, so the surviving
+    // values alone cannot reconstruct this watermark. Both startup and snapshot
+    // installation must restore it before another snapshot can allocate IDs.
     // Publish the final clock only after the incremental queue has replayed.
-    Ok(Some((meta.meta, queue, meta.write_clock)))
+    Ok(Some((
+        meta.meta,
+        queue,
+        meta.write_clock,
+        meta.snapshot_revision,
+    )))
 }
 pub async fn dump_operation_queue_to_writer<W>(
     writer: &mut W,
@@ -230,13 +246,13 @@ async fn test_dump_and_load_with_data() {
     // 插入测试数据
     let key1 = Bytes::from_static(b"key1");
     let value1 = MyValue {
-        version: 1,
+        version: 0,
         data: ValueObject::String(Bytes::from_static(b"value1")),
     };
 
     let key2 = Bytes::from_static(b"key2");
     let value2 = MyValue {
-        version: 1,
+        version: 0,
         data: ValueObject::String(Bytes::from_static(b"value2")),
     };
 
@@ -311,13 +327,109 @@ async fn test_dump_and_load_with_data() {
 }
 
 #[tokio::test]
-async fn install_snapshot_replays_persist_before_resuming_expiration() {
-    use crate::protocol::key::persist::PersistReq;
-    use crate::raft::store::statemachine::{StateMachineData, StateMachineStore};
-    use crate::raft::types::core::mocha::core::MyValue;
+async fn empty_snapshots_preserve_revision_watermark_across_restarts() {
+    use crate::cfg::config::Config;
+    use crate::node::parsed_config::ParsedConfig;
+    use crate::protocol::key::del::DelReq;
+    use crate::protocol::key::flushall::FlushAllReq;
+    use crate::protocol::key::flushdb::FlushDBReq;
+    use crate::raft::store::statemachine::{SnapshotState, StateMachineStore};
+    use crate::raft::types::core::mocha::core::{
+        MyValue, Update, UpdateType, next_snapshot_revision,
+    };
+    use crate::raft::types::core::mocha::request_handler::base_request;
     use crate::raft::types::core::value_object::ValueObject;
     use crate::raft::types::entry::base_operation::BaseOperation;
     use crate::raft::types::file_operator::FileOperator;
+    use bytes::Bytes;
+
+    let key = Bytes::from_static(b"removed");
+    let removals = [
+        BaseOperation::Del(DelReq { key: key.clone() }),
+        BaseOperation::FlushDB(FlushDBReq { async_mode: false }),
+        BaseOperation::FlushAll(FlushAllReq { async_mode: false }),
+    ];
+    for removal in removals {
+        let path = tempfile::tempdir().unwrap();
+        let mut cache = Arc::new(MyCache::new(1).unwrap());
+        let mut revision = 40;
+        let mut config = Config::default();
+        config.redis.databases = 1;
+        let config = ParsedConfig::from(&config).unwrap();
+
+        // Run two successive snapshots separated by a simulated process restart.
+        // Each snapshot ends with deletion, so no surviving value can provide
+        // the counter's high watermark to the loader.
+        for expected_revision in [41, 42] {
+            cache.databases[0].mocha.insert_persistent(
+                key.clone(),
+                MyValue::new(ValueObject::String(Bytes::from_static(b"value"))),
+            );
+            let mut pending = Vec::new();
+            let mut update_type = UpdateType::Snapshot {
+                queue: &mut pending,
+                revision: &mut revision,
+            };
+            let mut update = Update {
+                db_number: 0,
+                write_clock: cache.set_write_clock(100),
+                update_type: &mut update_type,
+            };
+            base_request(&cache, removal.clone(), &mut update);
+            assert_eq!(cache.databases[0].mocha.len(), 0);
+            assert_eq!(pending.len(), 1);
+            assert_eq!(pending[0].version, expected_revision);
+
+            let raft_meta = Arc::new(Mutex::new(RaftMetaData {
+                snapshot_state: SnapshotState::Start,
+                snapshot_revision: revision,
+                ..Default::default()
+            }));
+            dump_cache_to_path(
+                cache.clone(),
+                path.path(),
+                raft_meta,
+                Arc::new(Mutex::new(pending)),
+            )
+            .await
+            .unwrap();
+
+            let file = FileOperator::new(path.path()).await.unwrap().unwrap();
+            assert!(file.load_meta_data().await.unwrap().is_some());
+            cache = Arc::new(MyCache::new(1).unwrap());
+            let (_, pending, final_clock, restored_revision) =
+                load_cache_from_path(cache.clone(), file.get_hard_link_buf())
+                    .await
+                    .unwrap()
+                    .unwrap();
+            assert_eq!(pending.len(), 1);
+            assert_eq!(pending[0].version, expected_revision);
+            assert_eq!(final_clock, 100);
+            assert_eq!(cache.databases[0].mocha.len(), 0);
+            assert_eq!(restored_revision, expected_revision);
+
+            // Exercise the real startup path as well as the snapshot reader.
+            let store = StateMachineStore::new(config.clone(), path.path().to_path_buf(), 1)
+                .await
+                .unwrap();
+            cache = store.data.kvs.clone();
+            revision = store.data.raft_meta_data.lock().await.snapshot_revision;
+            assert_eq!(revision, expected_revision);
+            assert_eq!(cache.databases[0].mocha.len(), 0);
+        }
+        assert_eq!(next_snapshot_revision(&mut revision), 43);
+    }
+}
+
+#[tokio::test]
+async fn install_snapshot_replays_persist_before_resuming_expiration() {
+    use crate::protocol::key::persist::PersistReq;
+    use crate::raft::store::statemachine::{StateMachineData, StateMachineStore};
+    use crate::raft::types::core::mocha::core::{MyValue, next_snapshot_revision};
+    use crate::raft::types::core::value_object::ValueObject;
+    use crate::raft::types::entry::base_operation::BaseOperation;
+    use crate::raft::types::file_operator::FileOperator;
+    use crate::utils::OptionalU64;
     use bytes::Bytes;
     use openraft::storage::RaftStateMachine;
     use tokio::sync::broadcast;
@@ -348,6 +460,7 @@ async fn install_snapshot_replays_persist_before_resuming_expiration() {
             last_membership: Default::default(),
         },
         write_clock: 1_000,
+        snapshot_revision: 2,
     };
     let meta_bytes = bincode2::serialize(&meta).unwrap();
     let mut writer = BufWriter::new(
@@ -371,6 +484,7 @@ async fn install_snapshot_replays_persist_before_resuming_expiration() {
                 key: persist_key.clone(),
             }),
             version: 2,
+            expected_revision: OptionalU64::some(0),
             write_clock: 400,
             db_number: 0,
         }],
@@ -404,6 +518,11 @@ async fn install_snapshot_replays_persist_before_resuming_expiration() {
     store.install_snapshot(&meta.meta, snapshot).await.unwrap();
 
     assert_eq!(cache.get_write_clock(), 1_000);
+    {
+        let mut metadata = store.data.raft_meta_data.lock().await;
+        assert_eq!(metadata.snapshot_revision, 2);
+        assert_eq!(next_snapshot_revision(&mut metadata.snapshot_revision), 3);
+    }
     let mocha = &cache.databases[0].mocha;
     // Check physical deletion before any read can perform lazy expiration.
     assert_eq!(mocha.len(), 2);

@@ -27,7 +27,7 @@ Drawbacks of Dragonflydb:
 
 Drawbacks of the Zookeeper approach (the solution below):
 
-- All version data must exist in the snapshot. (Both approaches require maintaining a u32 version number in memory, but Dragonfly's approach theoretically does not need to write this version number to disk.)
+- Each value's snapshot revision must be stored in the snapshot. Cache-cat uses a u64 revision in memory and on disk.
 - During snapshot installation, each write instruction must implement a corresponding CAS operation. This greatly increases the complexity of adaptation.
 - Incompatible with Redis snapshot format.
 - During snapshot building, all data must be cached. At this point, all requests result in doubled memory usage. (Zookeeper's own consensus algorithm can avoid this issue.)
@@ -38,16 +38,18 @@ Drawbacks of the Zookeeper approach (the solution below):
 
 Each value in the map can be treated as an atomic access unit. Any operation on this value is atomic and supports concurrent reads and writes.
 
-We still need to record `last_applied_log_id` (the last applied log ID at the time the snapshot was generated), `last_membership` (the last membership configuration, internal to Raft, no need to worry about), `snapshot_num` (snapshot number, u32), `snapshot_state` (current snapshot state). This data is collectively referred to as `meta_data` and is protected by a single lock (parking_lot::mutex, to be discussed).
+`meta_data` contains `last_applied_log_id`, `last_membership`, `snapshot_state`, and `snapshot_revision: u64`, protected by the state machine's existing mutex. Each value contains a u64 snapshot revision. Revision 0 is the baseline for ordinary writes outside `Start`. Successful changes during `Start` allocate nonzero revisions from a node-local monotonically increasing counter shared by all databases and successive snapshots. Deleted or expired keys do not reset the counter. Revisions never wrap; u64::MAX is reserved.
 
-Additionally, each value maintains a version number internally (u32 type).
+Raft applies logs serially and already holds the `meta_data` lock for each batch, so the execution context borrows the counter directly as `&mut u64`. No atomic variable or additional lock is needed. The snapshot task reads the watermark under the same lock. The counter must not reset at the start of a batch or snapshot; revisions already allocated must also survive partial batch failures and failed snapshots.
+
+An incremental record contains `expected_revision: OptionalU64` and `version: u64`, as well as the concrete operation, database number, and write logical clock. `OptionalU64` uses u64::MAX for absence and occupies eight bytes, including when serialized. `Some(0)` means an existing baseline value; it is different from an absent key. `version` is the operation's unique revision, and becomes the resulting value's revision if the operation leaves a value. Deletion is already represented by the operation, so a second optional field is unnecessary.
 
 **Business Thread**
 
 1. When a new batch of operations arrives, acquire the meta_data lock.
 2. Update `last_applied_log_id`.
-3. If the current snapshot state is `End`, write the data directly to cache_map.
-4. If the current snapshot state is `Start`: get the version number of the original data (treated as 0 if there is no old version). Increment the version number by 1 and write it to cache_map. Finally, push the old version number and the current operation onto a queue for temporary storage. (This turns every write operation into a CAS operation.)
+3. If the current snapshot state is `End`, apply the operation normally. Values written through this path get baseline revision 0, without incrementing the snapshot counter.
+4. If the current snapshot state is `Start`, record the original revision or absence, apply the operation, and allocate a new revision for a successful change. Assign this revision to the resulting value, if any, and append the expected revision, new revision, and operation to the queue. No-op commands do not need a delta. Flush operations receive a revision even when the database is empty.
 5. If the current snapshot state is `Tail`, apply the Raft log through the normal path without writing it to the snapshot's incremental queue. This log sits after the snapshot's recorded `last_applied_log_id`, and is replayed from the Raft log during recovery.
 
 **Snapshot Thread**
@@ -58,17 +60,21 @@ Perform the snapshot operation: iterate over all data and write it to disk.
 
 The snapshot state has three phases:
 
-- `Start`: the snapshot thread is iterating over the full dataset. Writes applied by the business thread must update memory at the same time, and push the operation — tagged with the old version number, database number, and write logical clock — onto the incremental queue.
+- `Start`: the snapshot thread is iterating over the full dataset. Writes applied by the business thread update memory and append the operation, expected revision or absence, new revision, database number, and write logical clock to the incremental queue.
 - `Tail`: the full dataset traversal is complete. The snapshot thread acquires the `meta_data` lock, and under that lock switches the state to `Tail`, atomically drains and clears the incremental queue accumulated during the `Start` phase, and records the `last_applied_log_id` at this moment. From the switch to `Tail` onward, new Raft logs no longer go into the snapshot's incremental queue and are instead applied through the normal path; these logs are numbered after the snapshot's recorded `last_applied_log_id`, and are replayed from the Raft log during recovery.
 - `End`: once the incremental queue has been written to the snapshot file, and the file has been flushed to disk and has replaced the current snapshot file, the state switches to `End`.
 
 Draining the queue and switching the state during the `Tail` phase must happen under the same `meta_data` lock, to avoid an operation being incorrectly added to the snapshot's queue after it has already been drained. Raft logs produced during the `Tail` phase can proceed concurrently with flushing the snapshot file to disk, but must not be treated as part of the snapshot's incremental queue.
 
+Under this same lock, the snapshot captures the final write logical clock and the revision counter's high watermark. The watermark must be saved independently of the values: the highest revision can belong to a deletion or flush, leaving no value that carries it. Startup and snapshot installation restore the watermark before allocating any new revisions. The file format version is 2; compatibility with earlier alpha snapshots is not maintained.
+
 **Recovery Operation**
 
 Read the full snapshot data and restore it to the state machine. (Pause external access during this time.)
 
-Read the incremental data from the queue and perform a CAS operation on each item. Apply the operation only if the current data's version number matches the version number recorded in the queue.
+Replay incremental records strictly in their original order. Apply a single-key operation only when the current revision exactly matches `expected_revision`, including the distinction between absence and an existing value. If the operation produces a value, give it the recorded `version`; otherwise remove the key. A mismatch means the full pass already captured a different state, so skip that operation.
+
+A rule that merely compares revision magnitudes or applies every operation to a missing key is insufficient. For example, an `INCR` of an existing expiring key preserves its TTL. If the full scan later omits that expired key, replaying `INCR` against absence would create a persistent value of 1. Recording the original presence prevents this resurrection.
 
 The `last_applied_log_id` recorded in the snapshot is the log position at the moment the state entered `Tail`. After installing the snapshot, first replay the incremental queue saved during the `Start` phase in CAS order; Raft then continues applying the log from that position onward, corresponding to the writes from the `Tail` phase and afterward.
 
@@ -99,6 +105,14 @@ If the snapshot were to simply replay your operation at this point, it would fin
 
 Therefore, for this kind of command, the snapshot logic treats it as multiple commands; from Raft's perspective it remains a single command, to preserve the atomicity of the command. But for the snapshot, multiple commands need to be treated as a single command, to preserve the atomicity of the snapshot.
 
+Commands that read several keys and write one key record the computed destination write, rather than rereading source keys during recovery. Multi-key writes record their per-key effects in execution order.
+
+`FLUSHDB` and `FLUSHALL` need a revision cutoff. During recovery they remove only values with revisions less than the flush revision. Values written after that flush may already be present in the full snapshot and must survive its replay. This traversal occurs only during snapshot recovery; ordinary flushes still clear the database directly.
+
+## Local Revisions and Raft
+
+Snapshot revisions are node-local bookkeeping, not part of ordinary replicated Raft requests. Nodes can build snapshots at different times and assign different revisions while producing the same Redis values, TTLs, and responses. Only the snapshot file transports revisions, incremental records, and the counter watermark to another node. After installation, later Raft logs follow the normal execution path. No extra counter operation is added to ordinary reads or writes outside the snapshot's `Start` phase.
+
 ## Read-Write Logical Clock Compatibility
 
 > Problem: When an operation is pushed to the queue, how do we know the result of the pair after the operation? If the primary node executes this operation, it could be before or after the key expires.
@@ -107,7 +121,7 @@ When the snapshot starts, every operation being performed is pushed to the opera
 
 **Snapshot Recovery**
 
-First, apply the full state machine. When the state machine is initialized, the write logical timestamp is 0. Therefore, no data is expired. Next, apply the incremental queue.
+Pause expiration workers and load the full state machine with the write logical clock reset to 0. Next, replay the incremental queue with its recorded clocks. After replay, publish the saved final write logical clock and resume expiration. This also handles clock advances caused by commands that made no data changes and therefore have no incremental record.
 
 During recovery, first restore the write logical clock from the queue, then directly apply the operation sequence. The write logical clock is in the operation queue, and each operation is deterministic. When the first log in the queue is applied, the write logical timestamp will be updated. At this point, data begins to follow the normal expiration logic. After each operation is executed, which data should be expired is deterministic.
 

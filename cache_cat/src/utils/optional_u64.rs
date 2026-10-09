@@ -3,7 +3,8 @@
 /// u64::MAX 表示空，其余值表示对应的实际数值。
 /// 布局与 u64 相同，占 8 字节。
 #[repr(transparent)]
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
+#[serde(transparent)]
 pub struct OptionalU64(u64);
 
 impl OptionalU64 {

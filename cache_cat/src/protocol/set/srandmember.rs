@@ -359,7 +359,7 @@ mod tests {
         }
         assert_eq!(*set.lock(), original);
         assert_eq!(left.expire_at, Some(100_000));
-        assert_eq!(left.value.version, 1);
+        assert_eq!(left.value.version, 0);
     }
 
     #[test]

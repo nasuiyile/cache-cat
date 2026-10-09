@@ -48,10 +48,7 @@ impl ComputeCommand for InsertReq {
         } else {
             ExpirePolicy::Absolute(self.expires_at)
         };
-        let value = MyValue {
-            version: 1,
-            data: self.value,
-        };
+        let value = MyValue::new(self.value);
         (MochaOperation::Insert { value, expire }, Value::ok())
     }
 }

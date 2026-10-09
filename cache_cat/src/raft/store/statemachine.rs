@@ -38,6 +38,10 @@ pub struct RaftMetaData {
     //快照状态
     pub snapshot_state: SnapshotState,
 
+    /// Node-local snapshot watermark, protected by the existing metadata mutex.
+    /// Keep it across apply batches, completed snapshots, and failed snapshots.
+    pub snapshot_revision: u64,
+
     pub last_applied_log_id: Option<LogId>,
 
     pub last_membership: StoredMembership,
@@ -131,6 +135,7 @@ impl StateMachineStore {
                 incremental_operation_queue: Arc::new(Mutex::new(Vec::new())),
                 raft_meta_data: Arc::new(Mutex::new(RaftMetaData {
                     snapshot_state: SnapshotState::End,
+                    snapshot_revision: 0,
                     last_applied_log_id: None,
                     last_membership: Default::default(),
                 })),
@@ -146,21 +151,25 @@ impl StateMachineStore {
             Some(data) => {
                 sm.replay_snapshot_queue(&data.1).await;
                 sm.data.kvs.set_write_clock(data.2);
-                sm.update_meta_data(data.0).await;
+                sm.update_meta_data(data.0, data.3).await;
             }
         }
         sm.data.kvs.resume_expire_workers();
         Ok(sm)
     }
-    pub async fn update_meta_data(&mut self, metadata: SnapshotMeta) {
+    pub async fn update_meta_data(&mut self, metadata: SnapshotMeta, snapshot_revision: u64) {
         let mut guard = self.data.raft_meta_data.lock().await;
         guard.last_membership = metadata.last_membership;
         guard.last_applied_log_id = metadata.last_log_id;
+        guard.snapshot_revision = snapshot_revision;
     }
 
     async fn replay_snapshot_queue(&self, queue: &[AtomicRequest]) {
         for atomic_request in queue {
-            let mut update_type = UpdateType::CAS(atomic_request.version);
+            let mut update_type = UpdateType::CAS {
+                expected_revision: atomic_request.expected_revision,
+                revision: atomic_request.version,
+            };
             let mut update = Update {
                 db_number: atomic_request.db_number,
                 update_type: &mut update_type,
@@ -191,10 +200,19 @@ impl RaftStateMachine<TypeConfig> for StateMachineStore {
     {
         let mut raft_meta = self.data.raft_meta_data.lock().await;
         let _lock = self.data.kvs.write_lock.lock().await;
+        let RaftMetaData {
+            snapshot_state,
+            snapshot_revision,
+            last_applied_log_id,
+            last_membership,
+        } = &mut *raft_meta;
         let mut guard;
-        let update_type = if raft_meta.snapshot_state == SnapshotState::Start {
+        let update_type = if *snapshot_state == SnapshotState::Start {
             guard = self.data.incremental_operation_queue.lock().await;
-            &mut UpdateType::Snapshot(&mut guard)
+            &mut UpdateType::Snapshot {
+                queue: &mut guard,
+                revision: snapshot_revision,
+            }
         } else {
             &mut UpdateType::None
         };
@@ -204,7 +222,7 @@ impl RaftStateMachine<TypeConfig> for StateMachineStore {
             update_type,
         };
         while let Some((entry, responder)) = entries.try_next().await? {
-            raft_meta.last_applied_log_id = Some(entry.log_id);
+            *last_applied_log_id = Some(entry.log_id);
             let st = &self.data.kvs;
             let response = match entry.payload {
                 EntryPayload::Blank => Value::ok(),
@@ -217,8 +235,7 @@ impl RaftStateMachine<TypeConfig> for StateMachineStore {
                     do_request(&self.data.kvs, req.operation, &mut update, true)
                 }
                 EntryPayload::Membership(mem) => {
-                    raft_meta.last_membership =
-                        StoredMembership::new(Some(entry.log_id), mem.clone());
+                    *last_membership = StoredMembership::new(Some(entry.log_id), mem.clone());
                     Value::ok()
                 }
             };
@@ -267,7 +284,7 @@ impl RaftStateMachine<TypeConfig> for StateMachineStore {
         // can use the same snapshot that was just installed.
         let snapshot_path = self.path.join("snapshot");
         fs::rename(&path_buf, snapshot_path.join(get_snapshot_file_name())).await?;
-        self.update_meta_data(res.0).await;
+        self.update_meta_data(res.0, res.3).await;
         Ok(())
     }
 
@@ -286,5 +303,77 @@ impl RaftStateMachine<TypeConfig> for StateMachineStore {
                 }))
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::cfg::config::Config;
+    use crate::protocol::key::flushdb::FlushDBReq;
+    use crate::raft::types::entry::base_operation::BaseOperation;
+    use crate::raft::types::entry::request::{Operation, Request};
+    use crate::raft::types::raft_types::{Entry, LeaderId};
+    use openraft::entry::RaftEntry;
+
+    #[tokio::test]
+    async fn snapshot_revision_survives_partial_apply_failure_and_next_batch() {
+        let path = tempfile::tempdir().unwrap();
+        let mut config = Config::default();
+        config.redis.databases = 1;
+        let mut store = StateMachineStore::new(
+            ParsedConfig::from(&config).unwrap(),
+            path.path().to_path_buf(),
+            1,
+        )
+        .await
+        .unwrap();
+        {
+            let mut metadata = store.data.raft_meta_data.lock().await;
+            metadata.snapshot_state = SnapshotState::Start;
+            metadata.snapshot_revision = 40;
+        }
+        let entry = |index| {
+            Entry::new_normal(
+                LogId::new(
+                    LeaderId {
+                        term: 1,
+                        node_id: 1,
+                    },
+                    index,
+                ),
+                Request::new(
+                    100,
+                    0,
+                    Operation::Base(BaseOperation::FlushDB(FlushDBReq { async_mode: false })),
+                ),
+            )
+        };
+
+        // A later stream error must not roll back the watermark of an operation
+        // already applied. This rules out copying the counter into a temporary
+        // and writing it back only on the successful return path.
+        let error = store
+            .apply(futures::stream::iter(vec![
+                Ok((entry(1), None)),
+                Err(io::Error::other("injected entry stream failure")),
+            ]))
+            .await
+            .unwrap_err();
+        assert_eq!(error.kind(), io::ErrorKind::Other);
+        assert_eq!(store.data.raft_meta_data.lock().await.snapshot_revision, 41);
+        assert_eq!(
+            store.data.incremental_operation_queue.lock().await[0].version,
+            41
+        );
+
+        store
+            .apply(futures::stream::iter(vec![Ok((entry(2), None))]))
+            .await
+            .unwrap();
+        assert_eq!(store.data.raft_meta_data.lock().await.snapshot_revision, 42);
+        let queue = store.data.incremental_operation_queue.lock().await;
+        assert_eq!(queue.len(), 2);
+        assert_eq!(queue[1].version, 42);
     }
 }

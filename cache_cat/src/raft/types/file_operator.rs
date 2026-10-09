@@ -1,4 +1,5 @@
 use crate::raft::network::client::connect_cluster;
+use crate::raft::store::snapshot::snapshot_handler::{CacheCatSnapshotMeta, VERSION};
 use crate::raft::types::raft_types::SnapshotMeta;
 use serde::{Deserialize, Serialize};
 use std::error::Error;
@@ -10,8 +11,6 @@ use tokio_rustls::TlsConnector;
 use uuid::Uuid;
 
 const CACHE_MAGIC_NUM: &[u8; 4] = b"MCDC";
-
-const VERSION: u8 = 1;
 
 /// 发送硬链接文件到其他节点的辅助结构体。
 ///
@@ -100,10 +99,10 @@ where
     let meta_len = reader.read_u32().await? as usize;
     let mut meta_buf = vec![0u8; meta_len];
     reader.read_exact(&mut meta_buf).await?;
-    let meta: SnapshotMeta = bincode2::deserialize(&meta_buf)
+    let meta: CacheCatSnapshotMeta = bincode2::deserialize(&meta_buf)
         .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
 
-    Ok(Some(meta))
+    Ok(Some(meta.meta))
 }
 
 //发送的时候一定要转u32

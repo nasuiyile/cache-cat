@@ -5,4 +5,7 @@ mod multi_compute_tests;
 mod deterministic_read_tests;
 
 #[cfg(test)]
-mod transaction_tests;  
+mod snapshot_revision_tests;
+
+#[cfg(test)]
+mod transaction_tests;

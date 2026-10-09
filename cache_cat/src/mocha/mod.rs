@@ -791,6 +791,13 @@ where
         let mg = self.map.pin();
         mg.clear();
     }
+
+    /// Filter stored values without cloning keys or payloads. Snapshot replay
+    /// uses this to preserve entries newer than a recorded database flush.
+    pub(crate) fn retain_values(&self, mut keep: impl FnMut(&V) -> bool) {
+        self.map.pin().retain(|_, entry| keep(&entry.value));
+    }
+
     pub fn unlink_batch(&self, keys: &[K]) -> usize {
         let now = self.now_logical();
         let expire_at = OptionalU64::some_saturating(now);

@@ -8,6 +8,7 @@ use super::*;
 use crate::cfg::config::Config;
 use crate::node::parsed_config::ParsedConfig;
 use crate::node::raft_node::RaftNode;
+use crate::protocol::command::Client;
 use crate::protocol::hash::hset::HSetReq;
 use crate::protocol::string::set::SetParams;
 use crate::protocol::transaction::QueuedOperation;
@@ -27,7 +28,6 @@ use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::broadcast;
 use tokio::time::timeout;
 use tokio_util::codec::Framed;
-use crate::protocol::command::Client;
 
 fn command(parts: &[&str]) -> Value {
     Value::Array(Some(
@@ -344,7 +344,11 @@ async fn select_wrong_arity_aborts_exec_without_switching_database() {
 fn select_in_exec_records_each_write_database_for_snapshot_replay() {
     let cache = MyCache::new(2).unwrap();
     let mut queue = Vec::new();
-    let mut update_type = UpdateType::Snapshot(&mut queue);
+    let mut revision = 0;
+    let mut update_type = UpdateType::Snapshot {
+        queue: &mut queue,
+        revision: &mut revision,
+    };
     let mut update = Update {
         db_number: 0,
         write_clock: 1,
@@ -388,7 +392,10 @@ fn select_in_exec_records_each_write_database_for_snapshot_replay() {
     let queue: Vec<crate::raft::types::entry::request::AtomicRequest> =
         bincode2::deserialize(&bytes).unwrap();
     for atomic in queue {
-        let mut update_type = UpdateType::CAS(atomic.version);
+        let mut update_type = UpdateType::CAS {
+            expected_revision: atomic.expected_revision,
+            revision: atomic.version,
+        };
         let mut update = Update {
             db_number: atomic.db_number,
             write_clock: restored.set_write_clock(atomic.write_clock),
