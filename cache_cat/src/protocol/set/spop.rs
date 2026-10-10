@@ -63,19 +63,12 @@ impl SPopCommand {
          * - 溢出 i64 的整数
          * - 负数
          */
-        let bytes = value
-            .string_bytes_clone()
-            .ok_or(ProtocolError::InvalidArgument("count"))?;
-
-        let text = std::str::from_utf8(bytes.as_ref())
-            .map_err(|_| ProtocolError::InvalidArgument("count"))?;
-
-        let count = text
-            .parse::<i64>()
-            .map_err(|_| ProtocolError::InvalidArgument("count"))?;
+        let count = value.try_parse_canonical_i64()?;
 
         if count < 0 {
-            return Err(ProtocolError::InvalidArgument("count"));
+            return Err(ProtocolError::response(
+                "ERR value is out of range, must be positive",
+            ));
         }
 
         Ok(count as u64)
@@ -317,6 +310,28 @@ mod tests {
     use parking_lot::Mutex;
     use std::collections::HashSet;
     use std::sync::Arc;
+
+    #[test]
+    fn count_uses_redis_integer_syntax_and_rejects_negative_values() {
+        for count in ["+1", "00", "01", "-0", "9223372036854775808"] {
+            let items = ["SPOP", "set", count]
+                .map(|arg| Value::BulkString(Some(Bytes::copy_from_slice(arg.as_bytes()))));
+            assert_eq!(
+                SPopCommand.raft_request(&items).unwrap_err(),
+                ProtocolError::NotAnInteger
+            );
+        }
+        for count in ["0", "1", "9223372036854775807"] {
+            let items = ["SPOP", "set", count]
+                .map(|arg| Value::BulkString(Some(Bytes::copy_from_slice(arg.as_bytes()))));
+            assert!(SPopCommand.raft_request(&items).is_ok());
+        }
+        let count = Value::BulkString(Some(Bytes::from_static(b"-1")));
+        assert_eq!(
+            SPopCommand::parse_count(&count).unwrap_err().to_string(),
+            "ERR value is out of range, must be positive"
+        );
+    }
 
     #[test]
     fn shared_rng_preserves_spop_sequence_and_remaining_members() {

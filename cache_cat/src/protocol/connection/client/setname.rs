@@ -1,5 +1,6 @@
 use crate::error::{CacheCatError, ProtocolError};
 use crate::protocol::command::{Client, SubCommand};
+use crate::protocol::connection::client::parse_client_name;
 use crate::raft::network::redis_server::RedisServer;
 use crate::raft::types::core::response_value::Value;
 use async_trait::async_trait;
@@ -17,12 +18,7 @@ impl SubCommand for SetNameCommand {
         if items.len() != 3 {
             return Err(ProtocolError::WrongArgCount("client|setname").into());
         }
-        let name = items[2]
-            .as_str_lossy()
-            .ok_or(ProtocolError::InvalidArgument("master name"))?
-            .into_owned();
-
-        client.name = name;
+        client.name = parse_client_name(&items[2])?;
         Ok(Value::ok())
     }
 }

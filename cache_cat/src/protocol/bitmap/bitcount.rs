@@ -92,6 +92,23 @@ mod tests {
     use super::*;
 
     #[test]
+    fn range_requires_both_start_and_end() {
+        let items = ["BITCOUNT", "key", "0"]
+            .map(|arg| Value::BulkString(Some(Bytes::copy_from_slice(arg.as_bytes()))));
+        assert_eq!(
+            BitCountCommand::parse_args(&items).unwrap_err(),
+            ProtocolError::SyntaxError
+        );
+        for args in [vec!["BITCOUNT", "key"], vec!["BITCOUNT", "key", "0", "-1"]] {
+            let items = args
+                .into_iter()
+                .map(|arg| Value::BulkString(Some(Bytes::copy_from_slice(arg.as_bytes()))))
+                .collect::<Vec<_>>();
+            assert!(BitCountCommand::parse_args(&items).is_ok());
+        }
+    }
+
+    #[test]
     fn range_start_beyond_string_returns_zero() {
         let value = EntrySnapshot {
             value: MyValue::new(ValueObject::String(Bytes::from_static(b"\xff"))),
@@ -143,6 +160,9 @@ impl BitCountCommand {
     fn parse_args(items: &[Value]) -> Result<BitCountParams, ProtocolError> {
         if items.len() < 2 || items.len() > 4 {
             return Err(ProtocolError::WrongArgCount("bitcount"));
+        }
+        if items.len() == 3 {
+            return Err(ProtocolError::SyntaxError);
         }
 
         let key = items[1]

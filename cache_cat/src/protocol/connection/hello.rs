@@ -1,5 +1,6 @@
 use crate::error::{CacheCatError, ProtocolError};
 use crate::protocol::command::{Client, Command};
+use crate::protocol::connection::client::parse_client_name;
 use crate::raft::network::redis_server::RedisServer;
 use crate::raft::types::core::response_value::Value;
 use async_trait::async_trait;
@@ -36,41 +37,16 @@ impl HelloParam {
         let mut idx = 1; // Skip command name
         // Parse optional protocol version
         if idx < items.len() {
-            let proto_val = &items[idx];
-            let requested = match proto_val {
-                Value::Integer(v) => {
-                    if *v < 0 || *v > 255 {
-                        return Err(ProtocolError::response(
-                            "NOPROTO unsupported protocol version",
-                        ));
-                    }
-                    *v as u8
-                }
-                Value::BulkString(Some(data)) => {
-                    String::from_utf8_lossy(data).parse::<u8>().map_err(|_| {
-                        ProtocolError::response(
-                            "ERR Protocol version is not an integer or out of range",
-                        )
-                    })?
-                }
-                Value::BulkString(None) => {
-                    return Err(ProtocolError::InvalidArgument(
-                        "protocol version cannot be null",
-                    ));
-                }
-                _ => {
-                    return Err(ProtocolError::InvalidArgument(
-                        "protocol version must be integer or string",
-                    ));
-                }
-            };
+            let requested = items[idx].try_parse_canonical_i64().map_err(|_| {
+                ProtocolError::response("ERR Protocol version is not an integer or out of range")
+            })?;
             // Validate protocol version
             if requested != 2 && requested != 3 {
                 return Err(ProtocolError::response(
                     "NOPROTO unsupported protocol version",
                 ));
             }
-            proto_version = Some(requested);
+            proto_version = Some(requested as u8);
             idx += 1;
         }
         // Parse optional AUTH and/or SETNAME
@@ -138,19 +114,7 @@ impl HelloParam {
                     if idx >= items.len() {
                         return Err(ProtocolError::WrongArgCount("HELLO SETNAME"));
                     }
-                    let name = match &items[idx] {
-                        Value::BulkString(Some(data)) => {
-                            Some(String::from_utf8_lossy(data).to_string())
-                        }
-                        Value::BulkString(None) => None,
-                        Value::SimpleString(s) => Some(s.clone()),
-                        _ => {
-                            return Err(ProtocolError::InvalidArgument(
-                                "client name must be string",
-                            ));
-                        }
-                    };
-                    client_name = name;
+                    client_name = Some(parse_client_name(&items[idx])?);
                     idx += 1;
                 }
                 _ => {
@@ -237,5 +201,130 @@ impl Command for HelloCommand {
         ];
 
         Ok(Value::Map(map_pairs))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::cfg::config::Config;
+    use crate::node::parsed_config::ParsedConfig;
+    use crate::node::raft_node::RaftNode;
+    use crate::protocol::connection::client::core::ClientCommand;
+    use tokio::net::{TcpListener, TcpStream};
+    use tokio::sync::broadcast;
+
+    fn bulk(value: &[u8]) -> Value {
+        Value::BulkString(Some(Bytes::copy_from_slice(value)))
+    }
+
+    #[test]
+    fn protocol_version_requires_a_canonical_integer() {
+        for version in [
+            b"02".as_slice(),
+            b"+2",
+            b"-0",
+            b" 2",
+            b"2 ",
+            b"",
+            b"9223372036854775808",
+        ] {
+            let error = HelloParam::parse(&[bulk(b"HELLO"), bulk(version)]).unwrap_err();
+            assert_eq!(
+                error,
+                ProtocolError::response("ERR Protocol version is not an integer or out of range"),
+                "version {version:?}",
+            );
+        }
+        for version in [b"-1".as_slice(), b"0", b"4", b"256", b"9223372036854775807"] {
+            let error = HelloParam::parse(&[bulk(b"HELLO"), bulk(version)]).unwrap_err();
+            assert_eq!(
+                error,
+                ProtocolError::response("NOPROTO unsupported protocol version"),
+                "version {version:?}",
+            );
+        }
+        for (version, expected) in [(b"2", 2), (b"3", 3)] {
+            let params = HelloParam::parse(&[bulk(b"HELLO"), bulk(version)]).unwrap();
+            assert_eq!(params.proto_version, Some(expected));
+        }
+        assert_eq!(
+            HelloParam::parse(&[bulk(b"HELLO")]).unwrap().proto_version,
+            None
+        );
+    }
+
+    #[tokio::test]
+    async fn invalid_client_names_leave_connection_state_unchanged() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut config = Config::default();
+        config.raft.log_path = dir.path().to_str().unwrap().to_owned();
+        config.raft.address = "127.0.0.1:0".into();
+        config.redis.databases = 1;
+        config.redis.requirepass = Some("secret".into());
+        let config = ParsedConfig::from(&config).unwrap();
+        let (shutdown_tx, _) = broadcast::channel(1);
+        let node = RaftNode::create(config, shutdown_tx).await.unwrap();
+        let server =
+            RedisServer::new(node.app.clone(), "127.0.0.1:0".into(), &node.app.config).unwrap();
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let _socket = TcpStream::connect(listener.local_addr().unwrap())
+            .await
+            .unwrap();
+        let (connection, _) = listener.accept().await.unwrap();
+        let mut client = Client::new(1, connection, false);
+        client.name = "previous".into();
+        let client_command = ClientCommand::new();
+        let hello_prefix = [
+            b"HELLO".as_slice(),
+            b"3",
+            b"AUTH",
+            b"default",
+            b"secret",
+            b"SETNAME",
+        ];
+        let client_prefix = [b"CLIENT".as_slice(), b"SETNAME"];
+
+        for (command, prefix) in [
+            (&HelloCommand as &dyn Command, hello_prefix.as_slice()),
+            (&client_command as &dyn Command, client_prefix.as_slice()),
+        ] {
+            for name in [
+                b"with space".as_slice(),
+                b"line\nbreak",
+                b"\t",
+                b"\0",
+                b"\x7f",
+                b"\xff",
+            ] {
+                let mut items: Vec<_> = prefix.iter().map(|arg| bulk(arg)).collect();
+                items.push(bulk(name));
+                let error = command
+                    .execute(&mut client, &items, &server)
+                    .await
+                    .unwrap_err();
+                assert_eq!(
+                    Value::from(error).encode(),
+                    b"-ERR Client names cannot contain spaces, newlines or special characters.\r\n",
+                );
+                assert_eq!(client.name, "previous");
+                assert!(!client.authenticated);
+                assert_eq!(client.framed.codec().proto_version(), 2);
+            }
+        }
+        for (command, prefix) in [
+            (&HelloCommand as &dyn Command, hello_prefix.as_slice()),
+            (&client_command as &dyn Command, client_prefix.as_slice()),
+        ] {
+            for name in [b"worker:1-~".as_slice(), b""] {
+                let mut items: Vec<_> = prefix.iter().map(|arg| bulk(arg)).collect();
+                items.push(bulk(name));
+                command.execute(&mut client, &items, &server).await.unwrap();
+                assert_eq!(client.name.as_bytes(), name);
+                assert!(client.authenticated);
+                assert_eq!(client.framed.codec().proto_version(), 3);
+            }
+        }
+        node.app.cluster.shutdown().await.unwrap();
     }
 }

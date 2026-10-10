@@ -44,13 +44,7 @@ impl LSetCommand {
         let key = items[1]
             .string_bytes_clone()
             .ok_or(ProtocolError::InvalidArgument("key"))?;
-        let index_str = items[2]
-            .string_bytes_clone()
-            .ok_or(ProtocolError::InvalidArgument("index"))?;
-        let index_str = String::from_utf8_lossy(&index_str);
-        let index = index_str
-            .parse::<i64>()
-            .map_err(|_| ProtocolError::InvalidArgument("index must be an integer"))?;
+        let index = items[2].try_parse_canonical_i64()?;
         let value = items[3]
             .string_bytes_clone()
             .ok_or(ProtocolError::InvalidArgument("value"))?;
@@ -176,5 +170,33 @@ impl ComputeCommand for LSetReq {
             MochaOperation::Abort,
             ProtocolError::response("ERR no such key").into(),
         )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn index_uses_redis_integer_syntax() {
+        for index in ["+0", "00", "01", "-0", "9223372036854775808"] {
+            let items = ["LSET", "list", index, "value"]
+                .map(|arg| Value::BulkString(Some(Bytes::copy_from_slice(arg.as_bytes()))));
+            assert_eq!(
+                LSetCommand.raft_request(&items).unwrap_err(),
+                ProtocolError::NotAnInteger
+            );
+        }
+        for index in [
+            "0",
+            "1",
+            "-1",
+            "-9223372036854775808",
+            "9223372036854775807",
+        ] {
+            let items = ["LSET", "list", index, "value"]
+                .map(|arg| Value::BulkString(Some(Bytes::copy_from_slice(arg.as_bytes()))));
+            assert!(LSetCommand.raft_request(&items).is_ok());
+        }
     }
 }
