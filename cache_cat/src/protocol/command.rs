@@ -190,7 +190,7 @@ pub struct Client {
     pub transaction_failed: bool,
     pub closed: bool,
     pub authenticated: bool,
-    pub framed: Framed<Connection, RespCodec>,
+    pub framed: Framed<Connection, RespCodec<true>>,
     pub name: String,
     pub connection_time: u64,
     pub last_interaction: u64,
@@ -209,7 +209,7 @@ impl Client {
             transaction_failed: false,
             closed: false,
             authenticated: auth,
-            framed: Framed::new(connection.into(), RespCodec::new()),
+            framed: Framed::new(connection.into(), RespCodec::for_requests()),
             name: "".to_string(),
             connection_time: now_ms(),
             last_interaction: now_ms(),
@@ -226,6 +226,17 @@ impl Client {
     pub fn mark_transaction_failed(&mut self) {
         if self.transaction_queue.is_some() {
             self.transaction_failed = true;
+        }
+    }
+
+    /// Protocol failures get one error reply before the connection is closed.
+    /// Transport failures keep their existing handling and do not generate RESP.
+    async fn reply_to_decode_error(&mut self, error: &std::io::Error) {
+        if let Some(error) = error
+            .get_ref()
+            .and_then(|source| source.downcast_ref::<crate::protocol::resp::RespParseError>())
+        {
+            let _ = self.framed.send(Value::error(format!("ERR {error}"))).await;
         }
     }
 }
@@ -578,6 +589,7 @@ impl CommandFactory {
                         }
                         Some(Err(e)) => {
                             error!("Read error in blocking mode: {}", e);
+                            client.reply_to_decode_error(&e).await;
                             return Err(CacheCatError::from(e));
                         }
                         None => return Ok(()), // Connection closed
@@ -598,6 +610,7 @@ impl CommandFactory {
                 Some(Ok(v)) => v,
                 Some(Err(e)) => {
                     error!("Read error: {}", e);
+                    client.reply_to_decode_error(&e).await;
                     return Err(CacheCatError::from(e));
                 }
                 None => return Ok(()), // Connection closed

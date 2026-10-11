@@ -13,7 +13,7 @@ use std::os::windows::io::AsRawSocket;
 use tokio_util::codec::Framed;
 
 #[allow(clippy::unnecessary_cast)]
-fn connection_id(framed: &Framed<Connection, RespCodec>) -> u64 {
+fn connection_id(framed: &Framed<Connection, RespCodec<true>>) -> u64 {
     let conn = framed.get_ref();
     #[cfg(unix)]
     {

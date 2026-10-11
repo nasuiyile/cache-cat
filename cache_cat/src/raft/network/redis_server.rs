@@ -1,7 +1,7 @@
 use crate::error::CacheCatError;
 use crate::node::parsed_config::ParsedConfig;
 use crate::protocol::command::{Client, CommandFactory};
-use crate::protocol::resp::Parser;
+use crate::protocol::resp::{Parser, take_request_from_bytes_stream};
 use crate::raft::application::pub_sub::PubSub;
 use crate::raft::network::connection::Connection;
 use crate::raft::types::core::response_value::Value;
@@ -28,7 +28,9 @@ pub(super) struct RedisListeners {
     tls: Option<(TcpListener, TlsAcceptor)>,
 }
 
-pub struct RespCodec {
+/// REQUESTS selects the non-recursive Redis command parser at compile time.
+/// The default codec decodes RESP2/RESP3 replies for clients.
+pub struct RespCodec<const REQUESTS: bool = false> {
     proto_version: u8,
 }
 
@@ -37,6 +39,12 @@ impl RespCodec {
         Self { proto_version: 2 }
     }
 
+    pub const fn for_requests() -> RespCodec<true> {
+        RespCodec { proto_version: 2 }
+    }
+}
+
+impl<const REQUESTS: bool> RespCodec<REQUESTS> {
     pub const fn switch_resp2(&mut self) {
         self.proto_version = 2;
     }
@@ -51,24 +59,29 @@ impl RespCodec {
     }
 }
 
-impl Default for RespCodec {
+impl<const REQUESTS: bool> Default for RespCodec<REQUESTS> {
     #[inline]
     fn default() -> Self {
-        Self::new()
+        Self { proto_version: 2 }
     }
 }
 
-impl Decoder for RespCodec {
+impl<const REQUESTS: bool> Decoder for RespCodec<REQUESTS> {
     type Item = Value;
     type Error = std::io::Error;
 
     #[inline]
     fn decode(&mut self, src: &mut BytesMut) -> Result<Option<Self::Item>, Self::Error> {
-        Ok(Parser::take_from_bytes_stream(src))
+        let result = if REQUESTS {
+            take_request_from_bytes_stream(src)
+        } else {
+            Parser::take_from_bytes_stream(src)
+        };
+        result.map_err(|error| std::io::Error::new(std::io::ErrorKind::InvalidData, error))
     }
 }
 
-impl Encoder<Value> for RespCodec {
+impl<const REQUESTS: bool> Encoder<Value> for RespCodec<REQUESTS> {
     type Error = std::io::Error;
 
     #[inline]
@@ -234,6 +247,9 @@ impl RedisServer {
 }
 
 #[cfg(test)]
+mod request_tests;
+
+#[cfg(test)]
 mod tests {
     use super::*;
     use crate::cfg::config::Config;
@@ -248,7 +264,7 @@ mod tests {
     use tokio::time::timeout;
     use tokio_util::codec::Framed;
 
-    async fn test_node() -> (tempfile::TempDir, RaftNode, broadcast::Sender<()>) {
+    pub(super) async fn test_node() -> (tempfile::TempDir, RaftNode, broadcast::Sender<()>) {
         let dir = tempfile::tempdir().unwrap();
         let mut config = Config::default();
         config.raft.log_path = dir.path().to_str().unwrap().to_owned();

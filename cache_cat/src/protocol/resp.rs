@@ -1,6 +1,54 @@
 use bytes::{Buf, Bytes, BytesMut};
+use std::fmt;
 
 use crate::raft::types::core::response_value::Value;
+
+mod request;
+pub use request::take_request_from_bytes_stream;
+
+/// Bound both parser recursion and the recursive values it constructs.
+const MAX_AGGREGATE_DEPTH: usize = 16;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RespParseError {
+    NestingTooDeep,
+    ExpectedArray(u8),
+    ExpectedBulk(u8),
+    InvalidArrayLength,
+    InvalidBulkLength,
+    InvalidBulkTerminator,
+}
+
+impl fmt::Display for RespParseError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("Protocol error: ")?;
+        match self {
+            Self::NestingTooDeep => f.write_str("maximum nesting depth exceeded"),
+            Self::ExpectedArray(byte) | Self::ExpectedBulk(byte) => {
+                let expected = if matches!(self, Self::ExpectedArray(_)) {
+                    '*'
+                } else {
+                    '$'
+                };
+                if (b' '..=b'~').contains(byte) {
+                    write!(f, "expected '{expected}', got '{}'", char::from(*byte))
+                } else {
+                    write!(f, "expected '{expected}', got '\\x{byte:02x}'")
+                }
+            }
+            Self::InvalidArrayLength => f.write_str("invalid multibulk length"),
+            Self::InvalidBulkLength => f.write_str("invalid bulk length"),
+            Self::InvalidBulkTerminator => f.write_str("invalid bulk terminator"),
+        }
+    }
+}
+
+impl std::error::Error for RespParseError {}
+
+enum MetaParseError {
+    Incomplete,
+    NestingTooDeep,
+}
 
 /// Which aggregate frame a parsed header belongs to.
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -96,19 +144,23 @@ impl Parser {
         self.len() == 0
     }
 
-    pub fn take_from_bytes_stream(buffer: &mut BytesMut) -> Option<Value> {
+    pub fn take_from_bytes_stream(buffer: &mut BytesMut) -> Result<Option<Value>, RespParseError> {
         // check has `mode` (1 byte) and `eof` (2 bytes)
         if buffer.len() < 3 {
-            return None;
+            return Ok(None);
         }
 
         // parse the metadata of element
-        let meta = Self::parse_meta(buffer)?;
+        let meta = match Self::parse_meta(buffer, 0) {
+            Ok(meta) => meta,
+            Err(MetaParseError::Incomplete) => return Ok(None),
+            Err(MetaParseError::NestingTooDeep) => return Err(RespParseError::NestingTooDeep),
+        };
         let len = meta.len();
         // split the buffer data
         let buffer = buffer.split_to(len).freeze();
         // take the value
-        Some(meta.take(buffer))
+        Ok(Some(meta.take(buffer)))
     }
 
     fn take(self, mut buffer: Bytes) -> Value {
@@ -201,10 +253,10 @@ impl Parser {
         }
     }
 
-    fn parse_meta(buffer: &[u8]) -> Option<Parser> {
+    fn parse_meta(buffer: &[u8], depth: usize) -> Result<Parser, MetaParseError> {
         // check has `mode` (1 byte) and `eof` (2 bytes)
         if buffer.len() < 3 {
-            return None;
+            return Err(MetaParseError::Incomplete);
         }
         let mode = buffer[0];
         match mode {
@@ -212,7 +264,7 @@ impl Parser {
             b'-' => Self::parse_error(buffer),
             b':' => Self::parse_integer(buffer),
             b'$' => Self::parse_bulk_string(buffer),
-            b'*' => Self::parse_aggregate(buffer, AggregateKind::Array),
+            b'*' => return Self::parse_aggregate(buffer, AggregateKind::Array, depth),
             // ---- RESP3 ----
             b'_' => Self::parse_null(buffer),
             b'#' => Self::parse_boolean(buffer),
@@ -220,12 +272,13 @@ impl Parser {
             b'(' => Self::parse_big_number(buffer),
             b'!' => Self::parse_bulk_error(buffer),
             b'=' => Self::parse_verbatim(buffer),
-            b'%' => Self::parse_aggregate(buffer, AggregateKind::Map),
-            b'~' => Self::parse_aggregate(buffer, AggregateKind::Set),
-            b'>' => Self::parse_aggregate(buffer, AggregateKind::Push),
-            b'|' => Self::parse_attribute(buffer),
+            b'%' => return Self::parse_aggregate(buffer, AggregateKind::Map, depth),
+            b'~' => return Self::parse_aggregate(buffer, AggregateKind::Set, depth),
+            b'>' => return Self::parse_aggregate(buffer, AggregateKind::Push, depth),
+            b'|' => return Self::parse_attribute(buffer, depth),
             _ => None,
         }
+        .ok_or(MetaParseError::Incomplete)
     }
 
     /// Read `line` from buffer, start with `mode`,
@@ -385,34 +438,45 @@ impl Parser {
     ///
     /// For maps (and attributes) `count` is the number of key-value pairs,
     /// so 2 * count child elements follow.
-    fn parse_aggregate(buffer: &[u8], kind: AggregateKind) -> Option<Parser> {
-        let (count, pos) = Self::read_i64(buffer)?;
+    fn parse_aggregate(
+        buffer: &[u8],
+        kind: AggregateKind,
+        depth: usize,
+    ) -> Result<Parser, MetaParseError> {
+        // Scalar arguments never execute this check. Reject before allocating
+        // children so partial malicious frames cannot build an unbounded tree.
+        if depth >= MAX_AGGREGATE_DEPTH {
+            return Err(MetaParseError::NestingTooDeep);
+        }
+        let (count, pos) = Self::read_i64(buffer).ok_or(MetaParseError::Incomplete)?;
         let count = match count {
             // Only the RESP2 array supports the null form `*-1`.
             -1 if kind == AggregateKind::Array => {
-                return Some(Parser::Aggregate {
+                return Ok(Parser::Aggregate {
                     kind,
                     len: pos,
                     value: None,
                 });
             }
             // TODO: Handle the Error
-            ..0 => return None,
-            count => usize::try_from(count).ok()?,
+            ..0 => return Err(MetaParseError::Incomplete),
+            count => usize::try_from(count).map_err(|_| MetaParseError::Incomplete)?,
         };
         let element_count = match kind {
-            AggregateKind::Map | AggregateKind::Attribute => count.checked_mul(2)?,
+            AggregateKind::Map | AggregateKind::Attribute => {
+                count.checked_mul(2).ok_or(MetaParseError::Incomplete)?
+            }
             _ => count,
         };
         let mut elements = Vec::with_capacity(element_count.min(4096));
         let mut full = pos;
         for _ in 0..element_count {
-            let meta = Self::parse_meta(&buffer[full..])?;
+            let meta = Self::parse_meta(&buffer[full..], depth + 1)?;
             let len = meta.len();
-            full = full.checked_add(len)?;
+            full = full.checked_add(len).ok_or(MetaParseError::Incomplete)?;
             elements.push(meta);
         }
-        Some(Parser::Aggregate {
+        Ok(Parser::Aggregate {
             kind,
             len: full,
             value: Some((pos, elements)),
@@ -422,21 +486,23 @@ impl Parser {
     /// Parse `|<count>\r\n` (RESP3 attribute): a map of metadata followed by
     /// the actual element the attribute annotates. The annotated element is
     /// stored as the last child so `take()` can return it directly.
-    fn parse_attribute(buffer: &[u8]) -> Option<Parser> {
-        let attrs = Self::parse_aggregate(buffer, AggregateKind::Attribute)?;
+    fn parse_attribute(buffer: &[u8], depth: usize) -> Result<Parser, MetaParseError> {
+        let attrs = Self::parse_aggregate(buffer, AggregateKind::Attribute, depth)?;
         let (attr_len, pos, mut elements) = match attrs {
             Parser::Aggregate {
                 len,
                 value: Some((pos, elements)),
                 ..
             } => (len, pos, elements),
-            _ => return None,
+            _ => return Err(MetaParseError::Incomplete),
         };
         // Parse the element that follows the attribute map.
-        let inner = Self::parse_meta(&buffer[attr_len..])?;
-        let full = attr_len.checked_add(inner.len())?;
+        let inner = Self::parse_meta(&buffer[attr_len..], depth + 1)?;
+        let full = attr_len
+            .checked_add(inner.len())
+            .ok_or(MetaParseError::Incomplete)?;
         elements.push(inner);
-        Some(Parser::Aggregate {
+        Ok(Parser::Aggregate {
             kind: AggregateKind::Attribute,
             len: full,
             value: Some((pos, elements)),
@@ -451,7 +517,136 @@ mod tests {
 
     fn decode(input: &[u8]) -> Option<Value> {
         let mut buf = BytesMut::from(input);
-        Parser::take_from_bytes_stream(&mut buf)
+        Parser::take_from_bytes_stream(&mut buf).unwrap()
+    }
+
+    fn nested_frame(prefix: &[u8], suffix: &[u8], depth: usize) -> BytesMut {
+        let mut buffer = BytesMut::new();
+        for _ in 0..depth {
+            buffer.extend_from_slice(prefix);
+        }
+        buffer.extend_from_slice(b":42\r\n");
+        for _ in 0..depth {
+            buffer.extend_from_slice(suffix);
+        }
+        buffer
+    }
+
+    #[test]
+    fn aggregate_depth_boundary_covers_all_resp_aggregate_types() {
+        // Attribute recursion occurs both in metadata and in the annotated value.
+        for (prefix, suffix) in [
+            (b"*1\r\n".as_slice(), b"".as_slice()),
+            (b"%1\r\n+key\r\n", b""),
+            (b"~1\r\n", b""),
+            (b">1\r\n", b""),
+            (b"|0\r\n", b""),
+            (b"|1\r\n+key\r\n", b":0\r\n"),
+        ] {
+            let mut allowed = nested_frame(prefix, suffix, MAX_AGGREGATE_DEPTH);
+            let value = Parser::take_from_bytes_stream(&mut allowed).unwrap();
+            assert!(value.is_some());
+            assert!(allowed.is_empty());
+            drop(value);
+
+            let mut excessive = nested_frame(prefix, suffix, MAX_AGGREGATE_DEPTH + 1);
+            let original = excessive.clone();
+            assert_eq!(
+                Parser::take_from_bytes_stream(&mut excessive).unwrap_err(),
+                RespParseError::NestingTooDeep
+            );
+            assert_eq!(excessive, original, "errors must not consume buffered data");
+        }
+    }
+
+    #[test]
+    fn depth_is_per_branch_and_resets_between_pipelined_frames() {
+        let child = nested_frame(b"*1\r\n", b"", MAX_AGGREGATE_DEPTH - 1);
+        let mut buffer = BytesMut::from(b"*2\r\n".as_slice());
+        buffer.extend_from_slice(&child);
+        buffer.extend_from_slice(&child);
+        buffer.extend_from_slice(b"+NEXT\r\n");
+        assert!(matches!(
+            Parser::take_from_bytes_stream(&mut buffer).unwrap(),
+            Some(Value::Array(Some(children))) if children.len() == 2
+        ));
+        assert_eq!(&buffer[..], b"+NEXT\r\n");
+        assert!(matches!(
+            Parser::take_from_bytes_stream(&mut buffer).unwrap(),
+            Some(Value::SimpleString(value)) if value == "NEXT"
+        ));
+        assert!(buffer.is_empty());
+    }
+
+    #[test]
+    fn partial_nested_frames_distinguish_incomplete_from_excessive_depth() {
+        let complete = nested_frame(b"*1\r\n", b"", MAX_AGGREGATE_DEPTH);
+        let mut buffer = BytesMut::new();
+        for byte in &complete[..complete.len() - 1] {
+            buffer.extend_from_slice(&[*byte]);
+            assert!(
+                Parser::take_from_bytes_stream(&mut buffer)
+                    .unwrap()
+                    .is_none()
+            );
+        }
+        buffer.extend_from_slice(&complete[complete.len() - 1..]);
+        assert!(
+            Parser::take_from_bytes_stream(&mut buffer)
+                .unwrap()
+                .is_some()
+        );
+        assert!(buffer.is_empty());
+
+        // Reject as soon as the extra aggregate header is available, even when
+        // none of its children have arrived yet.
+        let mut incomplete = BytesMut::from(b"*1\r\n".repeat(MAX_AGGREGATE_DEPTH + 1).as_slice());
+        assert_eq!(
+            Parser::take_from_bytes_stream(&mut incomplete).unwrap_err(),
+            RespParseError::NestingTooDeep
+        );
+    }
+
+    #[test]
+    fn deeply_nested_inputs_are_bounded_on_a_small_thread_stack() {
+        std::thread::Builder::new()
+            .stack_size(256 * 1024)
+            .spawn(|| {
+                // Also exercise materialization and drop at the accepted bound.
+                let mut allowed = nested_frame(b"*1\r\n", b"", MAX_AGGREGATE_DEPTH);
+                drop(
+                    Parser::take_from_bytes_stream(&mut allowed)
+                        .unwrap()
+                        .unwrap(),
+                );
+                for prefix in [b"*1\r\n".as_slice(), b"|0\r\n"] {
+                    let mut malicious = nested_frame(prefix, b"", 20_000);
+                    assert_eq!(
+                        Parser::take_from_bytes_stream(&mut malicious).unwrap_err(),
+                        RespParseError::NestingTooDeep
+                    );
+                }
+            })
+            .unwrap()
+            .join()
+            .unwrap();
+    }
+
+    #[test]
+    fn protocol_errors_escape_non_printable_input_bytes() {
+        assert_eq!(
+            RespParseError::ExpectedBulk(b'*').to_string(),
+            "Protocol error: expected '$', got '*'"
+        );
+        assert_eq!(
+            RespParseError::ExpectedArray(b'\r').to_string(),
+            "Protocol error: expected '*', got '\\x0d'"
+        );
+        for byte in [b'\n', 0, 0xff] {
+            let error = RespParseError::ExpectedBulk(byte).to_string();
+            assert!(error.is_ascii());
+            assert!(!error.contains(['\r', '\n']));
+        }
     }
 
     #[test]
@@ -573,6 +768,7 @@ mod tests {
         for v in values {
             let mut buf = BytesMut::from(&v.encode_proto(3)[..]);
             let decoded = Parser::take_from_bytes_stream(&mut buf)
+                .unwrap()
                 .unwrap_or_else(|| panic!("failed to decode {:?}", v));
             assert!(buf.is_empty());
             // encode(decoded) == encode(v)
