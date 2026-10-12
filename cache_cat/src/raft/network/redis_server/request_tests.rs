@@ -205,3 +205,79 @@ async fn nested_request_in_resp2_and_resp3_pubsub_closes_and_cleans_subscription
     }
     node.app.cluster.shutdown().await.unwrap();
 }
+
+#[tokio::test]
+async fn dynamic_error_keeps_resp2_and_resp3_pipeline_replies_aligned() {
+    let (_dir, node, _) = test_node().await;
+    let server = Arc::new(
+        RedisServer::new(node.app.clone(), "127.0.0.1:0".into(), &node.app.config).unwrap(),
+    );
+    for proto in [2_u8, 3] {
+        let (socket, handler) = connect(server.clone(), u64::from(proto)).await;
+        let mut client = Framed::new(socket, RespCodec::new());
+        if proto == 3 {
+            client.send(command(&[b"HELLO", b"3"])).await.unwrap();
+            assert!(matches!(next_reply(&mut client).await, Value::Map(_)));
+        }
+        let mut socket = client.into_inner();
+
+        // The command name is a valid bulk string containing a forged reply.
+        // Its error must stay on one line, including isolated CR and LF bytes.
+        let mut pipeline = command(&[b"MISSING\r\n:123\rBROKEN\nTAIL"]).encode_proto(2);
+        pipeline.extend_from_slice(PING);
+        socket.write_all(&pipeline).await.unwrap();
+        expect_bytes(
+            &mut socket,
+            b"-ERR unknown command 'MISSING  :123 BROKEN TAIL'\r\n+PONG\r\n",
+        )
+        .await;
+
+        // A subsequent round trip and clean EOF rule out extra injected frames.
+        socket.write_all(PING).await.unwrap();
+        expect_bytes(&mut socket, b"+PONG\r\n").await;
+        socket.write_all(b"*1\r\n$4\r\nQUIT\r\n").await.unwrap();
+        expect_bytes(&mut socket, b"+OK\r\n").await;
+        expect_closed(&mut socket).await;
+        timeout(WAIT, handler).await.unwrap().unwrap().unwrap();
+    }
+    node.app.cluster.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn dynamic_error_keeps_resp2_subscribed_pipeline_replies_aligned() {
+    let (_dir, node, _) = test_node().await;
+    let server = Arc::new(
+        RedisServer::new(node.app.clone(), "127.0.0.1:0".into(), &node.app.config).unwrap(),
+    );
+    let (mut socket, handler) = connect(server.clone(), 1).await;
+    socket
+        .write_all(&command(&[b"SUBSCRIBE", b"channel"]).encode_proto(2))
+        .await
+        .unwrap();
+    expect_bytes(
+        &mut socket,
+        b"*3\r\n$9\r\nsubscribe\r\n$7\r\nchannel\r\n:1\r\n",
+    )
+    .await;
+
+    let mut pipeline = command(&[b"MISSING\r\n+INJECTED"]).encode_proto(2);
+    pipeline.extend_from_slice(PING);
+    socket.write_all(&pipeline).await.unwrap();
+    expect_bytes(
+        &mut socket,
+        concat!(
+            "-ERR Can't execute 'missing  +injected': only (P|S)SUBSCRIBE / ",
+            "(P|S)UNSUBSCRIBE / PING / QUIT / RESET are allowed in this context\r\n",
+            "*2\r\n$4\r\npong\r\n$0\r\n\r\n",
+        )
+        .as_bytes(),
+    )
+    .await;
+
+    socket.write_all(b"*1\r\n$4\r\nQUIT\r\n").await.unwrap();
+    expect_bytes(&mut socket, b"+OK\r\n").await;
+    expect_closed(&mut socket).await;
+    timeout(WAIT, handler).await.unwrap().unwrap().unwrap();
+    assert_eq!(server.broadcast.client_subscription_count(1).await, 0);
+    node.app.cluster.shutdown().await.unwrap();
+}

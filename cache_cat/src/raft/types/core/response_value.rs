@@ -125,6 +125,19 @@ impl Value {
         buf.put_slice(b"\r\n");
     }
 
+    /// Errors can include user input or Lua diagnostics. Sanitize only this
+    /// output path, without allocating or scanning ordinary successful replies.
+    fn put_error(buf: &mut impl BufMut, message: &str) {
+        buf.put_u8(b'-');
+        let mut parts = message.split(['\r', '\n']);
+        buf.put_slice(parts.next().unwrap_or_default().as_bytes());
+        for part in parts {
+            buf.put_u8(b' ');
+            buf.put_slice(part.as_bytes());
+        }
+        buf.put_slice(b"\r\n");
+    }
+
     #[inline]
     fn put_bulk(buf: &mut impl BufMut, data: &[u8]) {
         buf.put_u8(b'$');
@@ -137,7 +150,7 @@ impl Value {
     pub(crate) fn encode_to(&self, proto: u8, buf: &mut impl BufMut) {
         match self {
             Value::SimpleString(s) => Self::put_line(buf, b'+', s.as_bytes()),
-            Value::Error(e) => Self::put_line(buf, b'-', e.as_bytes()),
+            Value::Error(e) => Self::put_error(buf, e),
             Value::Integer(i) => Self::put_line(buf, b':', i.to_string().as_bytes()),
             Value::Null => {
                 if proto == 3 {
@@ -240,7 +253,7 @@ impl Value {
                     buf.put_slice(e.as_bytes());
                     buf.put_slice(b"\r\n");
                 } else {
-                    Self::put_line(buf, b'-', e.as_bytes());
+                    Self::put_error(buf, e);
                 }
             }
             Value::MemberScores(pairs) => {
@@ -540,13 +553,23 @@ impl Value {
             LuaValue::Table(t) => {
                 // Status / error replies: { ok = "..." } / { err = "..." }
                 if let LuaValue::String(msg) = t.raw_get::<LuaValue>("err")? {
+                    // Redis uses a C string and trims trailing CR/LF here.
+                    // Embedded newlines are handled by the error encoder.
+                    let bytes = msg.as_bytes();
+                    let message = bytes.split(|&b| b == 0).next().unwrap_or_default();
                     return Ok(Value::Error(
-                        String::from_utf8_lossy(msg.as_bytes().as_ref()).into_owned(),
+                        String::from_utf8_lossy(message)
+                            .trim_end_matches(['\r', '\n'])
+                            .to_owned(),
                     ));
                 }
                 if let LuaValue::String(msg) = t.raw_get::<LuaValue>("ok")? {
+                    // Match Redis addReplyStatusSafe. Keep ordinary status
+                    // replies (OK, PONG, QUEUED, ...) on the unscanned path.
+                    let bytes = msg.as_bytes();
+                    let message = bytes.split(|&b| b == 0).next().unwrap_or_default();
                     return Ok(Value::SimpleString(
-                        String::from_utf8_lossy(msg.as_bytes().as_ref()).into_owned(),
+                        String::from_utf8_lossy(message).replace(['\r', '\n'], " "),
                     ));
                 }
 
@@ -562,8 +585,10 @@ impl Value {
 
                 // { big_number = "..." }
                 if let LuaValue::String(n) = t.raw_get::<LuaValue>("big_number")? {
+                    // Redis sanitizes this length-delimited Lua string before
+                    // either RESP3 encoding or RESP2 bulk-string downgrade.
                     return Ok(Value::BigNumber(
-                        String::from_utf8_lossy(n.as_bytes().as_ref()).into_owned(),
+                        String::from_utf8_lossy(n.as_bytes().as_ref()).replace(['\r', '\n'], " "),
                     ));
                 }
 
@@ -823,6 +848,51 @@ mod tests {
         let v = Value::BulkError("SYNTAX invalid syntax".into());
         assert_eq!(enc(&v, 3), "!21\r\nSYNTAX invalid syntax\r\n");
         assert_eq!(enc(&v, 2), "-SYNTAX invalid syntax\r\n");
+    }
+
+    #[test]
+    fn error_replies_cannot_inject_frames() {
+        use crate::protocol::resp::Parser;
+        use bytes::BytesMut;
+
+        for message in [
+            "",
+            "ERR normal",
+            "ERR \r\n:123\r\n",
+            "\nERR\rmessage",
+            "ERR 中文\r\n\0",
+        ] {
+            for proto in [2, 3] {
+                // Cover callers that construct the variant directly as well
+                // as errors converted through the shared protocol boundary.
+                for reply in [
+                    Value::Error(message.into()),
+                    Value::from(ProtocolError::response(message.to_owned())),
+                ] {
+                    let expected = message.replace(['\r', '\n'], " ");
+                    let mut wire = BytesMut::new();
+                    reply.encode_to(proto, &mut wire);
+                    assert_eq!(wire.as_ref(), format!("-{expected}\r\n").as_bytes());
+                    Value::ok().encode_to(proto, &mut wire);
+                    assert!(matches!(
+                        Parser::take_from_bytes_stream(&mut wire).unwrap(),
+                        Some(Value::Error(error)) if error == expected
+                    ));
+                    assert!(matches!(
+                        Parser::take_from_bytes_stream(&mut wire).unwrap(),
+                        Some(Value::SimpleString(status)) if status == "OK"
+                    ));
+                    assert!(wire.is_empty());
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn bulk_error_preserves_resp3_payload_and_sanitizes_resp2_downgrade() {
+        let reply = Value::BulkError("ERR x\r\n:123\r\n".into());
+        assert_eq!(enc(&reply, 3), "!13\r\nERR x\r\n:123\r\n\r\n");
+        assert_eq!(enc(&reply, 2), "-ERR x  :123  \r\n");
     }
 
     #[test]

@@ -151,11 +151,13 @@ mod tests {
     use crate::cfg::config::Config;
     use crate::node::parsed_config::ParsedConfig;
     use crate::node::raft_node::RaftNode;
+    use crate::protocol::resp::Parser;
     use crate::protocol::transaction::exec::ExecParams;
     use crate::protocol::transaction::multi::MultiCommand;
     use crate::raft::types::core::mocha::core::{MyCache, Update, UpdateType};
     use crate::raft::types::core::mocha::request_handler::do_request;
     use crate::raft::types::entry::request::RedisOperation;
+    use bytes::BytesMut;
     use tokio::net::{TcpListener, TcpStream};
     use tokio::sync::broadcast;
 
@@ -222,11 +224,19 @@ mod tests {
     }
 
     fn execute(cache: &MyCache, parts: &[&[u8]]) -> Value {
+        execute_proto(cache, parts, 2)
+    }
+
+    fn execute_proto(cache: &MyCache, parts: &[&[u8]], proto: u8) -> Value {
         let items: Vec<_> = parts
             .iter()
             .map(|part| Value::BulkString(Some(Bytes::copy_from_slice(part))))
             .collect();
-        let operation = EvalCommand.raft_request(&items).unwrap();
+        let mut operation = EvalCommand.raft_request(&items).unwrap();
+        let Operation::Redis(RedisEval(params)) = &mut operation else {
+            panic!("EVAL did not produce a replicated script operation");
+        };
+        params.proto = proto;
         // Exercise the same serialization used for replicated operations.
         let encoded = bincode2::serialize(&operation).unwrap();
         let operation: Operation = bincode2::deserialize(&encoded).unwrap();
@@ -237,6 +247,175 @@ mod tests {
             update_type: &mut update_type,
         };
         do_request(cache, operation, &mut update, true)
+    }
+
+    fn assert_followed_by_pong(wire: &[u8], proto: u8) {
+        let mut pipeline = BytesMut::from(wire);
+        pipeline.extend_from_slice(b"+PONG\r\n");
+        let reply = Parser::take_from_bytes_stream(&mut pipeline)
+            .unwrap()
+            .expect("the EVAL reply must be a complete frame");
+        assert_eq!(reply.encode_proto(proto), wire);
+        assert_eq!(pipeline.as_ref(), b"+PONG\r\n");
+        assert!(matches!(
+            Parser::take_from_bytes_stream(&mut pipeline).unwrap(),
+            Some(Value::SimpleString(s)) if s == "PONG"
+        ));
+        assert!(pipeline.is_empty());
+        assert!(
+            Parser::take_from_bytes_stream(&mut pipeline)
+                .unwrap()
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn eval_lua_status_and_error_replies_preserve_frame_boundaries() {
+        let cache = MyCache::new(1).unwrap();
+        let cases: &[(&[u8], &[u8])] = &[
+            (br"return {ok='OK\r\n:123'}", b"+OK  :123\r\n"),
+            (br"return {err='ERR bad\r\n:123'}", b"-ERR bad  :123\r\n"),
+            (
+                br"return redis.status_reply('OK\r\n:123')",
+                b"+OK  :123\r\n",
+            ),
+            (
+                br"return redis.error_reply('ERR bad\r\n:123')",
+                b"-ERR bad  :123\r\n",
+            ),
+            (
+                br"return {ok='\rOK\nleft\rright\r\n'}",
+                b"+ OK left right  \r\n",
+            ),
+            (
+                br"return {err='\rERR bad\nleft\rright\r\n'}",
+                b"- ERR bad left right\r\n",
+            ),
+            (br"return {ok='OK\000hidden\r\n:123'}", b"+OK\r\n"),
+            (
+                br"return {err='ERR bad\000hidden\r\n:123'}",
+                b"-ERR bad\r\n",
+            ),
+            (
+                br"return redis.status_reply('OK\000hidden\r\n:123')",
+                b"+OK\r\n",
+            ),
+            (
+                br"return redis.error_reply('ERR bad\000hidden\r\n:123')",
+                b"-ERR bad\r\n",
+            ),
+            (b"return {ok='OK'}", b"+OK\r\n"),
+            (b"return {err='ERR bad'}", b"-ERR bad\r\n"),
+        ];
+        for proto in [2, 3] {
+            for &(script, expected) in cases {
+                let wire =
+                    execute_proto(&cache, &[b"EVAL", script, b"0"], proto).encode_proto(proto);
+                assert_eq!(wire, expected, "RESP{proto}, script {script:?}");
+                assert_followed_by_pong(&wire, proto);
+            }
+        }
+    }
+
+    #[test]
+    fn eval_nested_replies_preserve_frames_and_binary_bulk_values() {
+        let cache = MyCache::new(1).unwrap();
+        let script = br"return {{ok='OK\r\n:123'}, {{err='ERR bad\r\n:456'}, ARGV[1]}}";
+        let payload = b"\0\xff\r\n:789\r\n\xfe\n\r";
+        let mut expected = b"*2\r\n+OK  :123\r\n*2\r\n-ERR bad  :456\r\n".to_vec();
+        expected
+            .extend_from_slice(&Value::BulkString(Some(Bytes::copy_from_slice(payload))).encode());
+        for proto in [2, 3] {
+            let wire =
+                execute_proto(&cache, &[b"EVAL", script, b"0", payload], proto).encode_proto(proto);
+            assert_eq!(wire, expected);
+            assert_followed_by_pong(&wire, proto);
+
+            let wire = execute_proto(&cache, &[b"EVAL", b"return ARGV[1]", b"0", payload], proto)
+                .encode_proto(proto);
+            assert_eq!(
+                wire,
+                Value::BulkString(Some(Bytes::copy_from_slice(payload))).encode()
+            );
+            assert_followed_by_pong(&wire, proto);
+        }
+    }
+
+    #[test]
+    fn eval_big_number_replies_preserve_frame_boundaries() {
+        let cache = MyCache::new(1).unwrap();
+        let payload = b"123\r\n:456\0tail\n\r";
+        let sanitized = b"123  :456\0tail  ";
+        for proto in [2, 3] {
+            let wire = execute_proto(
+                &cache,
+                &[b"EVAL", b"return {big_number=ARGV[1]}", b"0", payload],
+                proto,
+            )
+            .encode_proto(proto);
+            let expected = if proto == 3 {
+                let mut wire = vec![b'('];
+                wire.extend_from_slice(sanitized);
+                wire.extend_from_slice(b"\r\n");
+                wire
+            } else {
+                Value::BulkString(Some(Bytes::copy_from_slice(sanitized))).encode()
+            };
+            assert_eq!(wire, expected);
+            if proto == 2 {
+                assert_followed_by_pong(&wire, proto);
+            } else {
+                // Redis sanitizes the Lua string without validating digits.
+                // Our reply parser accepts only numeric big-number payloads,
+                // so check the malformed payload's wire boundary directly.
+                assert!(!wire[..wire.len() - 2].contains(&b'\r'));
+                assert!(!wire[..wire.len() - 2].contains(&b'\n'));
+            }
+
+            let wire = execute_proto(
+                &cache,
+                &[
+                    b"EVAL",
+                    b"return {big_number='123456789012345678901234567890'}",
+                    b"0",
+                ],
+                proto,
+            )
+            .encode_proto(proto);
+            assert_followed_by_pong(&wire, proto);
+        }
+    }
+
+    #[test]
+    fn eval_runtime_and_compile_errors_preserve_frame_boundaries() {
+        let cache = MyCache::new(1).unwrap();
+        let cases: &[(&[u8], &[u8])] = &[
+            (
+                br"error('bad\r\n:123\rleft\nright')",
+                b"bad  :123 left right",
+            ),
+            (
+                b"return 'unterminated\r\n:123",
+                b"ERR Error compiling script:",
+            ),
+        ];
+        for proto in [2, 3] {
+            for &(script, expected_message) in cases {
+                let reply = execute_proto(&cache, &[b"EVAL", script, b"0"], proto);
+                assert!(matches!(reply, Value::Error(_)), "{reply:?}");
+                let wire = reply.encode_proto(proto);
+                assert_eq!(wire[0], b'-');
+                assert!(wire.ends_with(b"\r\n"));
+                assert!(!wire[..wire.len() - 2].contains(&b'\r'), "{wire:?}");
+                assert!(!wire[..wire.len() - 2].contains(&b'\n'), "{wire:?}");
+                assert!(
+                    wire.windows(expected_message.len())
+                        .any(|part| part == expected_message),
+                    "{wire:?}"
+                );
+                assert_followed_by_pong(&wire, proto);
+            }
+        }
     }
 
     #[test]
