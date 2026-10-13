@@ -191,18 +191,34 @@ impl LuaEnv {
             })?;
 
             // ---- redis.error_reply / redis.status_reply ----
-            let redis_error_reply = scope.create_function(|lua_ctx, msg: String| {
+            let redis_error_reply = scope.create_function(|lua_ctx, msg: mlua::String| {
                 let table = lua_ctx.create_table()?;
-                // Redis prefixes "ERR " when the message has no error code.
-                let msg = if msg.contains(' ')
-                    && msg.split(' ').next().is_some_and(|word| {
-                        !word.is_empty() && word.chars().all(|c| c.is_ascii_uppercase())
-                    }) {
-                    msg
-                } else {
-                    format!("ERR {}", msg)
+                // Match Redis luaRedisErrorReplyCommand / luaPushErrorBuff:
+                // use a C string, remove one leading '-', and take any bytes
+                // before the first ASCII space as the error code.
+                let bytes = msg.as_bytes();
+                let bytes = bytes.split(|&byte| byte == 0).next().unwrap_or_default();
+                let bytes = bytes.strip_prefix(b"-").unwrap_or(bytes);
+                let (code, message) = match bytes.iter().position(|&byte| byte == b' ') {
+                    Some(space) => (&bytes[..space], &bytes[space + 1..]),
+                    None => (b"ERR".as_slice(), bytes),
                 };
-                table.set("err", msg)?;
+                // The helper trims only CR/LF at the message edges. Interior
+                // newlines stay visible to Lua and are sanitized on the wire.
+                let start = message
+                    .iter()
+                    .position(|byte| !matches!(byte, b'\r' | b'\n'))
+                    .unwrap_or(message.len());
+                let message = &message[start..];
+                let end = message
+                    .iter()
+                    .rposition(|byte| !matches!(byte, b'\r' | b'\n'))
+                    .map_or(0, |index| index + 1);
+                let mut reply = Vec::with_capacity(code.len() + 1 + end);
+                reply.extend_from_slice(code);
+                reply.push(b' ');
+                reply.extend_from_slice(&message[..end]);
+                table.set("err", lua_ctx.create_string(&reply)?)?;
                 Ok(table)
             })?;
 

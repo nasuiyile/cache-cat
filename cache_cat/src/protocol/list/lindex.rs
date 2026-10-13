@@ -15,6 +15,48 @@ use std::fmt::Display;
 
 pub struct LIndexCommand;
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn index_requires_a_canonical_integer() {
+        for index in [
+            "",
+            "+1",
+            "00",
+            "01",
+            "-0",
+            "-01",
+            " 1",
+            "1 ",
+            "1\0",
+            "9223372036854775808",
+            "-9223372036854775809",
+        ] {
+            let items = ["LINDEX", "list", index]
+                .map(|arg| Value::BulkString(Some(Bytes::copy_from_slice(arg.as_bytes()))));
+            assert_eq!(
+                LIndexCommand.raft_request(&items).unwrap_err(),
+                ProtocolError::NotAnInteger,
+                "index {index:?}"
+            );
+        }
+        for index in [
+            "0",
+            "1",
+            "-1",
+            "-9223372036854775808",
+            "9223372036854775807",
+        ] {
+            let items = ["LINDEX", "list", index]
+                .map(|arg| Value::BulkString(Some(Bytes::copy_from_slice(arg.as_bytes()))));
+            let params = LIndexCommand::parse_args(&items).unwrap();
+            assert_eq!(params.index, index.parse::<i64>().unwrap());
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LIndexParams {
     pub key: Bytes,
@@ -80,7 +122,7 @@ impl LIndexCommand {
             .string_bytes_clone()
             .ok_or(ProtocolError::InvalidArgument("key"))?;
 
-        let index = items[2].try_parse_i64()?;
+        let index = items[2].try_parse_canonical_i64()?;
 
         Ok(LIndexParams { key, index })
     }

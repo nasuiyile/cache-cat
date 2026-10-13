@@ -92,6 +92,44 @@ mod tests {
     use super::*;
 
     #[test]
+    fn range_requires_canonical_integers() {
+        for invalid in [
+            "",
+            "+1",
+            "00",
+            "01",
+            "-0",
+            "-01",
+            " 1",
+            "1 ",
+            "1\0",
+            "9223372036854775808",
+            "-9223372036854775809",
+        ] {
+            for (start, end) in [(invalid, "-1"), ("0", invalid)] {
+                let items = ["BITCOUNT", "key", start, end]
+                    .map(|arg| Value::BulkString(Some(Bytes::copy_from_slice(arg.as_bytes()))));
+                assert_eq!(
+                    BitCountCommand.raft_request(&items).unwrap_err(),
+                    ProtocolError::NotAnInteger,
+                    "start {start:?}, end {end:?}"
+                );
+            }
+        }
+        for number in [
+            "0",
+            "1",
+            "-1",
+            "-9223372036854775808",
+            "9223372036854775807",
+        ] {
+            let items = ["BITCOUNT", "key", number, number]
+                .map(|arg| Value::BulkString(Some(Bytes::copy_from_slice(arg.as_bytes()))));
+            assert!(BitCountCommand.raft_request(&items).is_ok(), "{number}");
+        }
+    }
+
+    #[test]
     fn range_requires_both_start_and_end() {
         let items = ["BITCOUNT", "key", "0"]
             .map(|arg| Value::BulkString(Some(Bytes::copy_from_slice(arg.as_bytes()))));
@@ -173,15 +211,11 @@ impl BitCountCommand {
         let mut end = None;
 
         if items.len() >= 3 {
-            start = Some(items[2].parse_i64().ok_or(ProtocolError::response(
-                "ERR value is not an integer or out of range",
-            ))?);
+            start = Some(items[2].try_parse_canonical_i64()?);
         }
 
         if items.len() == 4 {
-            end = Some(items[3].parse_i64().ok_or(ProtocolError::response(
-                "ERR value is not an integer or out of range",
-            ))?);
+            end = Some(items[3].try_parse_canonical_i64()?);
         }
 
         Ok(BitCountParams { key, start, end })

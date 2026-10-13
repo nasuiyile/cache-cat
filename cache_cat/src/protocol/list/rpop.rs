@@ -41,9 +41,9 @@ impl RPopCommand {
             .string_bytes_clone()
             .ok_or(ProtocolError::InvalidArgument("key"))?;
         let count = if items.len() == 3 {
-            let count = items[2].parse_i64().ok_or(ProtocolError::response(
-                "ERR value is out of range, must be positive",
-            ))?;
+            let count = items[2].try_parse_canonical_i64().map_err(|_| {
+                ProtocolError::response("ERR value is out of range, must be positive")
+            })?;
             if count < 0 {
                 return Err(ProtocolError::response(
                     "ERR value is out of range, must be positive",
@@ -241,14 +241,38 @@ mod tests {
     }
 
     #[test]
-    fn rejects_negative_and_overflowing_counts() {
-        for count in ["-1", "9223372036854775808", "invalid"] {
+    fn count_requires_a_canonical_nonnegative_integer() {
+        for count in [
+            "",
+            "+1",
+            "00",
+            "01",
+            "-0",
+            "-01",
+            " 1",
+            "1 ",
+            "1\0",
+            "-1",
+            "-9223372036854775808",
+            "9223372036854775808",
+            "invalid",
+        ] {
             let items = ["RPOP", "list", count]
                 .map(|s| Value::BulkString(Some(Bytes::copy_from_slice(s.as_bytes()))));
             assert_eq!(
                 RPopCommand.raft_request(&items).unwrap_err().to_string(),
-                "ERR value is out of range, must be positive"
+                "ERR value is out of range, must be positive",
+                "count {count:?}"
             );
         }
+        for count in ["0", "1", "9223372036854775807"] {
+            assert_eq!(
+                request(Some(count)).count,
+                Some(count.parse::<u64>().unwrap())
+            );
+        }
+        let (operation, response) = request(Some("9223372036854775807")).mutate(entry(), 0);
+        assert!(matches!(operation, MochaOperation::Remove));
+        assert!(matches!(response, Value::Array(Some(values)) if values.len() == 3));
     }
 }

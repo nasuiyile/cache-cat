@@ -46,9 +46,13 @@ impl LRemCommand {
         let key = items[1]
             .string_bytes_clone()
             .ok_or(ProtocolError::InvalidArgument("key"))?;
-        let count = items[2]
-            .parse_i64()
-            .ok_or(ProtocolError::InvalidArgument("count"))?;
+        let count = items[2].try_parse_canonical_i64()?;
+        // Redis 7.4 excludes LONG_MIN so a negative count can be negated.
+        if count == i64::MIN {
+            return Err(ProtocolError::response(
+                "ERR value is out of range, value must between -9223372036854775807 and 9223372036854775807",
+            ));
+        }
         let element = items[3]
             .string_bytes_clone()
             .ok_or(ProtocolError::InvalidArgument("element"))?;
@@ -224,6 +228,49 @@ mod tests {
     use super::*;
     use parking_lot::Mutex;
     use std::sync::Arc;
+
+    #[test]
+    fn count_requires_canonical_syntax_and_a_negatable_integer() {
+        for count in [
+            "",
+            "+1",
+            "00",
+            "01",
+            "-0",
+            "-01",
+            " 1",
+            "1 ",
+            "1\0",
+            "9223372036854775808",
+            "-9223372036854775809",
+        ] {
+            let items = ["LREM", "list", count, "value"]
+                .map(|arg| Value::BulkString(Some(Bytes::copy_from_slice(arg.as_bytes()))));
+            assert_eq!(
+                LRemCommand.raft_request(&items).unwrap_err(),
+                ProtocolError::NotAnInteger,
+                "count {count:?}"
+            );
+        }
+        let items = ["LREM", "list", "-9223372036854775808", "value"]
+            .map(|arg| Value::BulkString(Some(Bytes::from_static(arg.as_bytes()))));
+        assert_eq!(
+            LRemCommand.raft_request(&items).unwrap_err().to_string(),
+            "ERR value is out of range, value must between -9223372036854775807 and 9223372036854775807"
+        );
+        for count in [
+            "0",
+            "1",
+            "-1",
+            "-9223372036854775807",
+            "9223372036854775807",
+        ] {
+            let items = ["LREM", "list", count, "value"]
+                .map(|arg| Value::BulkString(Some(Bytes::copy_from_slice(arg.as_bytes()))));
+            let params = LRemCommand::parse_args(&items).unwrap();
+            assert_eq!(params.count, count.parse::<i64>().unwrap());
+        }
+    }
 
     #[test]
     fn count_direction_preserves_survivor_order_in_wrapped_lists() {

@@ -318,6 +318,78 @@ mod tests {
     }
 
     #[test]
+    fn lua_error_reply_matches_redis_error_code_rules() {
+        let cache = MyCache::new(1).unwrap();
+        // Check the Lua-visible field separately: interior CR/LF must not be
+        // sanitized until the table is converted into a RESP error reply.
+        let cases: &[(&[u8], &[u8])] = &[
+            (b"hello", b"ERR hello"),
+            (b"some text", b"some text"),
+            (b"Bad-Code details", b"Bad-Code details"),
+            (b"-WRONGTYPE details", b"WRONGTYPE details"),
+            (b"--CODE details", b"-CODE details"),
+            (b"-hello", b"ERR hello"),
+            (b"", b"ERR "),
+            (b"-", b"ERR "),
+            (b" details", b" details"),
+            (b" ", b" "),
+            (b"ERR  details ", b"ERR  details "),
+            (b"bad\tmessage", b"ERR bad\tmessage"),
+            (b"-CODE \r\ndetails\r\n", b"CODE details"),
+            (b"\r\ndetails\r\n", b"ERR details"),
+            (b"CODE \r\n", b"CODE "),
+            (b"CODE a\r\n:123", b"CODE a\r\n:123"),
+            (b"low\r\ncode details", b"low\r\ncode details"),
+            (b"hello\0ignored code", b"ERR hello"),
+            (b"-CODE details\0ignored", b"CODE details"),
+            (b"\0ignored", b"ERR "),
+        ];
+        for proto in [2, 3] {
+            for &(input, expected) in cases {
+                let field = execute_proto(
+                    &cache,
+                    &[
+                        b"EVAL",
+                        b"return redis.error_reply(ARGV[1]).err",
+                        b"0",
+                        input,
+                    ],
+                    proto,
+                );
+                assert!(matches!(field, Value::BulkString(Some(ref bytes)) if bytes == expected));
+
+                let reply = execute_proto(
+                    &cache,
+                    &[b"EVAL", b"return redis.error_reply(ARGV[1])", b"0", input],
+                    proto,
+                );
+                let mut expected_wire = vec![b'-'];
+                expected_wire.extend(expected.iter().map(|&byte| match byte {
+                    b'\r' | b'\n' => b' ',
+                    byte => byte,
+                }));
+                expected_wire.extend_from_slice(b"\r\n");
+                let wire = reply.encode_proto(proto);
+                assert_eq!(wire, expected_wire, "RESP{proto}: {input:?}");
+                assert_followed_by_pong(&wire, proto);
+            }
+        }
+
+        let field = execute(
+            &cache,
+            &[
+                b"EVAL",
+                b"return redis.error_reply(ARGV[1]).err",
+                b"0",
+                b"code \xff\r\n:123",
+            ],
+        );
+        assert!(
+            matches!(field, Value::BulkString(Some(bytes)) if bytes == b"code \xff\r\n:123".as_slice())
+        );
+    }
+
+    #[test]
     fn eval_nested_replies_preserve_frames_and_binary_bulk_values() {
         let cache = MyCache::new(1).unwrap();
         let script = br"return {{ok='OK\r\n:123'}, {{err='ERR bad\r\n:456'}, ARGV[1]}}";

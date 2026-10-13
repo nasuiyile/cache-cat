@@ -47,12 +47,8 @@ impl LTrimCommand {
         let key = items[1]
             .string_bytes_clone()
             .ok_or(ProtocolError::InvalidArgument("key"))?;
-        let start = items[2]
-            .parse_i64()
-            .ok_or(ProtocolError::InvalidArgument("start"))?;
-        let stop = items[3]
-            .parse_i64()
-            .ok_or(ProtocolError::InvalidArgument("stop"))?;
+        let start = items[2].try_parse_canonical_i64()?;
+        let stop = items[3].try_parse_canonical_i64()?;
         Ok(LTrimArgs { key, start, stop })
     }
 }
@@ -193,6 +189,43 @@ mod tests {
     use std::collections::VecDeque;
     use std::sync::Arc;
 
+    #[test]
+    fn range_requires_canonical_integers() {
+        for invalid in [
+            "",
+            "+1",
+            "00",
+            "01",
+            "-0",
+            "-01",
+            " 1",
+            "1 ",
+            "1\0",
+            "9223372036854775808",
+            "-9223372036854775809",
+        ] {
+            for (start, end) in [(invalid, "-1"), ("0", invalid)] {
+                let items = ["LTRIM", "key", start, end]
+                    .map(|arg| Value::BulkString(Some(Bytes::copy_from_slice(arg.as_bytes()))));
+                assert_eq!(
+                    LTrimCommand.raft_request(&items).unwrap_err(),
+                    ProtocolError::NotAnInteger,
+                    "start {start:?}, end {end:?}"
+                );
+            }
+        }
+        for number in [
+            "0",
+            "1",
+            "-1",
+            "-9223372036854775808",
+            "9223372036854775807",
+        ] {
+            let items = ["LTRIM", "key", number, number]
+                .map(|arg| Value::BulkString(Some(Bytes::copy_from_slice(arg.as_bytes()))));
+            assert!(LTrimCommand.raft_request(&items).is_ok(), "{number}");
+        }
+    }
     #[test]
     fn empty_ranges_delete_the_key() {
         for (start, stop) in [(1, 0), (3, 5), (0, -4), (i64::MAX, i64::MAX)] {

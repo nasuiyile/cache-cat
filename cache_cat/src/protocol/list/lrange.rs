@@ -61,6 +61,44 @@ mod tests {
     use super::*;
 
     #[test]
+    fn range_requires_canonical_integers() {
+        for invalid in [
+            "",
+            "+1",
+            "00",
+            "01",
+            "-0",
+            "-01",
+            " 1",
+            "1 ",
+            "1\0",
+            "9223372036854775808",
+            "-9223372036854775809",
+        ] {
+            for (start, end) in [(invalid, "-1"), ("0", invalid)] {
+                let items = ["LRANGE", "key", start, end]
+                    .map(|arg| Value::BulkString(Some(Bytes::copy_from_slice(arg.as_bytes()))));
+                assert_eq!(
+                    LRangeCommand.raft_request(&items).unwrap_err(),
+                    ProtocolError::NotAnInteger,
+                    "start {start:?}, end {end:?}"
+                );
+            }
+        }
+        for number in [
+            "0",
+            "1",
+            "-1",
+            "-9223372036854775808",
+            "9223372036854775807",
+        ] {
+            let items = ["LRANGE", "key", number, number]
+                .map(|arg| Value::BulkString(Some(Bytes::copy_from_slice(arg.as_bytes()))));
+            assert!(LRangeCommand.raft_request(&items).is_ok(), "{number}");
+        }
+    }
+
+    #[test]
     fn missing_list_is_an_empty_array_in_both_protocols() {
         let response = LRangeParams {
             key: Bytes::from_static(b"missing"),
@@ -81,8 +119,8 @@ impl LRangeCommand {
         let key = items[1]
             .string_bytes_clone()
             .ok_or(ProtocolError::InvalidArgument("key"))?;
-        let start = items[2].try_parse_i64()?;
-        let stop = items[3].try_parse_i64()?;
+        let start = items[2].try_parse_canonical_i64()?;
+        let stop = items[3].try_parse_canonical_i64()?;
         Ok(LRangeParams { key, start, stop })
     }
 }
