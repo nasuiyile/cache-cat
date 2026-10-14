@@ -68,6 +68,20 @@ Draining the queue and switching the state during the `Tail` phase must happen u
 
 Under this same lock, the snapshot captures the final write logical clock and the revision counter's high watermark. The watermark must be saved independently of the values: the highest revision can belong to a deletion or flush, leaving no value that carries it. Startup and snapshot installation restore the watermark before allocating any new revisions. The file format version is 2; compatibility with earlier alpha snapshots is not maintained.
 
+### File Format (Version 2)
+
+```text
+MCDC | version:u8 | meta_offset:u64 | meta_len:u64
+full data | incremental queue (including its existing u64 zero-length terminator)
+CacheCatSnapshotMeta (bincode2)
+```
+
+The fixed header is 21 bytes. Both header u64 fields use big-endian byte order; `meta_offset` is an absolute offset from the beginning of the file. Metadata occupies the end of the file and includes the log position, full membership, final write logical clock, and revision watermark. It no longer has the old 296-byte capacity limit. The bincode2 encoding and the internal formats of full data and incremental records are unchanged.
+
+The `Start → Tail` transition drains the queue and captures final metadata under the same lock, then releases it. Queue and metadata serialization and all file I/O happen outside the lock. After the queue, record the current offset, append metadata, and backfill only the header offset and length. The snapshot body is never moved or rewritten; the full scan still performs its existing database entry-count backfills. Publication remains `flush → sync_all → rename`, with the same hardlinks and whole-file transfer. Ordinary command execution gains no additional work.
+
+Full restoration and metadata-only reads share validation: check the magic, version, offset/length overflow, and that the metadata range ends exactly at EOF before allocating its buffer. Deserialization uses the metadata length as a byte budget and must consume it completely, rejecting malformed lengths and trailing bytes. Opening the file, reading the header, checking file length, seeking, and reading metadata run in a single blocking task to avoid a Tokio thread-pool round trip for each small file operation. Full restoration reuses that file handle for asynchronous body reads. It validates metadata before clearing the cache, bounds body reads before the metadata offset, and requires the queue terminator to end the body exactly. The read boundary sits below the file buffer, so it is checked only when refilling that buffer.
+
 **Recovery Operation**
 
 Read the full snapshot data and restore it to the state machine. (Pause external access during this time.)
@@ -129,4 +143,4 @@ The order in which logs are applied is the same as on the primary node. The only
 
 The recorded operation queue is ordered. Therefore, when restoring a snapshot, simply restore the snapshot data + apply CAS operations on the queue data, and the final result will be the correct, latest data.
 
-Finally, when the snapshot is complete, the node's metadata and write logical timestamp are also saved under lock.
+Final metadata and the write logical timestamp are captured under the lock at the transition to `Tail`, then serialized and written outside the lock.

@@ -4,7 +4,7 @@ use crate::raft::types::core::mocha::core::MyCache;
 use crate::raft::types::entry::request::AtomicRequest;
 use crate::raft::types::raft_types::SnapshotMeta;
 use serde::{Deserialize, Serialize};
-use std::io::SeekFrom;
+use std::io::{Read, Seek, SeekFrom};
 use std::path::Path;
 use std::sync::Arc;
 use tokio::fs::File;
@@ -19,8 +19,8 @@ const CACHE_MAGIC_NUM: &[u8; 4] = b"MCDC";
 
 pub(crate) const VERSION: u8 = 1;
 
-// 预填充占位符
-const PLACEHOLDER_LENGTH: usize = 300;
+// Magic, version, and two big-endian u64s locating the metadata at EOF.
+const HEADER_LENGTH: u64 = 4 + 1 + 8 + 8;
 
 pub const SNAPSHOT_FILE_NAME: &str = "snapshot";
 
@@ -63,51 +63,129 @@ where
 
     writer.write_all(CACHE_MAGIC_NUM).await?;
     writer.write_u8(VERSION).await?;
-    //给meta预留300byte空间方便回填
-    writer.write_all(&[0u8; PLACEHOLDER_LENGTH]).await?;
+    // Only the metadata location is backfilled; its contents have no fixed cap.
+    writer.write_all(&[0u8; 16]).await?;
 
     cache.dump_cache_to_writer(&mut writer).await?;
 
     // Enter the post-snapshot tail. Operations after this point are normal
     // Raft log applications and are recovered from logs after last_log_id;
     // only operations observed while in Start belong to this queue.
-    let mut raft_meta_data = raft_meta.lock().await;
-    raft_meta_data.snapshot_state = Tail;
-    let pending = {
-        let mut guard = queue.lock().await;
-        std::mem::take(&mut *guard)
+    let (pending, cache_cat_snapshot_meta) = {
+        let mut raft_meta_data = raft_meta.lock().await;
+        raft_meta_data.snapshot_state = Tail;
+        let pending = {
+            let mut guard = queue.lock().await;
+            std::mem::take(&mut *guard)
+        };
+        let meta = CacheCatSnapshotMeta {
+            meta: SnapshotMeta {
+                last_log_id: raft_meta_data.last_applied_log_id,
+                last_membership: raft_meta_data.last_membership.clone(),
+            },
+            write_clock: cache.get_write_clock(),
+            snapshot_revision: raft_meta_data.snapshot_revision,
+        };
+        (pending, meta)
     };
-    let snapshot_meta = SnapshotMeta {
-        last_log_id: raft_meta_data.last_applied_log_id,
-        last_membership: raft_meta_data.last_membership.clone(),
-        // snapshot_id: "".into(),
-    };
-    let cache_cat_snapshot_meta = CacheCatSnapshotMeta {
-        meta: snapshot_meta,
-        write_clock: cache.get_write_clock(),
-        snapshot_revision: raft_meta_data.snapshot_revision,
-    };
-    let result = bincode2::serialize(&cache_cat_snapshot_meta)
-        .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
-    if result.len() + 4 > PLACEHOLDER_LENGTH {
-        return Err(io::Error::new(
-            io::ErrorKind::InvalidData,
-            "snapshot metadata too large",
-        ));
-    }
-    drop(raft_meta_data);
-    //回填数据
-    writer.seek(SeekFrom::Start(5)).await?;
-    writer.write_u32(result.len() as u32).await?;
-    writer.write_all(&result).await?;
-    writer.seek(SeekFrom::End(0)).await?;
+    // Serialization and all I/O happen after releasing the Raft metadata lock.
     write_operation_queue_to_writer(&mut writer, &pending).await?;
+    write_snapshot_metadata(&mut writer, &cache_cat_snapshot_meta).await?;
     writer.flush().await?;
     writer.get_ref().sync_all().await?;
     // 在现在版本的rust中，windows下rename最终会替换现有文件，因此没必要先remove
     fs::rename(&temp_path, &final_path).await?;
     raft_meta.lock().await.snapshot_state = End;
     Ok(())
+}
+
+async fn write_snapshot_metadata<W>(writer: &mut W, meta: &CacheCatSnapshotMeta) -> io::Result<()>
+where
+    W: AsyncWrite + io::AsyncSeek + Unpin,
+{
+    let bytes =
+        bincode2::serialize(meta).map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
+    let meta_offset = writer.stream_position().await?;
+    writer.write_all(&bytes).await?;
+    writer.seek(SeekFrom::Start(5)).await?;
+    writer.write_u64(meta_offset).await?;
+    writer.write_u64(bytes.len() as u64).await?;
+    // The caller flushes and syncs before publishing. No seek back to EOF is needed.
+    Ok(())
+}
+
+/// Batch the small metadata I/O operations into one blocking task instead of
+/// dispatching each read/seek/stat separately through Tokio's filesystem pool.
+/// The returned handle is positioned at the full-data/incremental body.
+pub(crate) async fn open_snapshot(
+    path: &Path,
+) -> io::Result<Option<(std::fs::File, CacheCatSnapshotMeta, u64)>> {
+    let path = path.to_path_buf();
+    tokio::task::spawn_blocking(move || {
+        let mut file = match std::fs::File::open(path) {
+            Ok(file) => file,
+            Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(None),
+            Err(e) => return Err(e),
+        };
+        let (meta, body_len) = read_snapshot_metadata(&mut file)?;
+        file.seek(SeekFrom::Start(HEADER_LENGTH))?;
+        Ok(Some((file, meta, body_len)))
+    })
+    .await
+    .map_err(io::Error::other)?
+}
+
+/// Shared by full restoration and metadata-only reads of the same file handle.
+fn read_snapshot_metadata(file: &mut std::fs::File) -> io::Result<(CacheCatSnapshotMeta, u64)> {
+    let mut header = [0u8; HEADER_LENGTH as usize];
+    file.read_exact(&mut header)?;
+    if &header[..4] != CACHE_MAGIC_NUM {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "invalid file magic",
+        ));
+    }
+    if header[4] != VERSION {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "unsupported version",
+        ));
+    }
+    let meta_offset = u64::from_be_bytes(header[5..13].try_into().unwrap());
+    let meta_len = u64::from_be_bytes(header[13..21].try_into().unwrap());
+    let file_len = file.metadata()?.len();
+    if meta_offset < HEADER_LENGTH
+        || meta_len == 0
+        || meta_offset.checked_add(meta_len) != Some(file_len)
+    {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "invalid snapshot metadata range",
+        ));
+    }
+    let len =
+        usize::try_from(meta_len).map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
+    let mut bytes = Vec::new();
+    bytes
+        .try_reserve_exact(len)
+        .map_err(|e| io::Error::new(io::ErrorKind::OutOfMemory, e))?;
+    bytes.resize(len, 0);
+    file.seek(SeekFrom::Start(meta_offset))?;
+    file.read_exact(&mut bytes)?;
+    let mut cursor = std::io::Cursor::new(bytes);
+    // bincode2's slice API ignores the configured limit. Its reader API checks
+    // nested string lengths against this budget before allocating their buffers.
+    let meta: CacheCatSnapshotMeta = bincode2::config()
+        .limit(meta_len)
+        .deserialize_from(&mut cursor)
+        .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
+    if cursor.position() != meta_len || meta.snapshot_revision == u64::MAX {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "invalid snapshot metadata",
+        ));
+    }
+    Ok((meta, meta_offset - HEADER_LENGTH))
 }
 
 pub async fn load_cache_from_path<P>(
@@ -117,54 +195,23 @@ pub async fn load_cache_from_path<P>(
 where
     P: AsRef<Path>,
 {
-    //先将缓存清空
-    cache.invalidate_all();
-    let path = path.as_ref();
-    let f = match File::open(path).await {
-        Ok(f) => f,
-        //文件不存在
-        Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(None),
-        Err(e) => return Err(e),
+    let Some((file, meta, body_len)) = open_snapshot(path.as_ref()).await? else {
+        return Ok(None);
     };
-
-    let mut reader = BufReader::new(f);
-    let mut magic = [0u8; 4];
-    reader.read_exact(&mut magic).await?;
-    if &magic != CACHE_MAGIC_NUM {
-        return Err(io::Error::other("invalid file magic"));
-    }
-
-    let version = reader.read_u8().await?;
-    if version != VERSION {
-        return Err(io::Error::other("unsupported version"));
-    }
-
-    let meta_len = reader.read_u32().await? as usize;
-    if meta_len > PLACEHOLDER_LENGTH - 4 {
-        return Err(io::Error::new(
-            io::ErrorKind::InvalidData,
-            "snapshot metadata length exceeds placeholder",
-        ));
-    }
-    let mut meta_buf = vec![0u8; meta_len];
-    reader.read_exact(&mut meta_buf).await?;
-    let meta: CacheCatSnapshotMeta = bincode2::deserialize(&meta_buf)
-        .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
-    if meta.snapshot_revision == u64::MAX {
-        return Err(io::Error::new(
-            io::ErrorKind::InvalidData,
-            "invalid snapshot revision",
-        ));
-    }
-    reader
-        .seek(SeekFrom::Current(
-            (PLACEHOLDER_LENGTH - (4 + meta_len)) as i64,
-        ))
-        .await?;
+    // Bound the underlying file, so checking the boundary costs once per buffer
+    // refill rather than once per field, and no body read can consume metadata.
+    let mut reader = BufReader::new(File::from_std(file).take(body_len));
+    cache.invalidate_all();
     //解压快照数据
     cache.load_cache_from_reader(&mut reader).await?;
     //加载缓存下来的队列操作，但是不立即执行
     let queue = load_operation_queue_from_reader(&mut reader).await?;
+    if !reader.buffer().is_empty() || reader.get_ref().limit() != 0 {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "trailing snapshot body data",
+        ));
+    }
 
     // Deletions and FLUSH operations also consume revisions, so the surviving
     // values alone cannot reconstruct this watermark. Both startup and snapshot
@@ -335,7 +382,7 @@ async fn empty_snapshots_preserve_revision_watermark_across_restarts() {
     use crate::protocol::key::flushdb::FlushDBReq;
     use crate::raft::store::statemachine::{SnapshotState, StateMachineStore};
     use crate::raft::types::core::mocha::core::{
-        MyValue, Update, UpdateType, next_snapshot_revision,
+        next_snapshot_revision, MyValue, Update, UpdateType,
     };
     use crate::raft::types::core::mocha::request_handler::base_request;
     use crate::raft::types::core::value_object::ValueObject;
@@ -425,7 +472,7 @@ async fn empty_snapshots_preserve_revision_watermark_across_restarts() {
 async fn install_snapshot_replays_persist_before_resuming_expiration() {
     use crate::protocol::key::persist::PersistReq;
     use crate::raft::store::statemachine::{StateMachineData, StateMachineStore};
-    use crate::raft::types::core::mocha::core::{MyValue, next_snapshot_revision};
+    use crate::raft::types::core::mocha::core::{next_snapshot_revision, MyValue};
     use crate::raft::types::core::value_object::ValueObject;
     use crate::raft::types::entry::base_operation::BaseOperation;
     use crate::raft::types::file_operator::FileOperator;
@@ -462,7 +509,6 @@ async fn install_snapshot_replays_persist_before_resuming_expiration() {
         write_clock: 1_000,
         snapshot_revision: 2,
     };
-    let meta_bytes = bincode2::serialize(&meta).unwrap();
     let mut writer = BufWriter::new(
         File::create(snapshot_dir.join(get_snapshot_file_name()))
             .await
@@ -470,12 +516,7 @@ async fn install_snapshot_replays_persist_before_resuming_expiration() {
     );
     writer.write_all(CACHE_MAGIC_NUM).await.unwrap();
     writer.write_u8(VERSION).await.unwrap();
-    writer.write_u32(meta_bytes.len() as u32).await.unwrap();
-    writer.write_all(&meta_bytes).await.unwrap();
-    writer
-        .write_all(&vec![0; PLACEHOLDER_LENGTH - 4 - meta_bytes.len()])
-        .await
-        .unwrap();
+    writer.write_all(&[0u8; 16]).await.unwrap();
     full.dump_cache_to_writer(&mut writer).await.unwrap();
     write_operation_queue_to_writer(
         &mut writer,
@@ -491,6 +532,7 @@ async fn install_snapshot_replays_persist_before_resuming_expiration() {
     )
     .await
     .unwrap();
+    write_snapshot_metadata(&mut writer, &meta).await.unwrap();
     writer.flush().await.unwrap();
     writer.get_ref().sync_all().await.unwrap();
     drop(writer);

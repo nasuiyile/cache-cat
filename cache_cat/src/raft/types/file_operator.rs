@@ -1,16 +1,14 @@
 use crate::raft::network::client::connect_cluster;
-use crate::raft::store::snapshot::snapshot_handler::{CacheCatSnapshotMeta, VERSION};
+use crate::raft::store::snapshot::snapshot_handler::open_snapshot;
 use crate::raft::types::raft_types::SnapshotMeta;
 use serde::{Deserialize, Serialize};
 use std::error::Error;
 use std::path::{Path, PathBuf};
 use tokio::fs::File;
-use tokio::io::{AsyncReadExt, AsyncWriteExt, BufReader};
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::{fs, io};
 use tokio_rustls::TlsConnector;
 use uuid::Uuid;
-
-const CACHE_MAGIC_NUM: &[u8; 4] = b"MCDC";
 
 /// 发送硬链接文件到其他节点的辅助结构体。
 ///
@@ -75,34 +73,9 @@ pub async fn load_meta_from_path<P>(path: P) -> Result<Option<SnapshotMeta>, io:
 where
     P: AsRef<Path>,
 {
-    let path = path.as_ref();
-
-    let f = match File::open(path).await {
-        Ok(f) => f,
-        //文件不存在
-        Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(None),
-        Err(e) => return Err(e),
-    };
-
-    let mut reader = BufReader::new(f);
-    let mut magic = [0u8; 4];
-    reader.read_exact(&mut magic).await?;
-    if &magic != CACHE_MAGIC_NUM {
-        return Err(io::Error::other("invalid file magic"));
-    }
-    let mut version = [0u8; 1];
-    reader.read_exact(&mut version).await?;
-    if version[0] != VERSION {
-        return Err(io::Error::other("unsupported version"));
-    }
-
-    let meta_len = reader.read_u32().await? as usize;
-    let mut meta_buf = vec![0u8; meta_len];
-    reader.read_exact(&mut meta_buf).await?;
-    let meta: CacheCatSnapshotMeta = bincode2::deserialize(&meta_buf)
-        .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
-
-    Ok(Some(meta.meta))
+    Ok(open_snapshot(path.as_ref())
+        .await?
+        .map(|(_, meta, _)| meta.meta))
 }
 
 //发送的时候一定要转u32
