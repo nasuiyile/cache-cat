@@ -70,6 +70,13 @@ impl Display for SetParams {
     }
 }
 
+#[inline]
+fn option_eq<const N: usize>(arg: &[u8], option: &[u8; N]) -> bool {
+    // Redis compares option names as C strings. Check only the expected name
+    // and its terminator; a long suffix after NUL needs no scan or allocation.
+    (arg.len() == N || arg.get(N) == Some(&0)) && arg[..N].eq_ignore_ascii_case(option)
+}
+
 impl SetParams {
     /// Create a new SetParams with minimal required fields
     pub fn new(key: impl Into<Bytes>, value: impl Into<Bytes>) -> Self {
@@ -126,25 +133,25 @@ impl SetParams {
             };
 
             match arg {
-                arg if arg.eq_ignore_ascii_case(b"NX") => {
+                arg if option_eq(arg, b"NX") => {
                     if matches!(params.mode, Some(SetMode::Xx)) {
                         return Err(ProtocolError::SyntaxError);
                     }
                     params.mode = Some(SetMode::Nx);
                     i += 1;
                 }
-                arg if arg.eq_ignore_ascii_case(b"XX") => {
+                arg if option_eq(arg, b"XX") => {
                     if matches!(params.mode, Some(SetMode::Nx)) {
                         return Err(ProtocolError::SyntaxError);
                     }
                     params.mode = Some(SetMode::Xx);
                     i += 1;
                 }
-                arg if arg.eq_ignore_ascii_case(b"GET") => {
+                arg if option_eq(arg, b"GET") => {
                     params.get = true;
                     i += 1;
                 }
-                arg if arg.eq_ignore_ascii_case(b"EX") => {
+                arg if option_eq(arg, b"EX") => {
                     if !matches!(params.expiration, None | Some(Expiration::Ex(_)))
                         || i + 1 >= items.len()
                     {
@@ -154,7 +161,7 @@ impl SetParams {
                     params.expiration = Some(Expiration::Ex(0));
                     i += 2;
                 }
-                arg if arg.eq_ignore_ascii_case(b"PX") => {
+                arg if option_eq(arg, b"PX") => {
                     if !matches!(params.expiration, None | Some(Expiration::Px(_)))
                         || i + 1 >= items.len()
                     {
@@ -164,7 +171,7 @@ impl SetParams {
                     params.expiration = Some(Expiration::Px(0));
                     i += 2;
                 }
-                arg if arg.eq_ignore_ascii_case(b"EXAT") => {
+                arg if option_eq(arg, b"EXAT") => {
                     if !matches!(params.expiration, None | Some(Expiration::ExAt(_)))
                         || i + 1 >= items.len()
                     {
@@ -174,7 +181,7 @@ impl SetParams {
                     params.expiration = Some(Expiration::ExAt(0));
                     i += 2;
                 }
-                arg if arg.eq_ignore_ascii_case(b"PXAT") => {
+                arg if option_eq(arg, b"PXAT") => {
                     if !matches!(params.expiration, None | Some(Expiration::PxAt(_)))
                         || i + 1 >= items.len()
                     {
@@ -184,7 +191,7 @@ impl SetParams {
                     params.expiration = Some(Expiration::PxAt(0));
                     i += 2;
                 }
-                arg if arg.eq_ignore_ascii_case(b"KEEPTTL") => {
+                arg if option_eq(arg, b"KEEPTTL") => {
                     if !matches!(params.expiration, None | Some(Expiration::KeepTTL)) {
                         return Err(ProtocolError::SyntaxError);
                     }
@@ -337,6 +344,42 @@ mod tests {
             assert!(params.get);
             assert_eq!(params.expiration, Some(Expiration::KeepTTL));
         }
+    }
+
+    #[test]
+    fn option_names_follow_redis_nul_termination() {
+        for name in ["NX", "XX", "GET", "KEEPTTL", "EX", "PX", "EXAT", "PXAT"] {
+            let with_nul = format!("{}\0suffix", name.to_ascii_lowercase());
+            let mut plain = vec![name];
+            let mut suffixed = vec![with_nul.as_str()];
+            if ["EX", "PX", "EXAT", "PXAT"].contains(&name) {
+                plain.push("2");
+                suffixed.push("2");
+            }
+            assert_eq!(parse_options(&suffixed), parse_options(&plain));
+        }
+        for invalid in ["", "\0NX", "N\0X", "NXX\0", "GETX\0", "KEEPTTLX\0"] {
+            assert_eq!(parse_options(&[invalid]), Err(ProtocolError::SyntaxError));
+        }
+        assert_eq!(
+            parse_options(&["NX\0ignored", "XX\0ignored"]),
+            Err(ProtocolError::SyntaxError),
+        );
+        assert_eq!(parse_options(&["EX\0"]), Err(ProtocolError::SyntaxError));
+        assert_eq!(
+            parse_options(&["EX\0", "2\0ignored"]),
+            Err(ProtocolError::NotAnInteger),
+        );
+        let mut binary_suffix = vec![0xff; 1024 * 1024];
+        binary_suffix[..3].copy_from_slice(b"NX\0");
+        let params = SetParams::parse(&[
+            bulk("SET"),
+            bulk("key"),
+            bulk("value"),
+            Value::BulkString(Some(binary_suffix.into())),
+        ])
+        .unwrap();
+        assert_eq!(params.mode, Some(SetMode::Nx));
     }
 
     #[test]
@@ -508,6 +551,43 @@ mod tests {
             );
             assert_stored(&caches, "persistent", None);
         }
+    }
+
+    #[test]
+    fn nul_terminated_options_preserve_binary_values_and_ttl_after_replication() {
+        let caches = [MyCache::new(1).unwrap(), MyCache::new(1).unwrap()];
+        assert_eq!(
+            apply_replicated_set(
+                &caches,
+                &[
+                    "SET",
+                    "key",
+                    "old\0tail",
+                    "NX\0suffix",
+                    "PX\0suffix",
+                    "2000"
+                ],
+                4_000,
+            ),
+            b"+OK\r\n",
+        );
+        assert_stored(&caches, "old\0tail", Some(6_000));
+        assert_eq!(
+            apply_replicated_set(
+                &caches,
+                &[
+                    "SET",
+                    "key",
+                    "new\0tail",
+                    "XX\0suffix",
+                    "GET\0suffix",
+                    "KEEPTTL\0suffix"
+                ],
+                4_100,
+            ),
+            b"$8\r\nold\0tail\r\n",
+        );
+        assert_stored(&caches, "new\0tail", Some(6_000));
     }
 
     #[test]

@@ -44,7 +44,10 @@ impl LSetCommand {
         let key = items[1]
             .string_bytes_clone()
             .ok_or(ProtocolError::InvalidArgument("key"))?;
-        let index = items[2].try_parse_canonical_i64()?;
+        // Redis checks key existence/type before parsing LSET's index. Keep
+        // valid indexes parsed up front for the common path, and defer only
+        // the invalid result until ComputeCommand sees the current value.
+        let index = items[2].parse_canonical_i64();
         let value = items[3]
             .string_bytes_clone()
             .ok_or(ProtocolError::InvalidArgument("value"))?;
@@ -56,7 +59,7 @@ impl LSetCommand {
 /// Parsed LSET arguments
 struct LSetArgs {
     key: Bytes,
-    index: i64,
+    index: Option<i64>,
     value: Bytes,
 }
 
@@ -93,7 +96,8 @@ impl Command for LSetCommand {
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct LSetReq {
     pub key: Bytes,
-    pub index: i64,
+    /// None defers an integer error until after the key/type check.
+    pub index: Option<i64>,
     pub value: Bytes,
 }
 
@@ -101,7 +105,7 @@ impl Display for LSetReq {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(
             f,
-            "LSetReq {{ key: {}, index: {}, value: {:?} }}",
+            "LSetReq {{ key: {}, index: {:?}, value: {:?} }}",
             String::from_utf8_lossy(&self.key),
             self.index,
             self.value
@@ -125,15 +129,14 @@ impl ComputeCommand for LSetReq {
     ) -> (MochaOperation<MyValue>, Value) {
         match &entry.value.data {
             ValueObject::List(data_arc) => {
+                let Some(index) = self.index else {
+                    return (MochaOperation::Abort, ProtocolError::NotAnInteger.into());
+                };
                 let mut list = data_arc.lock();
                 let len = list.len() as i64;
 
                 // 处理负索引
-                let index = if self.index < 0 {
-                    len + self.index
-                } else {
-                    self.index
-                };
+                let index = if index < 0 { len + index } else { index };
                 // 检查索引是否有效
                 if index < 0 || index >= len {
                     return (
@@ -176,15 +179,54 @@ impl ComputeCommand for LSetReq {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::mocha::ExpirePolicy;
+    use parking_lot::Mutex;
+    use std::collections::VecDeque;
+    use std::sync::Arc;
+
+    fn request(index: &str) -> LSetReq {
+        let items = ["LSET", "list", index, "value"]
+            .map(|arg| Value::BulkString(Some(Bytes::copy_from_slice(arg.as_bytes()))));
+        let operation = LSetCommand.raft_request(&items).unwrap();
+        let encoded = bincode2::serialize(&operation).unwrap();
+        let Operation::Base(BaseOperation::LSet(params)) = bincode2::deserialize(&encoded).unwrap()
+        else {
+            panic!("expected LSET");
+        };
+        params
+    }
+
+    fn list_entry() -> EntrySnapshot<MyValue> {
+        EntrySnapshot {
+            value: MyValue::new(ValueObject::List(Arc::new(Mutex::new(VecDeque::from([
+                Bytes::from_static(b"a"),
+                Bytes::from_static(b"b"),
+            ]))))),
+            expire_at: Some(100),
+        }
+    }
 
     #[test]
     fn index_uses_redis_integer_syntax() {
-        for index in ["+0", "00", "01", "-0", "9223372036854775808"] {
-            let items = ["LSET", "list", index, "value"]
-                .map(|arg| Value::BulkString(Some(Bytes::copy_from_slice(arg.as_bytes()))));
+        for index in [
+            "",
+            "+0",
+            "00",
+            "01",
+            "-0",
+            "-01",
+            " 1",
+            "1 ",
+            "1\0",
+            "9223372036854775808",
+            "-9223372036854775809",
+        ] {
+            let (operation, response) = request(index).mutate(list_entry(), 0);
+            assert!(matches!(operation, MochaOperation::Abort));
             assert_eq!(
-                LSetCommand.raft_request(&items).unwrap_err(),
-                ProtocolError::NotAnInteger
+                response.encode(),
+                b"-ERR value is not an integer or out of range\r\n",
+                "index {index:?}",
             );
         }
         for index in [
@@ -194,9 +236,70 @@ mod tests {
             "-9223372036854775808",
             "9223372036854775807",
         ] {
-            let items = ["LSET", "list", index, "value"]
-                .map(|arg| Value::BulkString(Some(Bytes::copy_from_slice(arg.as_bytes()))));
-            assert!(LSetCommand.raft_request(&items).is_ok());
+            let params = request(index);
+            assert_eq!(params.index, Some(index.parse::<i64>().unwrap()));
         }
+    }
+
+    #[test]
+    fn invalid_index_is_checked_after_missing_key_and_type() {
+        let params = request("+0");
+
+        let (operation, response) = params.clone().init();
+        assert!(matches!(operation, MochaOperation::Abort));
+        assert!(matches!(
+            response,
+            Value::Error(error) if error == "ERR no such key"
+        ));
+
+        let wrong_type = EntrySnapshot {
+            value: MyValue::new(ValueObject::String(Bytes::from_static(b"value"))),
+            expire_at: None,
+        };
+        let (operation, response) = params.clone().mutate(wrong_type, 0);
+        assert!(matches!(operation, MochaOperation::Abort));
+        assert!(matches!(
+            response,
+            Value::Error(error) if error == ProtocolError::WrongType.to_string()
+        ));
+
+        let list = list_entry();
+        let (operation, response) = params.mutate(list.clone(), 0);
+        assert!(matches!(operation, MochaOperation::Abort));
+        assert!(matches!(
+            response,
+            Value::Error(error) if error == ProtocolError::NotAnInteger.to_string()
+        ));
+        let ValueObject::List(contents) = &list.value.data else {
+            panic!("expected list");
+        };
+        assert_eq!(contents.lock().front().unwrap(), b"a".as_slice());
+        assert_eq!(list.expire_at, Some(100));
+    }
+
+    #[test]
+    fn canonical_index_preserves_ttl_and_range_errors_do_not_change_the_list() {
+        let list = list_entry();
+        for index in ["2", "-3", "-9223372036854775808", "9223372036854775807"] {
+            let (operation, response) = request(index).mutate(list.clone(), 0);
+            assert!(matches!(operation, MochaOperation::Abort));
+            assert_eq!(response.encode(), b"-ERR index out of range\r\n");
+        }
+        let (operation, response) = request("-1").mutate(list.clone(), 0);
+        assert_eq!(response.encode(), b"+OK\r\n");
+        assert!(matches!(
+            operation,
+            MochaOperation::Insert {
+                expire: ExpirePolicy::Absolute(100),
+                ..
+            }
+        ));
+        let ValueObject::List(contents) = &list.value.data else {
+            panic!("expected list");
+        };
+        assert_eq!(
+            *contents.lock(),
+            VecDeque::from([Bytes::from_static(b"a"), Bytes::from_static(b"value")]),
+        );
     }
 }

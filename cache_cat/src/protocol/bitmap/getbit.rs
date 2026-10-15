@@ -66,8 +66,13 @@ impl GetBitCommand {
             .string_bytes_clone()
             .ok_or(ProtocolError::InvalidArgument("getbit"))?;
 
+        // Redis parses bit offsets with `string2ll`: only canonical decimal
+        // integers are accepted, followed by the 512 MiB string limit
+        // (u32::MAX is the largest valid bit offset).
         let offset = items[2]
-            .parse_u64()
+            .try_parse_canonical_i64()
+            .ok()
+            .and_then(|offset| u64::try_from(offset).ok())
             .filter(|offset| *offset <= u32::MAX as u64)
             .ok_or(ProtocolError::response(
                 "ERR bit offset is not an integer or out of range",
@@ -94,6 +99,39 @@ mod tests {
             assert_eq!(
                 GetBitCommand::parse_args(&items).unwrap_err().to_string(),
                 "ERR bit offset is not an integer or out of range"
+            );
+        }
+    }
+
+    #[test]
+    fn rejects_noncanonical_offsets() {
+        let mut items = vec![
+            Value::SimpleString("GETBIT".into()),
+            Value::SimpleString("key".into()),
+            Value::SimpleString("1".into()),
+        ];
+        for offset in [
+            "",
+            "01",
+            "+1",
+            "-0",
+            "-01",
+            " 1",
+            "1 ",
+            "1\0",
+            "9223372036854775808",
+        ] {
+            items[2] = Value::BulkString(Some(Bytes::copy_from_slice(offset.as_bytes())));
+            assert_eq!(
+                GetBitCommand::parse_args(&items).unwrap_err().to_string(),
+                "ERR bit offset is not an integer or out of range"
+            );
+        }
+        for offset in ["0", "1", "4294967295"] {
+            items[2] = Value::BulkString(Some(Bytes::copy_from_slice(offset.as_bytes())));
+            assert_eq!(
+                GetBitCommand::parse_args(&items).unwrap().offset,
+                offset.parse::<u64>().unwrap()
             );
         }
     }

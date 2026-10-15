@@ -229,6 +229,11 @@ impl SRandMemberParams {
 
 impl SRandMemberCommand {
     fn parse_args(items: &[Value]) -> Result<SRandMemberParams, ProtocolError> {
+        if items.len() > 3 {
+            // Redis's command handler reports syntax errors for extra
+            // positional arguments rather than the generic wrong-argc reply.
+            return Err(ProtocolError::SyntaxError);
+        }
         if items.len() != 2 && items.len() != 3 {
             return Err(ProtocolError::WrongArgCount("srandmember"));
         }
@@ -238,17 +243,15 @@ impl SRandMemberCommand {
             .ok_or(ProtocolError::InvalidArgument("key"))?;
 
         let count = if items.len() == 3 {
-            let count_bytes = items[2]
-                .string_bytes_clone()
-                .ok_or(ProtocolError::InvalidArgument("count"))?;
-
-            let count_str = std::str::from_utf8(count_bytes.as_ref())
-                .map_err(|_| ProtocolError::InvalidArgument("count"))?;
-
-            let count = count_str
-                .parse::<i64>()
-                .map_err(|_| ProtocolError::InvalidArgument("count"))?;
-
+            // Redis getRangeLongFromObjectOrReply accepts only canonical
+            // signed integers and excludes INT64_MIN (the lower bound is
+            // -LONG_MAX because its absolute value is used for sampling).
+            let count = items[2].try_parse_canonical_i64()?;
+            if count == i64::MIN {
+                return Err(ProtocolError::response(
+                    "ERR value is out of range, value must between -9223372036854775807 and 9223372036854775807",
+                ));
+            }
             Some(count)
         } else {
             None
@@ -425,6 +428,63 @@ mod tests {
                 .execute_with_clock(Some(nonempty.clone()), 42)
                 .encode(),
             command.execute(Some(nonempty)).encode()
+        );
+    }
+
+    #[test]
+    fn count_uses_redis_canonical_range() {
+        let mut items = vec![
+            Value::SimpleString("SRANDMEMBER".into()),
+            Value::SimpleString("key".into()),
+            Value::SimpleString("1".into()),
+        ];
+        assert!(SRandMemberCommand::parse_args(&items).is_ok());
+        for count in [
+            "",
+            "01",
+            "+1",
+            "-0",
+            "-01",
+            " 1",
+            "1 ",
+            "1\0",
+            "9223372036854775808",
+        ] {
+            items[2] = Value::BulkString(Some(Bytes::copy_from_slice(count.as_bytes())));
+            assert_eq!(
+                SRandMemberCommand::parse_args(&items)
+                    .unwrap_err()
+                    .to_string(),
+                "ERR value is not an integer or out of range"
+            );
+        }
+        for count in [
+            "0",
+            "1",
+            "-1",
+            "9223372036854775807",
+            "-9223372036854775807",
+        ] {
+            items[2] = Value::BulkString(Some(Bytes::copy_from_slice(count.as_bytes())));
+            assert_eq!(
+                SRandMemberCommand::parse_args(&items).unwrap().count,
+                Some(count.parse::<i64>().unwrap())
+            );
+        }
+        items[2] = Value::BulkString(Some(Bytes::from_static(b"-9223372036854775808")));
+        assert_eq!(
+            SRandMemberCommand::parse_args(&items)
+                .unwrap_err()
+                .to_string(),
+            "ERR value is out of range, value must between -9223372036854775807 and 9223372036854775807"
+        );
+
+        items.push(Value::SimpleString("extra".into()));
+        assert_eq!(
+            SRandMemberCommand::parse_args(&items)
+                .unwrap_err()
+                .to_string(),
+            "ERR syntax error"
         );
     }
 }

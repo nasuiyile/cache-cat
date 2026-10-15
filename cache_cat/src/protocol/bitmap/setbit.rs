@@ -152,16 +152,26 @@ impl SetBitCommand {
             .string_bytes_clone()
             .ok_or(ProtocolError::InvalidArgument("setbit"))?;
 
+        // Redis uses `string2ll` for both arguments.  Keep this on the
+        // allocation-free canonical parser so forms such as `+1` and `01`
+        // are rejected before any bitmap growth can occur.
         let offset = items[2]
-            .parse_u64()
+            .try_parse_canonical_i64()
+            .ok()
+            .and_then(|offset| u64::try_from(offset).ok())
             .filter(|offset| *offset <= u32::MAX as u64)
             .ok_or(ProtocolError::response(
                 "ERR bit offset is not an integer or out of range",
             ))?;
 
-        let value = items[3].parse_bool_u8().ok_or(ProtocolError::response(
-            "ERR bit is not an integer or out of range",
-        ))?;
+        let value = items[3]
+            .try_parse_canonical_i64()
+            .ok()
+            .filter(|value| (0..=1).contains(value))
+            .map(|value| value as u8)
+            .ok_or(ProtocolError::response(
+                "ERR bit is not an integer or out of range",
+            ))?;
 
         Ok(SetBitParams { key, offset, value })
     }
@@ -185,6 +195,38 @@ mod tests {
             assert_eq!(
                 SetBitCommand::parse_args(&items).unwrap_err().to_string(),
                 "ERR bit offset is not an integer or out of range"
+            );
+        }
+    }
+
+    #[test]
+    fn rejects_noncanonical_offsets_and_values() {
+        let mut items = vec![
+            Value::SimpleString("SETBIT".into()),
+            Value::SimpleString("key".into()),
+            Value::SimpleString("1".into()),
+            Value::SimpleString("1".into()),
+        ];
+        for offset in ["", "01", "+1", "-0", "-01", " 1", "1 ", "1\0"] {
+            items[2] = Value::BulkString(Some(Bytes::copy_from_slice(offset.as_bytes())));
+            assert_eq!(
+                SetBitCommand::parse_args(&items).unwrap_err().to_string(),
+                "ERR bit offset is not an integer or out of range"
+            );
+        }
+        items[2] = Value::SimpleString("1".into());
+        for value in ["", "01", "+1", "-0", "-01", " 1", "1 ", "1\0", "2", "-1"] {
+            items[3] = Value::BulkString(Some(Bytes::copy_from_slice(value.as_bytes())));
+            assert_eq!(
+                SetBitCommand::parse_args(&items).unwrap_err().to_string(),
+                "ERR bit is not an integer or out of range"
+            );
+        }
+        for value in ["0", "1"] {
+            items[3] = Value::BulkString(Some(Bytes::copy_from_slice(value.as_bytes())));
+            assert_eq!(
+                SetBitCommand::parse_args(&items).unwrap().value,
+                value.parse::<u8>().unwrap()
             );
         }
     }

@@ -40,8 +40,8 @@ impl BfScanDumpParams {
             .string_bytes_clone()
             .ok_or(ProtocolError::InvalidArgument("key"))?;
         let iterator = items[2]
-            .parse_i64()
-            .ok_or(ProtocolError::response("Second argument must be numeric"))?;
+            .try_parse_canonical_i64()
+            .map_err(|_| ProtocolError::response("Second argument must be numeric"))?;
         Ok(Self { key, iterator })
     }
 }
@@ -94,5 +94,48 @@ impl Command for BfScanDumpCommand {
         }
         let operation = self.read_operation(items)?;
         server.app.read(operation, client.db_number).await
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn iterator_follows_module_canonical_integer_rules() {
+        let args = |number: &str| {
+            ["BF.SCANDUMP", "key", number]
+                .map(|arg| Value::BulkString(Some(Bytes::copy_from_slice(arg.as_bytes()))))
+        };
+        for number in [
+            "",
+            "+1",
+            "01",
+            "-0",
+            "-01",
+            " 1",
+            "1 ",
+            "1\0",
+            "9223372036854775808",
+        ] {
+            assert_eq!(
+                BfScanDumpParams::parse(&args(number))
+                    .unwrap_err()
+                    .to_string(),
+                "Second argument must be numeric"
+            );
+        }
+        for number in [
+            "0",
+            "1",
+            "-1",
+            "-9223372036854775808",
+            "9223372036854775807",
+        ] {
+            assert_eq!(
+                BfScanDumpParams::parse(&args(number)).unwrap().iterator,
+                number.parse::<i64>().unwrap()
+            );
+        }
     }
 }

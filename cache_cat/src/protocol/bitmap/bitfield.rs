@@ -528,6 +528,54 @@ mod tests {
         assert_eq!(reply.encode_proto(2), b"*3\r\n:0\r\n$-1\r\n:255\r\n");
         assert_eq!(reply.encode_proto(3), b"*3\r\n:0\r\n_\r\n:255\r\n");
     }
+
+    #[test]
+    fn encoding_width_uses_redis_canonical_integer_rules() {
+        let args = |encoding: &str| {
+            vec![
+                Value::SimpleString("BITFIELD".into()),
+                Value::SimpleString("key".into()),
+                Value::SimpleString("GET".into()),
+                Value::BulkString(Some(Bytes::copy_from_slice(encoding.as_bytes()))),
+                Value::SimpleString("0".into()),
+            ]
+        };
+
+        for encoding in ["i1", "i8", "i64", "u1", "u63", "i8\0suffix", "u63\0suffix"] {
+            assert!(BitFieldCommand::parse_args(&args(encoding)).is_ok());
+        }
+        for encoding in [
+            "i",
+            "i0",
+            "i08",
+            "i+8",
+            "i-0",
+            "i 8",
+            "i8 ",
+            "i65",
+            "i255",
+            "u64",
+            "x8",
+            "i\0",
+            "i08\0suffix",
+            "i640\0suffix",
+        ] {
+            assert_eq!(
+                BitFieldCommand::parse_args(&args(encoding))
+                    .unwrap_err()
+                    .to_string(),
+                ERR_INVALID_TYPE
+            );
+        }
+        // The large suffix must not require cloning or scanning it to parse
+        // a valid one/two-digit C-string width.
+        let mut long_type = vec![b'x'; 1024 * 1024];
+        long_type[..4].copy_from_slice(b"i64\0");
+        assert_eq!(
+            parse_encoding(&Value::BulkString(Some(Bytes::from(long_type)))).unwrap(),
+            BitFieldEncoding::signed(64)
+        );
+    }
 }
 
 impl ComputeCommand for BitFieldReq {
@@ -706,9 +754,13 @@ fn parse_upper_token(value: &Value) -> Result<String, ProtocolError> {
 }
 
 fn parse_encoding(value: &Value) -> Result<BitFieldEncoding, ProtocolError> {
-    let bytes = value
-        .string_bytes_clone()
-        .ok_or(ProtocolError::response(ERR_INVALID_TYPE))?;
+    let bytes = match value {
+        Value::BulkString(Some(bytes)) | Value::VerbatimString { data: bytes, .. } => {
+            bytes.as_ref()
+        }
+        Value::SimpleString(string) => string.as_bytes(),
+        _ => return Err(ProtocolError::response(ERR_INVALID_TYPE)),
+    };
 
     if bytes.len() < 2 {
         return Err(ProtocolError::response(ERR_INVALID_TYPE));
@@ -724,12 +776,15 @@ fn parse_encoding(value: &Value) -> Result<BitFieldEncoding, ProtocolError> {
         _ => return Err(ProtocolError::response(ERR_INVALID_TYPE)),
     };
 
-    let width_string =
-        std::str::from_utf8(&bytes[1..]).map_err(|_| ProtocolError::response(ERR_INVALID_TYPE))?;
-
-    let bits = width_string
-        .parse::<u8>()
-        .map_err(|_| ProtocolError::response(ERR_INVALID_TYPE))?;
+    // Redis applies string2ll to a C string here, so a NUL after the width
+    // terminates it. Valid widths have only one or two canonical digits:
+    // inspect at most those digits and the terminator, even for long inputs.
+    let bits = match &bytes[1..] {
+        [digit @ b'1'..=b'9'] | [digit @ b'1'..=b'9', 0, ..] => digit - b'0',
+        [tens @ b'1'..=b'9', units @ b'0'..=b'9']
+        | [tens @ b'1'..=b'9', units @ b'0'..=b'9', 0, ..] => (tens - b'0') * 10 + (units - b'0'),
+        _ => return Err(ProtocolError::response(ERR_INVALID_TYPE)),
+    };
 
     let valid = if signed {
         (1..=64).contains(&bits)

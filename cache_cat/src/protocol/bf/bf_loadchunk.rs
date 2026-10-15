@@ -31,9 +31,9 @@ impl BfLoadChunkParams {
         let key = items[1]
             .string_bytes_clone()
             .ok_or(ProtocolError::InvalidArgument("key"))?;
-        let iterator = items[2].parse_i64().ok_or(ProtocolError::response(
-            "ERR Second argument must be numeric",
-        ))?;
+        let iterator = items[2]
+            .try_parse_canonical_i64()
+            .map_err(|_| ProtocolError::response("ERR Second argument must be numeric"))?;
         let data = items[3]
             .string_bytes_clone()
             .ok_or(ProtocolError::InvalidArgument("data"))?;
@@ -159,5 +159,47 @@ impl ComputeCommand for BfLoadChunkReq {
             },
             Value::ok(),
         )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn iterator_follows_module_canonical_integer_rules() {
+        let args = |number: &str| {
+            ["BF.LOADCHUNK", "key", number, "data"]
+                .map(|arg| Value::BulkString(Some(Bytes::copy_from_slice(arg.as_bytes()))))
+        };
+        for number in [
+            "",
+            "+1",
+            "01",
+            "-0",
+            "-01",
+            " 1",
+            "1 ",
+            "1\0",
+            "9223372036854775808",
+        ] {
+            assert_eq!(
+                BfLoadChunkParams::parse(&args(number))
+                    .unwrap_err()
+                    .to_string(),
+                "ERR Second argument must be numeric"
+            );
+        }
+        for number in [
+            "0",
+            "1",
+            "-1",
+            "-9223372036854775808",
+            "9223372036854775807",
+        ] {
+            let parsed = BfLoadChunkParams::parse(&args(number)).unwrap();
+            assert_eq!(parsed.iterator, number.parse::<i64>().unwrap());
+            assert_eq!(parsed.data.as_ref(), b"data");
+        }
     }
 }

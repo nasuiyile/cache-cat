@@ -4,7 +4,7 @@ use crate::protocol::raft_command::RaftCommand;
 use crate::raft::network::redis_server::RedisServer;
 use crate::raft::types::core::response_value::Value;
 use crate::raft::types::entry::request::Operation;
-use crate::raft::types::entry::request::RedisOperation::RedisEval;
+use crate::raft::types::entry::request::RedisOperation::{RedisEval, RedisReply};
 use async_trait::async_trait;
 use bytes::Bytes;
 use serde::{Deserialize, Serialize};
@@ -73,15 +73,13 @@ impl EvalParams {
             .string_bytes_clone()
             .ok_or(ProtocolError::InvalidArgument("script"))?;
 
-        // Parse numkeys
-        let numkeys = items[2].try_parse_usize()?;
-
-        // Expected total items: 3 (header) + numkeys + numargs
-        // Actual remaining items after script and numkeys: items.len() - 3
         let remaining = items.len() - 3;
-        if remaining < numkeys {
-            return Err(ProtocolError::InvalidArgument("not enough keys specified"));
-        }
+        // Redis parses this as a signed, canonical integer first.  Parsing it
+        // directly as usize would accept forms such as `+1`/`01` and would
+        // return the generic integer error for negative values instead of the
+        // command-specific Redis response.  Keep the range check before any
+        // slice conversion so an untrusted value cannot influence indexing.
+        let numkeys = parse_numkeys(&items[2], remaining)?;
 
         // Parse keys
         let keys = items[3..3 + numkeys]
@@ -114,6 +112,50 @@ impl EvalParams {
     }
 }
 
+/// Parse the EVAL/EVALSHA `numkeys` argument with Redis' exact validation and
+/// error responses.  The caller supplies the number of arguments following
+/// `numkeys`; this lets us reject an oversized count without allocating or
+/// constructing a temporary key/argument vector.
+#[inline]
+pub(crate) fn parse_numkeys(value: &Value, remaining: usize) -> Result<usize, ProtocolError> {
+    let parsed = value.try_parse_canonical_i64()?;
+    if parsed < 0 {
+        return Err(ProtocolError::response(
+            "ERR Number of keys can't be negative",
+        ));
+    }
+
+    // Compare in u64 before converting to usize.  Redis uses a signed
+    // long-long for this field; this remains correct on 32-bit targets too.
+    let parsed = parsed as u64;
+    if parsed > remaining as u64 {
+        return Err(ProtocolError::response(
+            "ERR Number of keys can't be greater than number of args",
+        ));
+    }
+    Ok(parsed as usize)
+}
+
+/// Redis validates these command arguments at execution time. Cache their
+/// deterministic reply in MULTI so an invalid count does not abort the whole
+/// transaction. Arity and non-string protocol errors still fail immediately.
+#[cold]
+pub(crate) fn eval_parse_error(
+    client: &mut Client,
+    error: ProtocolError,
+) -> Result<Value, CacheCatError> {
+    if matches!(
+        error,
+        ProtocolError::NotAnInteger | ProtocolError::Response(_)
+    ) {
+        if let Some(queue) = client.transaction_queue.as_mut() {
+            queue.push(Operation::Redis(RedisReply(error.into())));
+            return Ok(Value::queued());
+        }
+    }
+    Err(error.into())
+}
+
 /// EVAL command executor
 pub struct EvalCommand;
 
@@ -132,7 +174,10 @@ impl Command for EvalCommand {
         items: &[Value],
         server: &RedisServer,
     ) -> Result<Value, CacheCatError> {
-        let mut operation = self.raft_request(items)?;
+        let mut operation = match self.raft_request(items) {
+            Ok(operation) => operation,
+            Err(error) => return eval_parse_error(client, error),
+        };
         if let Operation::Redis(RedisEval(ref mut params)) = operation {
             params.proto = client.framed.codec().proto_version();
         }
@@ -267,6 +312,62 @@ mod tests {
                 .unwrap()
                 .is_none()
         );
+    }
+
+    #[test]
+    fn eval_numkeys_matches_redis_validation() {
+        let request = |numkeys: &[u8], extra: &[&[u8]]| {
+            let mut parts = vec![
+                Value::BulkString(Some(Bytes::from_static(b"EVAL"))),
+                Value::BulkString(Some(Bytes::from_static(b"return 1"))),
+                Value::BulkString(Some(Bytes::copy_from_slice(numkeys))),
+            ];
+            parts.extend(
+                extra
+                    .iter()
+                    .map(|part| Value::BulkString(Some(Bytes::copy_from_slice(part)))),
+            );
+            parts
+        };
+
+        let invalid = [
+            (
+                b"-1".as_slice(),
+                &[][..],
+                b"ERR Number of keys can't be negative".as_slice(),
+            ),
+            (
+                b"+1".as_slice(),
+                &[][..],
+                b"ERR value is not an integer or out of range".as_slice(),
+            ),
+            (
+                b"01".as_slice(),
+                &[][..],
+                b"ERR value is not an integer or out of range".as_slice(),
+            ),
+            (
+                b"1 ".as_slice(),
+                &[][..],
+                b"ERR value is not an integer or out of range".as_slice(),
+            ),
+            (
+                b"1".as_slice(),
+                &[][..],
+                b"ERR Number of keys can't be greater than number of args".as_slice(),
+            ),
+        ];
+        for (numkeys, extra, expected) in invalid {
+            let items = request(numkeys, extra);
+            let error = EvalCommand
+                .raft_request(&items)
+                .expect_err("invalid EVAL numkeys must be rejected");
+            assert_eq!(error.to_string(), String::from_utf8_lossy(expected));
+        }
+
+        let items = request(b"1", &[b"key"]);
+        let operation = EvalCommand.raft_request(&items);
+        assert!(operation.is_ok());
     }
 
     #[test]

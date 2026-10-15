@@ -16,7 +16,7 @@ use crate::raft::types::core::response_value::Value;
 use crate::raft::types::core::value_object::ValueObject;
 use crate::raft::types::entry::base_operation::BaseOperation;
 use crate::raft::types::entry::request::Operation;
-use crate::utils::{parse_f64, parse_i64};
+use crate::utils::parse_f64;
 use async_trait::async_trait;
 use bytes::Bytes;
 use parking_lot::Mutex;
@@ -95,10 +95,9 @@ impl BfInsertParams {
                 if index >= values.len() {
                     return Err(ProtocolError::WrongArgCount("bf.insert"));
                 }
-                let value = values[index]
-                    .string_bytes_clone()
-                    .ok_or(ProtocolError::response(BAD_CAPACITY))?;
-                let parsed = parse_i64(&value).ok_or(ProtocolError::response(BAD_CAPACITY))?;
+                let parsed = values[index]
+                    .try_parse_canonical_i64()
+                    .map_err(|_| ProtocolError::response(BAD_CAPACITY))?;
                 if parsed < BLOOM_CAPACITY_MIN as i64 || parsed > BLOOM_CAPACITY_MAX as i64 {
                     return Err(ProtocolError::response(BAD_CAPACITY));
                 }
@@ -111,10 +110,9 @@ impl BfInsertParams {
                 if index >= values.len() {
                     return Err(ProtocolError::WrongArgCount("bf.insert"));
                 }
-                let value = values[index]
-                    .string_bytes_clone()
-                    .ok_or(ProtocolError::response(BAD_EXPANSION))?;
-                let parsed = parse_i64(&value).ok_or(ProtocolError::response(BAD_EXPANSION))?;
+                let parsed = values[index]
+                    .try_parse_canonical_i64()
+                    .map_err(|_| ProtocolError::response(BAD_EXPANSION))?;
                 if parsed < BLOOM_EXPANSION_MIN as i64 || parsed > BLOOM_EXPANSION_MAX as i64 {
                     return Err(ProtocolError::response(BAD_EXPANSION));
                 }
@@ -319,6 +317,55 @@ mod tests {
         assert_eq!(
             parse_error(&["BF.INSERT", "key", "UNKNOWN", "ITEMS", "x"]),
             "Unknown argument received"
+        );
+    }
+
+    #[test]
+    fn numeric_options_follow_module_canonical_integer_rules() {
+        for number in [
+            "",
+            "+1",
+            "01",
+            "-0",
+            "-01",
+            " 1",
+            "1 ",
+            "1\0",
+            "9223372036854775808",
+        ] {
+            assert_eq!(
+                parse_error(&["BF.INSERT", "key", "CAPACITY", number, "ITEMS", "x"]),
+                BAD_CAPACITY
+            );
+            assert_eq!(
+                parse_error(&["BF.INSERT", "key", "EXPANSION", number, "ITEMS", "x"]),
+                BAD_EXPANSION
+            );
+        }
+        let parsed = BfInsertParams::parse(&command(&[
+            "BF.INSERT",
+            "key",
+            "CAPACITY",
+            "100",
+            "EXPANSION",
+            "2",
+            "ITEMS",
+            "x",
+        ]))
+        .unwrap();
+        assert_eq!((parsed.capacity, parsed.expansion), (100, 2));
+        assert_eq!(
+            parse_error(&[
+                "BF.INSERT",
+                "key",
+                "EXPANSION",
+                "+1",
+                "CAPACITY",
+                "+1",
+                "ITEMS",
+                "x",
+            ]),
+            BAD_EXPANSION
         );
     }
 }

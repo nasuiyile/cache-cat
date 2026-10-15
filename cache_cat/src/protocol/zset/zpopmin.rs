@@ -38,9 +38,24 @@ impl Display for ZPopMinParams {
 impl ZPopMinCommand {
     fn parse_params(items: &[Value]) -> Result<ZPopMinParams, ProtocolError> {
         let count = match items.len() {
+            0 | 1 => return Err(ProtocolError::WrongArgCount("zpopmin")),
             2 => None,
-            3 => Some(items[2].try_parse_usize()?),
-            _ => return Err(ProtocolError::WrongArgCount("zpopmin")),
+            3 => {
+                // Redis getPositiveLongFromObjectOrReply first applies
+                // string2ll, then requires a non-negative value.  Parsing
+                // through the canonical helper rejects `+1` and `01`
+                // without converting the wire bytes to text first.
+                let count = items[2].try_parse_canonical_i64().map_err(|_| {
+                    ProtocolError::response("ERR value is out of range, must be positive")
+                })?;
+                let count = count.try_into().map_err(|_| {
+                    ProtocolError::response("ERR value is out of range, must be positive")
+                })?;
+                Some(count)
+            }
+            // Redis's zpopMinMaxCommand reports syntax errors for extra
+            // positional arguments instead of the generic wrong-argc reply.
+            _ => return Err(ProtocolError::SyntaxError),
         };
 
         let key = items[1]
@@ -209,5 +224,51 @@ mod tests {
         let (operation, response) = request.mutate(snapshot, 0);
         assert!(matches!(operation, MochaOperation::Remove));
         assert_eq!(response.encode(), b"*2\r\n$1\r\nb\r\n$1\r\n2\r\n");
+    }
+
+    #[test]
+    fn count_uses_redis_canonical_nonnegative_integer() {
+        let mut items = vec![
+            Value::SimpleString("ZPOPMIN".into()),
+            Value::SimpleString("key".into()),
+            Value::SimpleString("1".into()),
+        ];
+        assert_eq!(ZPopMinCommand::parse_params(&items).unwrap().count, Some(1));
+        for count in [
+            "",
+            "01",
+            "+1",
+            "-0",
+            "-01",
+            " 1",
+            "1 ",
+            "1\0",
+            "abc",
+            "9223372036854775808",
+            "18446744073709551615",
+        ] {
+            items[2] = Value::BulkString(Some(Bytes::copy_from_slice(count.as_bytes())));
+            assert_eq!(
+                ZPopMinCommand::parse_params(&items)
+                    .unwrap_err()
+                    .to_string(),
+                "ERR value is out of range, must be positive"
+            );
+        }
+        items[2] = Value::SimpleString("-1".into());
+        assert_eq!(
+            ZPopMinCommand::parse_params(&items)
+                .unwrap_err()
+                .to_string(),
+            "ERR value is out of range, must be positive"
+        );
+
+        items.push(Value::SimpleString("extra".into()));
+        assert_eq!(
+            ZPopMinCommand::parse_params(&items)
+                .unwrap_err()
+                .to_string(),
+            "ERR syntax error"
+        );
     }
 }

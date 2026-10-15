@@ -18,6 +18,33 @@ pub struct LIndexCommand;
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::raft::types::entry::request::Operation;
+    use parking_lot::Mutex;
+    use std::collections::VecDeque;
+    use std::sync::Arc;
+
+    fn request(index: &str) -> LIndexParams {
+        let items = ["LINDEX", "list", index]
+            .map(|arg| Value::BulkString(Some(Bytes::copy_from_slice(arg.as_bytes()))));
+        let operation = LIndexCommand.raft_request(&items).unwrap();
+        let encoded = bincode2::serialize(&operation).unwrap();
+        let Operation::Read(ReadOperation::LIndex(params)) =
+            bincode2::deserialize(&encoded).unwrap()
+        else {
+            panic!("expected LINDEX");
+        };
+        params
+    }
+
+    fn list_entry() -> EntrySnapshot<MyValue> {
+        EntrySnapshot {
+            value: MyValue::new(ValueObject::List(Arc::new(Mutex::new(VecDeque::from([
+                Bytes::from_static(b"a"),
+                Bytes::from_static(b"b"),
+            ]))))),
+            expire_at: Some(100),
+        }
+    }
 
     #[test]
     fn index_requires_a_canonical_integer() {
@@ -34,12 +61,10 @@ mod tests {
             "9223372036854775808",
             "-9223372036854775809",
         ] {
-            let items = ["LINDEX", "list", index]
-                .map(|arg| Value::BulkString(Some(Bytes::copy_from_slice(arg.as_bytes()))));
             assert_eq!(
-                LIndexCommand.raft_request(&items).unwrap_err(),
-                ProtocolError::NotAnInteger,
-                "index {index:?}"
+                request(index).execute(Some(list_entry())).encode(),
+                b"-ERR value is not an integer or out of range\r\n",
+                "index {index:?}",
             );
         }
         for index in [
@@ -49,11 +74,37 @@ mod tests {
             "-9223372036854775808",
             "9223372036854775807",
         ] {
-            let items = ["LINDEX", "list", index]
-                .map(|arg| Value::BulkString(Some(Bytes::copy_from_slice(arg.as_bytes()))));
-            let params = LIndexCommand::parse_args(&items).unwrap();
+            let params = request(index);
             assert_eq!(params.index, index.parse::<i64>().unwrap());
+            assert!(params.index_valid);
         }
+        for (index, expected) in [
+            ("0", b"$1\r\na\r\n".as_slice()),
+            ("-1", b"$1\r\nb\r\n".as_slice()),
+            ("-9223372036854775808", b"$-1\r\n".as_slice()),
+            ("9223372036854775807", b"$-1\r\n".as_slice()),
+        ] {
+            assert_eq!(
+                request(index).execute(Some(list_entry())).encode(),
+                expected
+            );
+        }
+    }
+
+    #[test]
+    fn invalid_index_is_checked_after_missing_key_and_type() {
+        let params = request("+0");
+
+        assert!(matches!(params.execute(None), Value::BulkString(None)));
+
+        let wrong_type = EntrySnapshot {
+            value: MyValue::new(ValueObject::String(Bytes::from_static(b"value"))),
+            expire_at: None,
+        };
+        assert!(matches!(
+            params.execute(Some(wrong_type)),
+            Value::Error(error) if error == ProtocolError::WrongType.to_string()
+        ));
     }
 }
 
@@ -61,6 +112,8 @@ mod tests {
 pub struct LIndexParams {
     pub key: Bytes,
     pub index: i64,
+    /// Delay an invalid-index reply until after the key's existence/type check.
+    pub index_valid: bool,
 }
 
 impl Display for LIndexParams {
@@ -84,6 +137,9 @@ impl ReadCommand for LIndexParams {
             None => Value::BulkString(None),
             Some(v) => match v.value.data {
                 ValueObject::List(list) => {
+                    if !self.index_valid {
+                        return ProtocolError::NotAnInteger.into();
+                    }
                     let deque = list.lock();
                     let len = deque.len() as i64;
 
@@ -122,9 +178,17 @@ impl LIndexCommand {
             .string_bytes_clone()
             .ok_or(ProtocolError::InvalidArgument("key"))?;
 
-        let index = items[2].try_parse_canonical_i64()?;
+        // Parse once without retaining argument bytes. The error is reported
+        // only after the key lookup and WRONGTYPE check, as Redis requires.
+        let parsed_index = items[2].parse_canonical_i64();
+        let index_valid = parsed_index.is_some();
+        let index = parsed_index.unwrap_or_default();
 
-        Ok(LIndexParams { key, index })
+        Ok(LIndexParams {
+            key,
+            index,
+            index_valid,
+        })
     }
 }
 

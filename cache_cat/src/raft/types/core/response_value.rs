@@ -702,6 +702,18 @@ impl Value {
         self.parse_i64().ok_or(ProtocolError::NotAnInteger)
     }
 
+    /// Parse a canonical Redis integer without constructing an error, for
+    /// commands that must defer integer errors until after key/type checks.
+    #[inline]
+    pub(crate) fn parse_canonical_i64(&self) -> Option<i64> {
+        match self {
+            Value::BulkString(Some(data)) => parse_canonical_i64(data),
+            Value::SimpleString(s) => parse_canonical_i64(s.as_bytes()),
+            Value::Integer(i) => Some(*i),
+            _ => None,
+        }
+    }
+
     /// Strict counterpart of `try_parse_i64`, matching Redis
     /// `getLongLongFromObjectOrReply` (`string2ll`): rejects whitespace, a `+`
     /// sign, leading zeros and `-0`.
