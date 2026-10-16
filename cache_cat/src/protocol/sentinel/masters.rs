@@ -13,9 +13,12 @@ impl SubCommand for SentinelMastersCommand {
     async fn execute(
         &self,
         _client: &mut Client,
-        _items: &[Value],
+        items: &[Value],
         server: &RedisServer,
     ) -> Result<Value, CacheCatError> {
+        if items.len() != 2 {
+            return Err(crate::error::ProtocolError::WrongArgCount("sentinel|masters").into());
+        }
         let master_name = server.app.config.sentinel_master_name.to_string();
         let leader_endpoint = server.app.cluster.leader_addr().await;
         let mut flags = "master";

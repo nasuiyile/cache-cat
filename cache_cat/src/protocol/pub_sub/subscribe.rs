@@ -14,8 +14,10 @@
 //!   - number of channels the client is currently subscribed to
 
 use crate::error::{CacheCatError, ProtocolError};
-use crate::protocol::command::{BlockCommand, Client, ParsedCommand};
+use crate::protocol::command::{BlockCommand, Client, Command, ParsedCommand};
 use crate::protocol::connection::ping::PingParam;
+use crate::protocol::connection::quit::QuitCommand;
+use crate::protocol::connection::reset::ResetCommand;
 use crate::protocol::pub_sub::psubscribe::PsubscribeParams;
 use crate::protocol::pub_sub::punsubscribe::PunsubscribeParams;
 use crate::raft::network::redis_server::RedisServer;
@@ -132,8 +134,9 @@ impl BlockCommand for SubscribeCommand {
                 Some(message) => Value::BulkString(Some(message)),
             });
         } else if cmd.name == "QUIT" {
-            client.closed = true;
-            return Ok(Value::ok());
+            QuitCommand.execute(client, &cmd.items, server).await
+        } else if cmd.name == "RESET" {
+            ResetCommand.execute(client, &cmd.items, server).await
         } else {
             let resp = ProtocolError::response(format!(
                 "ERR Can't execute '{}': only (P|S)SUBSCRIBE / (P|S)UNSUBSCRIBE / PING / QUIT / RESET are allowed in this context",

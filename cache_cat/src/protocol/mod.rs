@@ -23,3 +23,10 @@ mod test;
 /// Special value indicating no expiration (0 means never expire)
 pub const NO_EXPIRATION: u64 = 0;
 
+/// Match an option name compared by Redis using `strcasecmp`.
+#[inline]
+pub(crate) fn option_eq<const N: usize>(arg: &[u8], option: &[u8; N]) -> bool {
+    // Check only the expected name and its C-string terminator. A long suffix
+    // after NUL needs no scan or allocation.
+    (arg.len() == N || arg.get(N) == Some(&0)) && arg[..N].eq_ignore_ascii_case(option)
+}

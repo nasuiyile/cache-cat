@@ -1,6 +1,7 @@
 use crate::error::{CacheCatError, ProtocolError};
 use crate::mocha::{EntrySnapshot, ExpirePolicy, MochaOperation};
 use crate::protocol::command::{Client, Command};
+use crate::protocol::option_eq;
 use crate::protocol::raft_command::RaftCommand;
 use crate::raft::network::redis_server::RedisServer;
 use crate::raft::types::core::mocha::cas::{ComputedWrite, MultiReadComputeCommand};
@@ -40,25 +41,19 @@ pub enum BitOp {
 
 impl BitOp {
     fn parse(value: &[u8]) -> Result<Self, ProtocolError> {
-        if value.eq_ignore_ascii_case(b"AND") {
-            Ok(Self::And)
-        } else if value.eq_ignore_ascii_case(b"OR") {
-            Ok(Self::Or)
-        } else if value.eq_ignore_ascii_case(b"XOR") {
-            Ok(Self::Xor)
-        } else if value.eq_ignore_ascii_case(b"NOT") {
-            Ok(Self::Not)
-        } else if value.eq_ignore_ascii_case(b"DIFF") {
-            Ok(Self::Diff)
-        } else if value.eq_ignore_ascii_case(b"DIFF1") {
-            Ok(Self::Diff1)
-        } else if value.eq_ignore_ascii_case(b"ANDOR") {
-            Ok(Self::AndOr)
-        } else if value.eq_ignore_ascii_case(b"ONE") {
-            Ok(Self::One)
-        } else {
-            Err(ProtocolError::InvalidArgument("operation"))
-        }
+        // Redis compares operation names as C strings. Dispatch by the first
+        // byte so even NUL-suffixed names need only a few fixed-size checks.
+        Ok(match value.first() {
+            Some(b'a' | b'A') if option_eq(value, b"AND") => Self::And,
+            Some(b'a' | b'A') if option_eq(value, b"ANDOR") => Self::AndOr,
+            Some(b'o' | b'O') if option_eq(value, b"OR") => Self::Or,
+            Some(b'o' | b'O') if option_eq(value, b"ONE") => Self::One,
+            Some(b'x' | b'X') if option_eq(value, b"XOR") => Self::Xor,
+            Some(b'n' | b'N') if option_eq(value, b"NOT") => Self::Not,
+            Some(b'd' | b'D') if option_eq(value, b"DIFF") => Self::Diff,
+            Some(b'd' | b'D') if option_eq(value, b"DIFF1") => Self::Diff1,
+            _ => return Err(ProtocolError::SyntaxError),
+        })
     }
 
     fn as_str(self) -> &'static str {
@@ -106,6 +101,21 @@ impl BitOpCommand {
             .string_bytes_clone()
             .ok_or(ProtocolError::InvalidArgument("operation"))?;
         let operation = BitOp::parse(operation_bytes.as_ref())?;
+        // Validate operation-specific arity before collecting source keys.
+        match operation {
+            BitOp::Not if items.len() != 4 => {
+                return Err(ProtocolError::response(
+                    "ERR BITOP NOT must be called with a single source key.",
+                ));
+            }
+            BitOp::Diff | BitOp::Diff1 | BitOp::AndOr if items.len() < 5 => {
+                return Err(ProtocolError::response(format!(
+                    "ERR BITOP {} must be called with at least two source keys.",
+                    operation.as_str()
+                )));
+            }
+            _ => {}
+        }
         let key = items[2]
             .string_bytes_clone()
             .ok_or(ProtocolError::InvalidArgument("key"))?;
@@ -116,17 +126,6 @@ impl BitOpCommand {
             .collect::<Vec<_>>();
         if keys.len() != items.len() - 3 {
             return Err(ProtocolError::InvalidArgument("key"));
-        }
-
-        //
-        // Redis semantics:
-        //
-        // BITOP NOT dest src
-        //
-        // NOT is unary and accepts exactly one source key.
-        //
-        if operation == BitOp::Not && keys.len() != 1 {
-            return Err(ProtocolError::WrongArgCount("bitop"));
         }
 
         Ok(BitOpParams {
@@ -462,5 +461,91 @@ impl MultiReadComputeCommand for BitOpReq {
             }],
             Value::Integer(max_len as i64),
         )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn args(operation: &[u8], sources: usize) -> Vec<Value> {
+        let mut items = vec![
+            Value::BulkString(Some(Bytes::from_static(b"BITOP"))),
+            Value::BulkString(Some(Bytes::copy_from_slice(operation))),
+            Value::BulkString(Some(Bytes::from_static(b"dest"))),
+        ];
+        items.extend((0..sources).map(|_| Value::BulkString(Some(Bytes::from_static(b"src")))));
+        items
+    }
+
+    #[test]
+    fn source_count_errors_match_redis() {
+        for (operation, sources, expected) in [
+            (
+                "nOt",
+                2,
+                "-ERR BITOP NOT must be called with a single source key.\r\n",
+            ),
+            (
+                "diff",
+                1,
+                "-ERR BITOP DIFF must be called with at least two source keys.\r\n",
+            ),
+            (
+                "dIfF1",
+                1,
+                "-ERR BITOP DIFF1 must be called with at least two source keys.\r\n",
+            ),
+            (
+                "andor",
+                1,
+                "-ERR BITOP ANDOR must be called with at least two source keys.\r\n",
+            ),
+        ] {
+            let error = BitOpCommand
+                .raft_request(&args(operation.as_bytes(), sources))
+                .unwrap_err();
+            assert_eq!(Value::from(error).encode(), expected.as_bytes());
+        }
+
+        for operation in ["AND", "OR", "XOR", "NOT", "DIFF", "DIFF1", "ANDOR", "ONE"] {
+            assert_eq!(
+                BitOpCommand::parse(&args(operation.as_bytes(), 0)).unwrap_err(),
+                ProtocolError::WrongArgCount("bitop")
+            );
+        }
+    }
+
+    #[test]
+    fn valid_source_counts_and_binary_operation_names_are_accepted() {
+        for (name, operation, minimum_sources) in [
+            ("AND", BitOp::And, 1),
+            ("OR", BitOp::Or, 1),
+            ("XOR", BitOp::Xor, 1),
+            ("NOT", BitOp::Not, 1),
+            ("DIFF", BitOp::Diff, 2),
+            ("DIFF1", BitOp::Diff1, 2),
+            ("ANDOR", BitOp::AndOr, 2),
+            ("ONE", BitOp::One, 1),
+        ] {
+            let mut nul_suffixed = name.to_ascii_lowercase().into_bytes();
+            nul_suffixed.extend_from_slice(b"\0\xffsuffix");
+            for name in [name.as_bytes(), &nul_suffixed] {
+                let parsed = BitOpCommand::parse(&args(name, minimum_sources)).unwrap();
+                assert_eq!(parsed.operation, operation);
+                assert_eq!(parsed.keys.len(), minimum_sources);
+                if operation != BitOp::Not {
+                    assert!(BitOpCommand::parse(&args(name, minimum_sources + 1)).is_ok());
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn unknown_operation_returns_syntax_error() {
+        for operation in [b"".as_slice(), b"A", b"ANDX", b"DIFF2", b"AN\0D", b"\xff"] {
+            let error = BitOpCommand.raft_request(&args(operation, 2)).unwrap_err();
+            assert_eq!(Value::from(error).encode(), b"-ERR syntax error\r\n");
+        }
     }
 }

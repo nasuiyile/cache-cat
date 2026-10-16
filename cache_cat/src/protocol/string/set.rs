@@ -1,6 +1,7 @@
 use crate::error::{CacheCatError, ProtocolError};
 use crate::mocha::{EntrySnapshot, ExpirePolicy, MochaOperation};
 use crate::protocol::command::{Client, Command};
+use crate::protocol::option_eq;
 use crate::protocol::raft_command::RaftCommand;
 use crate::raft::network::redis_server::RedisServer;
 use crate::raft::types::core::mocha::cas::ComputeCommand;
@@ -68,13 +69,6 @@ impl Display for SetParams {
             String::from_utf8_lossy(&self.value)
         )
     }
-}
-
-#[inline]
-fn option_eq<const N: usize>(arg: &[u8], option: &[u8; N]) -> bool {
-    // Redis compares option names as C strings. Check only the expected name
-    // and its terminator; a long suffix after NUL needs no scan or allocation.
-    (arg.len() == N || arg.get(N) == Some(&0)) && arg[..N].eq_ignore_ascii_case(option)
 }
 
 impl SetParams {

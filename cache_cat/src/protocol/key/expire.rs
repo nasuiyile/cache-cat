@@ -132,9 +132,9 @@ impl ExpireParams {
             .string_bytes_clone()
             .ok_or(ProtocolError::InvalidArgument("key"))?;
 
-        let seconds = items[2].try_parse_canonical_i64()?;
-
+        // Redis validates the option set before parsing the timeout.
         let condition = parse_expire_conditions(items)?;
+        let seconds = items[2].try_parse_canonical_i64()?;
 
         Ok(ExpireParams {
             key,
@@ -150,10 +150,9 @@ pub struct ExpireCommand;
 impl RaftCommand for ExpireCommand {
     fn raft_request(&self, items: &[Value]) -> Result<Operation, ProtocolError> {
         let params = ExpireParams::parse(items)?;
-        // Redis treats non-positive timeouts as immediate deletion. Only a
-        // positive seconds value needs conversion to milliseconds, and only
-        // that conversion can overflow.
-        if params.seconds > 0 && params.seconds.checked_mul(1000).is_none() {
+        // Redis checks signed millisecond conversion before treating a
+        // non-positive timeout as immediate deletion or looking up the key.
+        if params.seconds.checked_mul(1000).is_none() {
             return Err(ProtocolError::response(
                 "ERR invalid expire time in 'expire' command",
             ));
@@ -250,13 +249,13 @@ impl ComputeCommand for ExpireReq {
 
 impl ExpireReq {
     pub(crate) fn checked_deadline(&self, write_clock: u64) -> Result<u64, ProtocolError> {
-        if self.expires_at <= 0 {
-            return Ok(0);
-        }
-        let milliseconds = (self.expires_at as u64).checked_mul(1000).ok_or_else(|| {
+        let milliseconds = self.expires_at.checked_mul(1000).ok_or_else(|| {
             ProtocolError::response("ERR invalid expire time in 'expire' command")
         })?;
-        checked_redis_deadline(write_clock, milliseconds)
+        if milliseconds <= 0 {
+            return Ok(0);
+        }
+        checked_redis_deadline(write_clock, milliseconds as u64)
             .ok_or_else(|| ProtocolError::response("ERR invalid expire time in 'expire' command"))
     }
 }
@@ -264,6 +263,7 @@ impl ExpireReq {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::protocol::key::pexpire::PExpireCommand;
     use crate::protocol::raft_command::RaftCommand;
     use crate::raft::types::core::value_object::ValueObject;
 
@@ -279,40 +279,89 @@ mod tests {
     }
 
     #[test]
-    fn minimum_negative_timeout_is_accepted_as_immediate_expiration() {
-        let args = [
-            Value::BulkString(Some("EXPIRE".into())),
-            Value::BulkString(Some("key".into())),
-            Value::BulkString(Some(i64::MIN.to_string().into())),
-        ];
-
-        let params = ExpireParams::parse(&args).expect("canonical integer");
-        assert_eq!(params.seconds, i64::MIN);
-        assert!(ExpireCommand.raft_request(&args).is_ok());
-    }
-
-    #[test]
-    fn negative_minimum_timeout_is_accepted_and_deletes_immediately() {
-        let args = [bulk("EXPIRE"), bulk("key"), bulk("-9223372036854775808")];
-        assert!(ExpireCommand.raft_request(&args).is_ok());
-
-        let (operation, reply) = ExpireReq {
-            key: Bytes::from_static(b"key"),
-            expires_at: i64::MIN,
-            condition: None,
+    fn valid_non_positive_timeouts_delete_immediately() {
+        for timeout in ["-9223372036854775", "-1", "0"] {
+            let args = [bulk("EXPIRE"), bulk("key"), bulk(timeout)];
+            assert!(ExpireCommand.raft_request(&args).is_ok());
+            let (operation, reply) = ExpireReq {
+                key: Bytes::from_static(b"key"),
+                expires_at: timeout.parse().unwrap(),
+                condition: None,
+            }
+            .mutate(entry(), 123);
+            assert!(matches!(operation, MochaOperation::Remove));
+            assert_eq!(reply.encode(), b":1\r\n");
         }
-        .mutate(entry(), 123);
-        assert!(matches!(operation, MochaOperation::Remove));
-        assert_eq!(reply.encode(), b":1\r\n");
     }
 
     #[test]
-    fn positive_seconds_overflow_is_rejected_before_replication() {
-        let args = [bulk("EXPIRE"), bulk("key"), bulk("9223372036854776")];
-        assert!(matches!(
-            ExpireCommand.raft_request(&args),
-            Err(ProtocolError::Response(_))
-        ));
+    fn signed_seconds_overflow_is_rejected_before_replication_and_mutation() {
+        for timeout in [
+            "-9223372036854775808",
+            "-9223372036854776",
+            "9223372036854776",
+            "9223372036854775807",
+        ] {
+            let args = [bulk("EXPIRE"), bulk("key"), bulk(timeout)];
+            let error = ExpireCommand.raft_request(&args).unwrap_err();
+            assert_eq!(
+                Value::from(error).encode(),
+                b"-ERR invalid expire time in 'expire' command\r\n"
+            );
+            let (operation, reply) = ExpireReq {
+                key: Bytes::from_static(b"key"),
+                expires_at: timeout.parse().unwrap(),
+                condition: None,
+            }
+            .mutate(entry(), 123);
+            assert!(matches!(operation, MochaOperation::Abort));
+            assert_eq!(
+                reply.encode(),
+                b"-ERR invalid expire time in 'expire' command\r\n"
+            );
+        }
+    }
+
+    #[test]
+    fn repeated_condition_flags_are_accepted() {
+        for (name, command) in [
+            ("EXPIRE", &ExpireCommand as &dyn RaftCommand),
+            ("PEXPIRE", &PExpireCommand),
+        ] {
+            for flag in ["NX", "XX", "GT", "LT"] {
+                let args = [bulk(name), bulk("key"), bulk("10"), bulk(flag), bulk(flag)];
+                assert!(command.raft_request(&args).is_ok());
+            }
+        }
+    }
+
+    #[test]
+    fn option_errors_precede_invalid_or_overflowing_timeouts() {
+        for (name, command) in [
+            ("EXPIRE", &ExpireCommand as &dyn RaftCommand),
+            ("PEXPIRE", &PExpireCommand),
+        ] {
+            for timeout in ["invalid", "-9223372036854775808", "9223372036854775808"] {
+                for (flags, expected) in [
+                    (vec!["INVALID"], "ERR Unsupported option INVALID"),
+                    (
+                        vec!["NX", "XX"],
+                        "ERR NX and XX, GT or LT options at the same time are not compatible",
+                    ),
+                    (
+                        vec!["GT", "LT"],
+                        "ERR GT and LT options at the same time are not compatible",
+                    ),
+                ] {
+                    let mut args = vec![bulk(name), bulk("key"), bulk(timeout)];
+                    args.extend(flags.into_iter().map(bulk));
+                    assert_eq!(
+                        command.raft_request(&args).unwrap_err(),
+                        ProtocolError::response(expected)
+                    );
+                }
+            }
+        }
     }
 
     #[test]

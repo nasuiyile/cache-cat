@@ -15,8 +15,8 @@ impl Command for MultiCommand {
         items: &[Value],
         _server: &RedisServer,
     ) -> Result<Value, CacheCatError> {
-        if items.len() >= 2 {
-            return Err(ProtocolError::WrongArgCount("MULTI").into());
+        if items.len() != 1 {
+            return Err(ProtocolError::WrongArgCount("multi").into());
         }
         // If it has already been opened
         if client.transaction_queue.is_some() {

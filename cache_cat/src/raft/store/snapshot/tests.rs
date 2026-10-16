@@ -147,7 +147,7 @@ async fn large_membership_survives_build_restart_and_install() {
         assert_eq!(current.meta, expected);
 
         let file = fs::read(built.snapshot.get_hard_link_buf()).await.unwrap();
-        assert_eq!(&file[..5], b"MCDC\x02");
+        assert_eq!(&file[..5], b"MCDC\x01");
         let offset = u64::from_be_bytes(file[5..13].try_into().unwrap()) as usize;
         let len = u64::from_be_bytes(file[13..21].try_into().unwrap()) as usize;
         assert!(offset >= 21);

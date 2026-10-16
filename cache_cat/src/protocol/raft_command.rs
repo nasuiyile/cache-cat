@@ -244,6 +244,9 @@ impl RaftCommandFactory {
     }
 
     pub fn parse_request(&self, items: &[Value]) -> Result<Operation, ProtocolError> {
+        if items.is_empty() {
+            return Err(ProtocolError::InvalidArgument("command"));
+        }
         let cmd_name = match &items[0] {
             Value::BulkString(Some(data)) => String::from_utf8_lossy(data).to_ascii_uppercase(),
             Value::SimpleString(s) => s.to_ascii_uppercase(),
@@ -269,6 +272,14 @@ impl RaftCommandFactory {
 mod tests {
     use super::*;
     use crate::raft::types::entry::base_operation::BaseOperation;
+
+    #[test]
+    fn lua_factory_rejects_empty_commands_without_panicking() {
+        assert!(matches!(
+            RaftCommandFactory::init_lua().parse_request(&[]),
+            Err(ProtocolError::InvalidArgument("command"))
+        ));
+    }
 
     #[test]
     fn lua_command_names_use_ascii_case_insensitivity() {

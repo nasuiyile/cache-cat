@@ -22,6 +22,7 @@ use crate::protocol::connection::echo::EchoCommand;
 use crate::protocol::connection::hello::HelloCommand;
 use crate::protocol::connection::ping::PingCommand;
 use crate::protocol::connection::quit::QuitCommand;
+use crate::protocol::connection::reset::ResetCommand;
 use crate::protocol::connection::select::SelectCommand;
 use crate::protocol::hash::hdel::HDelCommand;
 use crate::protocol::hash::hexists::HExistsCommand;
@@ -323,6 +324,7 @@ impl CommandFactory {
         factory.register("TIME", TimeCommand);
         factory.register("SELECT", SelectCommand);
         factory.register("QUIT", QuitCommand);
+        factory.register("RESET", ResetCommand);
         factory.register("AUTH", AuthCommand);
         factory.register("CLIENT", ClientCommand::new());
         factory.register("HELLO", HelloCommand);
@@ -480,13 +482,12 @@ impl CommandFactory {
         }
     }
 
-    /// Commands that are always allowed while a client is in subscribe mode.
-    const SUBSCRIBE_MODE_COMMANDS: [&'static str; 7] = [
+    /// Commands that still need the subscription handler in RESP3 mode.
+    const SUBSCRIBE_MODE_COMMANDS: [&'static str; 6] = [
         "SUBSCRIBE",
         "UNSUBSCRIBE",
         "PSUBSCRIBE",
         "PUNSUBSCRIBE",
-        "PING",
         "QUIT",
         "RESET",
     ];
@@ -530,9 +531,16 @@ impl CommandFactory {
             return Ok(resp);
         }
 
-        block_cmd
+        match block_cmd
             .execute_during_block(client, &parsed, server)
             .await
+        {
+            Ok(reply) => Ok(reply),
+            Err(error) => {
+                Self::mark_transaction_error(client, &parsed);
+                Ok(Value::from(error))
+            }
+        }
     }
 
     /// Process the blocking command subscription stream
@@ -569,6 +577,7 @@ impl CommandFactory {
                                 }
                             };
 
+                            let previous_proto = client.framed.codec().proto_version();
                             let resp = self.handle_command_in_blocking_context(
                                 parsed,
                                 client,
@@ -577,9 +586,21 @@ impl CommandFactory {
                             ).await?;
                             if stream.is_closed() {
                                 // Deliver queued messages before the final unsubscribe
-                                // reply, then leave this loop before a new SUBSCRIBE.
+                                // or RESET reply. RESET changes the protocol, but
+                                // messages already queued belong to the old one.
+                                let reply_proto = client.framed.codec().proto_version();
+                                if previous_proto == 3 {
+                                    client.framed.codec_mut().switch_resp3();
+                                } else {
+                                    client.framed.codec_mut().switch_resp2();
+                                }
                                 while let Some(value) = stream.recv().await {
                                     client.framed.send(value).await?;
+                                }
+                                if reply_proto == 3 {
+                                    client.framed.codec_mut().switch_resp3();
+                                } else {
+                                    client.framed.codec_mut().switch_resp2();
                                 }
                             }
                             client.framed.send(resp).await?;
@@ -640,7 +661,9 @@ impl CommandFactory {
             }
         };
         client.last_cmd = parsed.name.clone();
-        if !client.authenticated && !matches!(parsed.name.as_str(), "AUTH" | "HELLO" | "QUIT") {
+        if !client.authenticated
+            && !matches!(parsed.name.as_str(), "AUTH" | "HELLO" | "QUIT" | "RESET")
+        {
             client
                 .framed
                 .send(Value::from(ProtocolError::NotAuthenticated))
@@ -692,7 +715,6 @@ impl CommandFactory {
     }
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -700,10 +722,340 @@ mod tests {
     use crate::node::parsed_config::ParsedConfig;
     use crate::node::raft_node::RaftNode;
     use crate::raft::store::statemachine::SnapshotState;
+    use bytes::Bytes;
     use std::time::Duration;
     use tokio::net::{TcpListener, TcpStream};
     use tokio::sync::broadcast;
     use tokio::time::timeout;
+
+    async fn reset_test_connection(
+        password: Option<&str>,
+    ) -> (
+        tempfile::TempDir,
+        RaftNode,
+        RedisServer,
+        Client,
+        Framed<TcpStream, RespCodec>,
+    ) {
+        let dir = tempfile::tempdir().unwrap();
+        let mut config = Config::default();
+        config.raft.log_path = dir.path().to_str().unwrap().to_owned();
+        config.raft.address = "127.0.0.1:0".into();
+        config.redis.databases = 2;
+        config.redis.requirepass = password.map(str::to_owned);
+        let config = ParsedConfig::from(&config).unwrap();
+        let (shutdown_tx, _) = broadcast::channel(1);
+        let node = RaftNode::create(config, shutdown_tx).await.unwrap();
+        let server =
+            RedisServer::new(node.app.clone(), "127.0.0.1:0".into(), &node.app.config).unwrap();
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let socket = TcpStream::connect(listener.local_addr().unwrap())
+            .await
+            .unwrap();
+        let (connection, _) = listener.accept().await.unwrap();
+        let client = Client::new(1, connection, true);
+        (
+            dir,
+            node,
+            server,
+            client,
+            Framed::new(socket, RespCodec::new()),
+        )
+    }
+
+    fn test_request(parts: &[&str]) -> Value {
+        Value::Array(Some(
+            parts
+                .iter()
+                .map(|part| Value::BulkString(Some(Bytes::copy_from_slice(part.as_bytes()))))
+                .collect(),
+        ))
+    }
+
+    async fn test_reply(replies: &mut Framed<TcpStream, RespCodec>) -> Value {
+        timeout(Duration::from_secs(2), replies.next())
+            .await
+            .expect("command reply timed out")
+            .expect("connection closed before its reply")
+            .unwrap()
+    }
+
+    #[tokio::test]
+    async fn reset_restores_connection_state_and_preserves_library_metadata() {
+        for password in [None, Some("secret")] {
+            let (_dir, node, server, mut client, mut replies) =
+                reset_test_connection(password).await;
+            client.db_number = 1;
+            client.name = "worker".into();
+            client.lib_name = "redis-test".into();
+            client.lib_ver = "1.2.3".into();
+            client.framed.codec_mut().switch_resp3();
+            client.transaction_queue = Some(TransactionQueue::new(1));
+            client.transaction_failed = true;
+            client.flag.multi = true;
+            client.flag.blocking = true;
+            client.flag.in_sub = true;
+            let (_, receiver) = server
+                .broadcast
+                .subscribe(vec![Bytes::from_static(b"updates")], client.id)
+                .await;
+            let mut receiver = receiver.unwrap();
+            server
+                .broadcast
+                .psubscribe(vec![Bytes::from_static(b"updates*")], client.id)
+                .await;
+
+            let invalid =
+                CommandFactory::parse_command(&test_request(&["RESET", "extra"])).unwrap();
+            let error = ResetCommand
+                .execute(&mut client, &invalid.items, &server)
+                .await
+                .unwrap_err();
+            assert_eq!(
+                Value::from(error).encode(),
+                b"-ERR wrong number of arguments for 'reset' command\r\n"
+            );
+            assert_eq!(client.db_number, 1);
+            assert_eq!(client.name, "worker");
+            assert!(client.transaction_queue.is_some());
+            assert!(client.authenticated);
+            assert_eq!(client.framed.codec().proto_version(), 3);
+            assert_eq!(
+                server.broadcast.client_subscription_count(client.id).await,
+                1
+            );
+            assert_eq!(server.broadcast.client_pattern_count(client.id).await, 1);
+
+            server
+                .cmd_factory
+                .execute_command(&mut client, &server, test_request(&["RESET"]))
+                .await
+                .unwrap();
+            assert_eq!(test_reply(&mut replies).await.encode(), b"+RESET\r\n");
+            assert_eq!(client.db_number, 0);
+            assert!(client.name.is_empty());
+            assert_eq!(client.lib_name, "redis-test");
+            assert_eq!(client.lib_ver, "1.2.3");
+            assert!(client.transaction_queue.is_none());
+            assert!(!client.transaction_failed);
+            assert!(!client.flag.multi && !client.flag.in_sub && !client.flag.blocking);
+            assert_eq!(client.authenticated, password.is_none());
+            assert_eq!(client.framed.codec().proto_version(), 2);
+            assert_eq!(
+                server.broadcast.client_subscription_count(client.id).await,
+                0
+            );
+            assert_eq!(server.broadcast.client_pattern_count(client.id).await, 0);
+            assert!(
+                timeout(Duration::from_secs(2), receiver.recv())
+                    .await
+                    .unwrap()
+                    .is_none()
+            );
+
+            // RESET itself remains usable after resetting a password-protected
+            // connection to its unauthenticated default state.
+            server
+                .cmd_factory
+                .execute_command(&mut client, &server, test_request(&["RESET"]))
+                .await
+                .unwrap();
+            assert_eq!(test_reply(&mut replies).await.encode(), b"+RESET\r\n");
+            server
+                .cmd_factory
+                .execute_command(&mut client, &server, test_request(&["PING"]))
+                .await
+                .unwrap();
+            let expected = if password.is_some() {
+                b"-NOAUTH Authentication required.\r\n".as_slice()
+            } else {
+                b"+PONG\r\n".as_slice()
+            };
+            assert_eq!(test_reply(&mut replies).await.encode(), expected);
+            node.app.cluster.shutdown().await.unwrap();
+        }
+    }
+
+    #[tokio::test]
+    async fn subscription_argument_errors_keep_the_connection_and_dirty_multi() {
+        for (proto, initial) in [
+            (2, "SUBSCRIBE"),
+            (2, "PSUBSCRIBE"),
+            (3, "SUBSCRIBE"),
+            (3, "PSUBSCRIBE"),
+        ] {
+            let (_dir, node, server, mut client, mut replies) = reset_test_connection(None).await;
+            if proto == 3 {
+                client.framed.codec_mut().switch_resp3();
+                replies.codec_mut().switch_resp3();
+            }
+            let handler_server = server.clone();
+            let handler = tokio::spawn(async move {
+                handler_server
+                    .cmd_factory
+                    .process_connection(&handler_server, client)
+                    .await
+            });
+            replies
+                .send(test_request(&[initial, "updates"]))
+                .await
+                .unwrap();
+            let initial_reply = test_reply(&mut replies).await;
+            assert_eq!(matches!(initial_reply, Value::Push(_)), proto == 3);
+
+            for (parts, command) in [
+                (vec!["SUBSCRIBE"], "subscribe"),
+                (vec!["PSUBSCRIBE"], "psubscribe"),
+                (vec!["PING", "one", "two"], "ping"),
+                (vec!["QUIT", "extra"], "quit"),
+                (vec!["RESET", "extra"], "reset"),
+            ] {
+                replies.send(test_request(&parts)).await.unwrap();
+                assert_eq!(
+                    test_reply(&mut replies).await.encode(),
+                    format!("-ERR wrong number of arguments for '{command}' command\r\n")
+                        .as_bytes()
+                );
+                replies.send(test_request(&["PING"])).await.unwrap();
+                let expected = if proto == 3 {
+                    b"+PONG\r\n".as_slice()
+                } else {
+                    b"*2\r\n$4\r\npong\r\n$0\r\n\r\n".as_slice()
+                };
+                assert_eq!(test_reply(&mut replies).await.encode(), expected);
+            }
+
+            if proto == 3 {
+                replies.send(test_request(&["MULTI"])).await.unwrap();
+                assert_eq!(test_reply(&mut replies).await.encode(), b"+OK\r\n");
+                for parts in [vec!["PING"], vec!["PING", "message"]] {
+                    replies.send(test_request(&parts)).await.unwrap();
+                    assert_eq!(test_reply(&mut replies).await.encode(), b"+QUEUED\r\n");
+                }
+                replies.send(test_request(&["DISCARD"])).await.unwrap();
+                assert_eq!(test_reply(&mut replies).await.encode(), b"+OK\r\n");
+
+                replies.send(test_request(&["MULTI"])).await.unwrap();
+                assert_eq!(test_reply(&mut replies).await.encode(), b"+OK\r\n");
+                replies
+                    .send(test_request(&["PING", "one", "two"]))
+                    .await
+                    .unwrap();
+                assert_eq!(
+                    test_reply(&mut replies).await.encode(),
+                    b"-ERR wrong number of arguments for 'ping' command\r\n"
+                );
+                replies.send(test_request(&["EXEC"])).await.unwrap();
+                assert_eq!(
+                    test_reply(&mut replies).await.encode(),
+                    b"-EXECABORT Transaction discarded because of previous errors.\r\n"
+                );
+            }
+            replies.send(test_request(&["RESET"])).await.unwrap();
+            assert_eq!(test_reply(&mut replies).await.encode(), b"+RESET\r\n");
+            replies.send(test_request(&["PING"])).await.unwrap();
+            assert_eq!(test_reply(&mut replies).await.encode(), b"+PONG\r\n");
+            drop(replies);
+            timeout(Duration::from_secs(2), handler)
+                .await
+                .unwrap()
+                .unwrap()
+                .unwrap();
+            node.app.cluster.shutdown().await.unwrap();
+        }
+    }
+
+    #[tokio::test]
+    async fn reset_drains_pending_resp3_pushes_before_the_resp2_reply() {
+        // Enqueue messages while RESET is being handled, so the regression
+        // cannot pass merely because select! happened to read the queue first.
+        struct PublishBeforeReset;
+        #[async_trait::async_trait]
+        impl BlockCommand for PublishBeforeReset {
+            async fn execute(
+                &self,
+                client: &mut Client,
+                items: &[Value],
+                server: &RedisServer,
+            ) -> Result<(Value, mpsc::UnboundedReceiver<Value>), CacheCatError> {
+                SubscribeCommand.execute(client, items, server).await
+            }
+            async fn execute_during_block(
+                &self,
+                client: &mut Client,
+                cmd: &ParsedCommand,
+                server: &RedisServer,
+            ) -> Result<Value, CacheCatError> {
+                assert_eq!(cmd.name, "RESET");
+                for payload in [b"first".as_slice(), b"second".as_slice()] {
+                    server
+                        .broadcast
+                        .publish(
+                            Bytes::from_static(b"updates"),
+                            Bytes::copy_from_slice(payload),
+                        )
+                        .await;
+                }
+                SubscribeCommand
+                    .execute_during_block(client, cmd, server)
+                    .await
+            }
+        }
+
+        let (_dir, node, server, mut client, mut replies) = reset_test_connection(None).await;
+        client.framed.codec_mut().switch_resp3();
+        client.flag.blocking = true;
+        let subscribe =
+            CommandFactory::parse_command(&test_request(&["SUBSCRIBE", "updates"])).unwrap();
+        let (initial, receiver) = SubscribeCommand
+            .execute(&mut client, &subscribe.items, &server)
+            .await
+            .unwrap();
+        replies.send(test_request(&["RESET"])).await.unwrap();
+        timeout(
+            Duration::from_secs(2),
+            server.cmd_factory.process_blocking_stream(
+                &mut client,
+                &server,
+                &PublishBeforeReset,
+                initial,
+                receiver,
+            ),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+
+        assert!(matches!(test_reply(&mut replies).await, Value::Push(_)));
+        for payload in ["first", "second"] {
+            let reply = test_reply(&mut replies).await;
+            assert!(
+                matches!(&reply, Value::Push(_)),
+                "queued message was re-encoded as RESP2: {reply:?}"
+            );
+            assert_eq!(
+                reply.encode_proto(3),
+                format!(
+                    ">3\r\n$7\r\nmessage\r\n$7\r\nupdates\r\n${}\r\n{payload}\r\n",
+                    payload.len()
+                )
+                .as_bytes()
+            );
+        }
+        assert_eq!(test_reply(&mut replies).await.encode(), b"+RESET\r\n");
+        assert_eq!(client.framed.codec().proto_version(), 2);
+        assert!(!client.flag.in_sub);
+        server
+            .cmd_factory
+            .execute_command(&mut client, &server, test_request(&["HELLO"]))
+            .await
+            .unwrap();
+        assert!(matches!(
+            test_reply(&mut replies).await,
+            Value::Array(Some(_))
+        ));
+        node.app.cluster.shutdown().await.unwrap();
+    }
 
     #[test]
     fn command_names_use_ascii_case_insensitivity() {
@@ -867,6 +1219,10 @@ mod tests {
             (
                 &["PUBSUB", "CHANNELS", "*", "extra"],
                 b"-ERR unknown subcommand or wrong number of arguments for 'CHANNELS'. Try PUBSUB HELP.\r\n",
+            ),
+            (
+                &["SENTINEL", "MASTERS", "extra"],
+                b"-ERR wrong number of arguments for 'sentinel|masters' command\r\n",
             ),
             (&["BGSAVE", "invalid"], b"-ERR syntax error\r\n"),
             (&["BGSAVE", "SCHEDULE", "extra"], b"-ERR syntax error\r\n"),

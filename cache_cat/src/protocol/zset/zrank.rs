@@ -1,6 +1,7 @@
 use crate::error::{CacheCatError, ProtocolError};
 use crate::mocha::EntrySnapshot;
 use crate::protocol::command::{Client, Command};
+use crate::protocol::option_eq;
 use crate::protocol::raft_command::{RaftCommand, ReadRaftCommand};
 use crate::raft::network::redis_server::RedisServer;
 use crate::raft::types::core::mocha::core::MyValue;
@@ -21,6 +22,8 @@ pub struct ZRankCommand;
 pub struct ZRankParams {
     pub key: Bytes,
     pub member: Bytes,
+    /// Redis 7.2+: return the member score together with its rank.
+    pub with_score: bool,
 }
 
 impl ReadCommand for ZRankParams {
@@ -29,9 +32,14 @@ impl ReadCommand for ZRankParams {
     }
 
     fn execute(&self, value: Option<EntrySnapshot<MyValue>>) -> Value {
+        let missing = if self.with_score {
+            Value::Array(None)
+        } else {
+            Value::BulkString(None)
+        };
         match value {
             // key 不存在
-            None => Value::BulkString(None),
+            None => missing,
 
             Some(v) => {
                 match v.value.data {
@@ -40,10 +48,17 @@ impl ReadCommand for ZRankParams {
 
                         match zset.zrank(&self.member) {
                             // member存在
+                            Some(rank) if self.with_score => match zset.zscore(&self.member) {
+                                Some(score) => Value::Array(Some(vec![
+                                    Value::Integer(rank),
+                                    Value::Double(score),
+                                ])),
+                                None => missing,
+                            },
                             Some(rank) => Value::Integer(rank),
 
                             // member不存在
-                            None => Value::BulkString(None),
+                            None => missing,
                         }
                     }
 
@@ -59,9 +74,10 @@ impl Display for ZRankParams {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(
             f,
-            "ZRankParams {{ key: {}, member: {} }}",
+            "ZRankParams {{ key: {}, member: {}, with_score: {} }}",
             String::from_utf8_lossy(&self.key),
-            String::from_utf8_lossy(&self.member)
+            String::from_utf8_lossy(&self.member),
+            self.with_score
         )
     }
 }
@@ -69,7 +85,7 @@ impl Display for ZRankParams {
 impl ZRankCommand {
     fn parse_args(items: &[Value]) -> Result<ZRankParams, ProtocolError> {
         // ZRANK key member
-        if items.len() != 3 {
+        if !(3..=4).contains(&items.len()) {
             return Err(ProtocolError::WrongArgCount("zrank"));
         }
 
@@ -81,7 +97,24 @@ impl ZRankCommand {
             .string_bytes_clone()
             .ok_or(ProtocolError::InvalidArgument("member"))?;
 
-        Ok(ZRankParams { key, member })
+        let with_score = if items.len() == 4 {
+            let option = items[3]
+                .string_bytes_clone()
+                .ok_or(ProtocolError::SyntaxError)?;
+            if option_eq(&option, b"WITHSCORE") {
+                true
+            } else {
+                return Err(ProtocolError::SyntaxError);
+            }
+        } else {
+            false
+        };
+
+        Ok(ZRankParams {
+            key,
+            member,
+            with_score,
+        })
     }
 }
 

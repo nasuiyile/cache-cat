@@ -59,8 +59,8 @@ impl Command for ExecCommand {
         items: &[Value],
         server: &RedisServer,
     ) -> Result<Value, CacheCatError> {
-        if items.len() >= 2 {
-            return Err(ProtocolError::WrongArgCount("EXEC").into());
+        if items.len() != 1 {
+            return Err(ProtocolError::WrongArgCount("exec").into());
         }
         // If no transaction has been initiated
         let queue = client

@@ -15,8 +15,8 @@ impl Command for DiscardCommand {
         _server: &RedisServer,
     ) -> Result<Value, CacheCatError> {
         // DISCARD does not accept additional parameters
-        if items.len() >= 2 {
-            return Err(ProtocolError::WrongArgCount("DISCARD").into());
+        if items.len() != 1 {
+            return Err(ProtocolError::WrongArgCount("discard").into());
         }
 
         // MULTI must be enabled first

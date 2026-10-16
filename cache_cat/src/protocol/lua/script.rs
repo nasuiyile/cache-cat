@@ -86,7 +86,7 @@ impl ScriptParam {
         let sub_cmd = items[1]
             .as_str_lossy()
             .ok_or(ProtocolError::InvalidArgument("script subcommand"))?
-            .to_uppercase();
+            .to_ascii_uppercase();
 
         match sub_cmd.as_str() {
             "LOAD" => {
@@ -117,7 +117,7 @@ impl ScriptParam {
                     return Err(ProtocolError::WrongArgCount("script|flush"));
                 }
                 if items.len() == 3 {
-                    let mode_str = string_from_value(&items[2], "flush mode")?.to_uppercase();
+                    let mode_str = string_from_value(&items[2], "flush mode")?.to_ascii_uppercase();
                     flush_mode = match mode_str.as_str() {
                         "ASYNC" => FlushMode::Async,
                         "SYNC" => FlushMode::Sync,
@@ -138,7 +138,7 @@ impl ScriptParam {
                 if items.len() != 3 {
                     return Err(ProtocolError::WrongArgCount("script|debug"));
                 }
-                let mode_str = string_from_value(&items[2], "debug mode")?.to_uppercase();
+                let mode_str = string_from_value(&items[2], "debug mode")?.to_ascii_uppercase();
                 let mode = match mode_str.as_str() {
                     "YES" => ScriptDebugMode::Yes,
                     "SYNC" => ScriptDebugMode::Sync,
@@ -226,12 +226,43 @@ mod tests {
             Err(ProtocolError::WrongArgCount("script|exists"))
         ));
     }
+
+    #[test]
+    fn script_hashes_accept_binary_input_and_options_use_ascii_case() {
+        let binary_hash = Value::BulkString(Some(Bytes::from_static(b"\xff\xfe")));
+        let params = ScriptParam::parse(&[
+            Value::SimpleString("SCRIPT".into()),
+            Value::SimpleString("eXiStS".into()),
+            binary_hash,
+        ])
+        .unwrap();
+        let ScriptParam::Exists(params) = params else {
+            panic!("expected SCRIPT EXISTS");
+        };
+        assert_eq!(params.sha1s.len(), 1);
+        assert!(!params.sha1s[0].is_ascii());
+        for parts in [
+            vec!["SCRIPT", "EXIſTS", "sha"],
+            vec!["SCRIPT", "FLUSH", "ſYNC"],
+            vec!["SCRIPT", "DEBUG", "YEſ"],
+        ] {
+            let items = parts
+                .iter()
+                .map(|part| Value::SimpleString((*part).into()))
+                .collect::<Vec<_>>();
+            assert!(ScriptParam::parse(&items).is_err(), "{parts:?}");
+        }
+    }
 }
 
 /// Auxiliary function: Extract string from Value
 fn string_from_value(value: &Value, _context: &str) -> Result<String, ProtocolError> {
     match value {
-        Value::BulkString(Some(data)) => str::from_utf8(data).map(ToString::to_string).ok(),
+        // RESP bulk strings are arbitrary bytes.  Script hashes and option
+        // names are compared as text, so invalid UTF-8 simply cannot match a
+        // cached SHA or a known option; it must not turn into a protocol type
+        // error before the command can return the normal `0`/syntax result.
+        Value::BulkString(Some(data)) => Some(String::from_utf8_lossy(data).into_owned()),
         Value::SimpleString(s) => Some(s.clone()),
         _ => None,
     }

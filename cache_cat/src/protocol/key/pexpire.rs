@@ -40,9 +40,9 @@ impl PExpireParams {
             .string_bytes_clone()
             .ok_or(ProtocolError::InvalidArgument("key"))?;
 
-        let milliseconds = items[2].try_parse_canonical_i64()?;
-
+        // Redis validates the option set before parsing the timeout.
         let condition = parse_expire_conditions(items)?;
+        let milliseconds = items[2].try_parse_canonical_i64()?;
 
         Ok(PExpireParams {
             key,
