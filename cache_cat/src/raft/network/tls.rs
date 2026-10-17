@@ -195,6 +195,11 @@ impl TlsContext {
             (Some(cert), Some(key)) => (cert, key),
 
             (None, None) => {
+                if config.tls_port.is_some() || config.tls_replication {
+                    return Err(TlsError::InvalidConfig(
+                        "TLS is enabled but tls-cert-file and tls-key-file are missing".into(),
+                    ));
+                }
                 return Ok(Self {
                     server: None,
                     client: None,
@@ -210,17 +215,27 @@ impl TlsContext {
         };
 
         let server = load_tls_config(cert_file, key_file, config)?;
-        let client = load_client_tls_config(cert_file, key_file, config)?;
+        // A client configuration is only needed for Raft replication.  Redis
+        // client TLS uses the server configuration above; requiring a CA and
+        // client certificate in that mode would reject valid one-way TLS
+        // configurations before the server can start.
+        let client = if config.tls_replication {
+            Some(load_client_tls_config(cert_file, key_file, config)?)
+        } else {
+            None
+        };
 
         Ok(Self {
             server: Some(server),
-            client: Some(client),
+            client,
             tls_replication: config.tls_replication,
         })
     }
 
     pub fn is_enabled(&self) -> bool {
-        self.server.is_some() && self.client.is_some()
+        // Redis TLS only needs a server configuration.  The client
+        // configuration is optional and is built only for Raft replication.
+        self.server.is_some()
     }
 
     pub fn server_config(&self) -> Option<Arc<ServerConfig>> {
@@ -253,5 +268,52 @@ impl TlsContext {
         self.client
             .as_ref()
             .map(|cfg| TlsConnector::from(Arc::clone(cfg)))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::TlsContext;
+    use crate::cfg::config::Config;
+    use crate::node::parsed_config::ParsedConfig;
+
+    fn parsed_config(tls_port: Option<u32>, tls_replication: bool) -> ParsedConfig {
+        let mut config = Config::default();
+        config.redis.tls_port = tls_port;
+        config.tls.tls_replication = Some(tls_replication);
+        ParsedConfig::from(&config).expect("default configuration should parse")
+    }
+
+    #[test]
+    fn redis_tls_requires_server_identity() {
+        let config = parsed_config(Some(6479), false);
+        let error = match TlsContext::load(&config) {
+            Ok(_) => panic!("TLS listener without cert must fail"),
+            Err(error) => error,
+        };
+
+        assert!(error.to_string().contains("tls-cert-file and tls-key-file"));
+    }
+
+    #[test]
+    fn replication_tls_requires_server_identity() {
+        let config = parsed_config(None, true);
+        let error = match TlsContext::load(&config) {
+            Ok(_) => panic!("TLS replication without cert must fail"),
+            Err(error) => error,
+        };
+
+        assert!(error.to_string().contains("tls-cert-file and tls-key-file"));
+    }
+
+    #[test]
+    fn tls_disabled_without_identity_is_allowed() {
+        let config = parsed_config(None, false);
+        let context = TlsContext::load(&config).expect("TLS disabled should not need certs");
+
+        assert!(!context.is_enabled());
+        assert!(context.acceptor_for_client().is_none());
+        assert!(context.client_config().is_none());
+        assert!(context.connector_for_cluster().is_none());
     }
 }

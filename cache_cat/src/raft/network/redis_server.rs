@@ -214,6 +214,10 @@ impl RedisServer {
                                 client_id += 1;
                                 let id = client_id;
 
+                                if let Err(e) = stream.set_nodelay(true) {
+                                    error!("Failed to set nodelay for TLS client {}: {}", peer_addr, e);
+                                }
+
                                 tokio::spawn(async move {
                                     // 执行 TLS 握手
                                     match acceptor.accept(stream).await {
