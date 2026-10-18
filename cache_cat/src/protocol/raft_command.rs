@@ -18,6 +18,7 @@ use crate::protocol::hash::hexists::HExistsCommand;
 use crate::protocol::hash::hget::HGetCommand;
 use crate::protocol::hash::hgetall::HGetAllCommand;
 use crate::protocol::hash::hincrby::HIncrByCommand;
+use crate::protocol::hash::hincrbyfloat::HIncrByFloatCommand;
 use crate::protocol::hash::hkeys::HKeysCommand;
 use crate::protocol::hash::hlen::HLenCommand;
 use crate::protocol::hash::hmget::HMGetCommand;
@@ -166,6 +167,7 @@ impl RaftCommandFactory {
         factory.register("ZRANGEBYSCORE", ZRangeByScoreCommand);
         factory.register("SADD", SAddCommand);
         factory.register("HINCRBY", HIncrByCommand);
+        factory.register("HINCRBYFLOAT", HIncrByFloatCommand);
         factory.register("EXISTS", ExistsCommand);
         factory.register("PERSIST", PersistCommand);
         factory.register("RENAME", RenameCommand);

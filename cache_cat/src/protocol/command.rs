@@ -29,6 +29,7 @@ use crate::protocol::hash::hexists::HExistsCommand;
 use crate::protocol::hash::hget::HGetCommand;
 use crate::protocol::hash::hgetall::HGetAllCommand;
 use crate::protocol::hash::hincrby::HIncrByCommand;
+use crate::protocol::hash::hincrbyfloat::HIncrByFloatCommand;
 use crate::protocol::hash::hkeys::HKeysCommand;
 use crate::protocol::hash::hlen::HLenCommand;
 use crate::protocol::hash::hmget::HMGetCommand;
@@ -378,6 +379,7 @@ impl CommandFactory {
         factory.register("HSET", HSetCommand);
         factory.register("HGET", HGetCommand);
         factory.register("HINCRBY", HIncrByCommand);
+        factory.register("HINCRBYFLOAT", HIncrByFloatCommand);
         factory.register("HMGET", HMGetCommand);
         factory.register("HMSET", HMSetCommand);
         factory.register("HDEL", HDelCommand);

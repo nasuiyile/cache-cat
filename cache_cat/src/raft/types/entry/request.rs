@@ -161,6 +161,7 @@ impl fmt::Display for Request {
                 BaseOperation::ZAdd(req) => write!(f, "ZAdd: {}", req),
                 BaseOperation::SAdd(req) => write!(f, "SAdd: {}", req),
                 BaseOperation::HIncr(req) => write!(f, "HIncr: {}", req),
+                BaseOperation::HIncrByFloat(req) => write!(f, "HIncrByFloat: {}", req),
                 BaseOperation::Persist(req) => write!(f, "Persist: {}", req),
                 BaseOperation::Insert(insert) => write!(f, "Insert: {}", insert),
                 BaseOperation::HDel(req) => write!(f, "HDel: {}", req),

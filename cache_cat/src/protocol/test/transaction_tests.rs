@@ -474,6 +474,113 @@ async fn zcount_dispatches_in_transactions_and_lua() {
 }
 
 #[tokio::test]
+async fn hincrbyfloat_dispatches_bulk_replies_and_runtime_errors_in_exec_and_lua() {
+    let (_dir, node, server, mut client, mut replies) = test_connection().await;
+    initialize_single_node(&node).await;
+    assert_eq!(
+        round_trip(
+            &server,
+            &mut client,
+            &mut replies,
+            &["HiNcRbYfLoAt", "hash", "field", "0.1"],
+        )
+        .await
+        .encode(),
+        b"$3\r\n0.1\r\n"
+    );
+    queue_transaction(
+        &server,
+        &mut client,
+        &mut replies,
+        &[
+            &["HINCRBYFLOAT", "hash", "field", "0.2"],
+            &["HINCRBYFLOAT", "hash", "field", "invalid"],
+            &["SET", "string", "text"],
+            &["HINCRBYFLOAT", "string", "field", "0.25"],
+            &["HINCRBYFLOAT", "hash", "field", "-0.3"],
+            &["HGET", "hash", "field"],
+        ],
+    )
+    .await;
+    assert_eq!(
+        round_trip(&server, &mut client, &mut replies, &["EXEC"])
+            .await
+            .encode(),
+        b"*6\r\n$3\r\n0.3\r\n-ERR value is not a valid float\r\n+OK\r\n-WRONGTYPE Operation against a key holding the wrong kind of value\r\n$1\r\n0\r\n$1\r\n0\r\n"
+    );
+    assert_eq!(
+        round_trip(
+            &server,
+            &mut client,
+            &mut replies,
+            &[
+                "EVAL",
+                "local value = redis.call('HINCRBYFLOAT', KEYS[1], 'field', ARGV[1]); return {type(value), value, redis.call('HGET', KEYS[1], 'field')}",
+                "1",
+                "hash",
+                "1.25",
+            ],
+        )
+        .await
+        .encode(),
+        b"*3\r\n$6\r\nstring\r\n$4\r\n1.25\r\n$4\r\n1.25\r\n"
+    );
+    assert_eq!(
+        round_trip(
+            &server,
+            &mut client,
+            &mut replies,
+            &[
+                "EVAL",
+                "return {redis.pcall('HINCRBYFLOAT', KEYS[1], 'field', 'invalid'), redis.call('HINCRBYFLOAT', KEYS[1], 'field', '0.25')}",
+                "1",
+                "hash",
+            ],
+        )
+        .await
+        .encode(),
+        b"*2\r\n-ERR value is not a valid float\r\n$3\r\n1.5\r\n"
+    );
+    node.app.cluster.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn hincrbyfloat_wrong_arity_aborts_exec_without_creating_a_hash() {
+    let (_dir, node, server, mut client, mut replies) = test_connection().await;
+    queue_transaction(
+        &server,
+        &mut client,
+        &mut replies,
+        &[&["HINCRBYFLOAT", "hash", "field", "1.5"]],
+    )
+    .await;
+    assert_eq!(
+        round_trip(
+            &server,
+            &mut client,
+            &mut replies,
+            &["HINCRBYFLOAT", "hash", "field"],
+        )
+        .await
+        .encode(),
+        b"-ERR wrong number of arguments for 'hincrbyfloat' command\r\n"
+    );
+    assert_eq!(
+        round_trip(&server, &mut client, &mut replies, &["EXEC"])
+            .await
+            .encode(),
+        b"-EXECABORT Transaction discarded because of previous errors.\r\n"
+    );
+    assert!(
+        node.app.state_machine.data.kvs.databases[0]
+            .mocha
+            .get_entry(b"hash".as_slice())
+            .is_none()
+    );
+    node.app.cluster.shutdown().await.unwrap();
+}
+
+#[tokio::test]
 async fn malformed_queued_command_aborts_exec_and_discards_writes() {
     let (_dir, node, server, mut client, mut replies) = test_connection().await;
 

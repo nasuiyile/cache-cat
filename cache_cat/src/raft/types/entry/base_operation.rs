@@ -7,6 +7,7 @@ use crate::protocol::bitmap::bitfield::BitFieldReq;
 use crate::protocol::bitmap::setbit::SetBitReq;
 use crate::protocol::hash::hdel::HDelReq;
 use crate::protocol::hash::hincrby::HIncrReq;
+use crate::protocol::hash::hincrbyfloat::HIncrByFloatReq;
 use crate::protocol::hash::hmset::HMSetReq;
 use crate::protocol::hash::hset::HSetReq;
 use crate::protocol::hash::hsetnx::HSetNxReq;
@@ -81,6 +82,7 @@ pub enum BaseOperation {
     //hash
     HSet(HSetReq),
     HIncr(HIncrReq),
+    HIncrByFloat(HIncrByFloatReq),
     HDel(HDelReq),
     HSetNx(HSetNxReq),
     HMSet(HMSetReq),

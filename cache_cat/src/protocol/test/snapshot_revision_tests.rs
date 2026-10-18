@@ -240,6 +240,168 @@ async fn persist_and_expiration_recreation_keep_the_original_ttl_semantics() {
 }
 
 #[tokio::test]
+async fn hincrbyfloat_snapshot_replay_preserves_ttl_and_recreation_at_every_scan_cut() {
+    let cache = MyCache::new(2).unwrap();
+    for key in ["retained", "deleted", "expired", "recreated"] {
+        apply(&cache, command(&["HSET", key, "field", "10"]), 0, 10, None);
+    }
+    for (key, ttl) in [
+        ("retained", "500"),
+        ("expired", "100"),
+        ("recreated", "100"),
+    ] {
+        apply(&cache, command(&["PEXPIRE", key, ttl]), 0, 10, None);
+    }
+    let operations = [
+        (
+            0,
+            20,
+            command(&["HINCRBYFLOAT", "retained", "field", "0.25"]),
+        ),
+        (0, 30, command(&["HINCRBYFLOAT", "retained", "new", "-2.5"])),
+        (
+            0,
+            40,
+            command(&["HINCRBYFLOAT", "deleted", "field", "1.25"]),
+        ),
+        (0, 50, command(&["DEL", "deleted"])),
+        (
+            0,
+            60,
+            command(&["HINCRBYFLOAT", "deleted", "field", "-0.5"]),
+        ),
+        (
+            0,
+            70,
+            command(&["HINCRBYFLOAT", "expired", "field", "0.25"]),
+        ),
+        (
+            0,
+            200,
+            command(&["HINCRBYFLOAT", "recreated", "field", "0.5"]),
+        ),
+    ];
+    assert_all_scan_cuts(
+        &cache,
+        0,
+        &operations,
+        &["retained", "deleted", "expired", "recreated"],
+    )
+    .await;
+    assert_eq!(
+        entry(&cache, 0, "retained"),
+        Some((
+            Some(510),
+            LogicalValue::Hash(vec![
+                ("field".into(), "10.25".into()),
+                ("new".into(), "-2.5".into()),
+            ]),
+        ))
+    );
+    for (key, expected) in [("deleted", "-0.5"), ("recreated", "0.5")] {
+        assert_eq!(
+            entry(&cache, 0, key),
+            Some((
+                None,
+                LogicalValue::Hash(vec![("field".into(), expected.into())]),
+            ))
+        );
+    }
+    assert_eq!(entry(&cache, 0, "expired"), None);
+}
+
+#[test]
+fn hincrbyfloat_errors_preserve_values_ttl_and_snapshot_revisions() {
+    let cache = MyCache::new(2).unwrap();
+    for args in [
+        vec![
+            "HSET", "hash", "bad", "text", "overflow", "1e4932", "valid", "1.25",
+        ],
+        vec!["PEXPIRE", "hash", "500"],
+        vec!["SET", "string", "text"],
+    ] {
+        apply(&cache, command(&args), 0, 10, None);
+    }
+    let hash_before = entry(&cache, 0, "hash");
+    let string_before = entry(&cache, 0, "string");
+    let mut queue = Vec::new();
+    let mut revision = 17;
+    for (args, expected) in [
+        (
+            ["HINCRBYFLOAT", "hash", "bad", "1"],
+            "-ERR hash value is not a float\r\n",
+        ),
+        (
+            ["HINCRBYFLOAT", "hash", "overflow", "1e4932"],
+            "-ERR increment would produce NaN or Infinity\r\n",
+        ),
+        (
+            ["HINCRBYFLOAT", "hash", "valid", "invalid"],
+            "-ERR value is not a valid float\r\n",
+        ),
+        (
+            ["HINCRBYFLOAT", "missing", "field", "invalid"],
+            "-ERR value is not a valid float\r\n",
+        ),
+        (
+            ["HINCRBYFLOAT", "string", "field", "1"],
+            "-WRONGTYPE Operation against a key holding the wrong kind of value\r\n",
+        ),
+    ] {
+        assert_eq!(
+            apply(
+                &cache,
+                command(&args),
+                0,
+                20,
+                Some((&mut queue, &mut revision)),
+            )
+            .encode(),
+            expected.as_bytes(),
+            "{args:?}"
+        );
+        assert_eq!(entry(&cache, 0, "hash"), hash_before);
+        assert_eq!(entry(&cache, 0, "string"), string_before);
+        assert_eq!(entry(&cache, 0, "missing"), None);
+        assert!(queue.is_empty());
+        assert_eq!(revision, 17);
+        assert_eq!(
+            cache.databases[0]
+                .mocha
+                .get_entry(b"hash".as_slice())
+                .unwrap()
+                .value
+                .version,
+            0
+        );
+    }
+}
+
+#[tokio::test]
+async fn hincrbyfloat_exec_and_lua_replay_each_increment_once() {
+    let cache = MyCache::new(2).unwrap();
+    let exec = Operation::Redis(RedisOperation::RedisExec(ExecParams {
+        operations: ["0.1", "0.2"]
+            .iter()
+            .map(|increment| {
+                QueuedOperation::new(0, command(&["HINCRBYFLOAT", "hash", "field", increment]))
+            })
+            .collect(),
+    }));
+    let eval = Operation::Redis(RedisOperation::RedisEval(EvalParams::new(
+        "redis.call('HINCRBYFLOAT', 'hash', 'field', '0.3'); return redis.call('HINCRBYFLOAT', 'hash', 'field', '0.4')".into(),
+        0,
+        vec![],
+        vec![],
+    )));
+    assert_all_scan_cuts(&cache, 0, &[(0, 10, exec), (0, 20, eval)], &["hash"]).await;
+    assert_eq!(
+        entry(&cache, 0, "hash"),
+        Some((None, LogicalValue::Hash(vec![("field".into(), "1".into())])))
+    );
+}
+
+#[tokio::test]
 async fn repeated_removals_and_cross_type_recreations_match_every_scan_cut() {
     let cache = MyCache::new(2).unwrap();
     apply(&cache, command(&["SET", "k", "old"]), 0, 1, None);

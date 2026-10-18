@@ -1,8 +1,10 @@
+mod float;
 pub mod hdel;
 pub mod hexists;
 pub mod hget;
 pub mod hgetall;
 pub mod hincrby;
+pub mod hincrbyfloat;
 pub mod hkeys;
 pub mod hlen;
 pub mod hmget;
