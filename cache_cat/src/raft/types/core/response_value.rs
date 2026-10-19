@@ -864,7 +864,7 @@ mod tests {
 
     #[test]
     fn error_replies_cannot_inject_frames() {
-        use crate::protocol::resp::Parser;
+        use crate::protocol::common::resp::Parser;
         use bytes::BytesMut;
 
         for message in [

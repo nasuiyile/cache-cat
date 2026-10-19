@@ -6,6 +6,7 @@ pub mod get;
 pub mod getset;
 pub mod incr;
 pub mod incrby;
+pub mod incrbyfloat;
 pub mod len;
 pub mod mget;
 pub mod mset;

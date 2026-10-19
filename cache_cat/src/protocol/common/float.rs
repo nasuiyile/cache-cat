@@ -1,4 +1,4 @@
-//! Redis hash floating-point syntax and `LD_STR_HUMAN` formatting.
+//! Shared Redis extended-precision parsing and `LD_STR_HUMAN` formatting.
 //!
 //! Software x87 arithmetic keeps parsing, addition, and snapshot replay
 //! identical across hosts, including hosts whose native long double is f64.
@@ -14,7 +14,7 @@ const FIVE_POW_17: u128 = 5_u128.pow(FRACTION_DIGITS);
 
 /// Parse Redis's C-locale long-double syntax without accepting partial input.
 /// Explicit infinities are valid numbers; the command rejects non-finite sums.
-pub(super) fn parse(bytes: &[u8]) -> Option<X87DoubleExtended> {
+pub(in crate::protocol) fn parse(bytes: &[u8]) -> Option<X87DoubleExtended> {
     if bytes.is_empty() || bytes.len() >= MAX_LONG_DOUBLE_CHARS {
         return None;
     }
@@ -100,7 +100,7 @@ pub(super) fn parse(bytes: &[u8]) -> Option<X87DoubleExtended> {
 }
 
 /// Format a finite value like Redis's `%.17Lf`, then trim fractional zeroes.
-pub(super) fn format(value: X87DoubleExtended) -> Bytes {
+pub(in crate::protocol) fn format(value: X87DoubleExtended) -> Bytes {
     debug_assert!(value.is_finite());
     let bits = value.to_bits();
     let significand = bits as u64 as u128;

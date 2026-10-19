@@ -429,6 +429,132 @@ async fn repeated_removals_and_cross_type_recreations_match_every_scan_cut() {
 }
 
 #[tokio::test]
+async fn incrbyfloat_replays_ttl_recreation_exec_and_lua_at_every_scan_cut() {
+    let cache = MyCache::new(2).unwrap();
+    for (key, ttl) in [
+        ("retained", "500"),
+        ("deleted", "500"),
+        ("expired", "100"),
+        ("recreated", "100"),
+    ] {
+        apply(&cache, command(&["SET", key, "10", "PX", ttl]), 0, 10, None);
+    }
+    let exec = Operation::Redis(RedisOperation::RedisExec(ExecParams {
+        operations: ["0.1", "0.2"]
+            .iter()
+            .map(|increment| {
+                QueuedOperation::new(1, command(&["INCRBYFLOAT", "nested", increment]))
+            })
+            .collect(),
+    }));
+    let eval = Operation::Redis(RedisOperation::RedisEval(EvalParams::new(
+        "redis.call('INCRBYFLOAT', 'nested', '0.3'); return redis.call('INCRBYFLOAT', 'nested', '0.4')".into(),
+        0,
+        vec![],
+        vec![],
+    )));
+    let operations = [
+        (0, 20, command(&["INCRBYFLOAT", "retained", "0.25"])),
+        (0, 30, command(&["INCRBYFLOAT", "deleted", "1.25"])),
+        (0, 40, command(&["DEL", "deleted"])),
+        (0, 50, command(&["INCRBYFLOAT", "deleted", "-0.5"])),
+        (0, 60, command(&["INCRBYFLOAT", "expired", "0.25"])),
+        (0, 200, command(&["INCRBYFLOAT", "recreated", "0.5"])),
+        (0, 210, exec),
+        (1, 220, eval),
+    ];
+    assert_all_scan_cuts(
+        &cache,
+        0,
+        &operations,
+        &["retained", "deleted", "expired", "recreated", "nested"],
+    )
+    .await;
+    for (db, key, ttl, expected) in [
+        (0, "retained", Some(510), "10.25"),
+        (0, "deleted", None, "-0.5"),
+        (0, "recreated", None, "0.5"),
+        (1, "nested", None, "1"),
+    ] {
+        assert_eq!(
+            entry(&cache, db, key),
+            Some((ttl, LogicalValue::String(expected.into())))
+        );
+    }
+    assert_eq!(entry(&cache, 0, "expired"), None);
+    assert_eq!(entry(&cache, 0, "nested"), None);
+}
+
+#[test]
+fn incrbyfloat_errors_preserve_values_ttl_and_snapshot_revisions() {
+    let cache = MyCache::new(2).unwrap();
+    for (key, value) in [("valid", "1.25"), ("bad", "text"), ("overflow", "1e4932")] {
+        apply(
+            &cache,
+            command(&["SET", key, value, "PX", "500"]),
+            0,
+            10,
+            None,
+        );
+    }
+    apply(
+        &cache,
+        command(&["HSET", "hash", "field", "1"]),
+        0,
+        10,
+        None,
+    );
+    let keys = ["valid", "bad", "overflow", "hash", "missing"];
+    let before = keys
+        .iter()
+        .map(|key| entry(&cache, 0, key))
+        .collect::<Vec<_>>();
+    let mut queue = Vec::new();
+    let mut revision = 17;
+    for (key, increment, expected) in [
+        ("valid", "invalid", "-ERR value is not a valid float\r\n"),
+        ("bad", "inf", "-ERR value is not a valid float\r\n"),
+        ("missing", "invalid", "-ERR value is not a valid float\r\n"),
+        (
+            "missing",
+            "inf",
+            "-ERR increment would produce NaN or Infinity\r\n",
+        ),
+        (
+            "overflow",
+            "1e4932",
+            "-ERR increment would produce NaN or Infinity\r\n",
+        ),
+        (
+            "hash",
+            "invalid",
+            "-WRONGTYPE Operation against a key holding the wrong kind of value\r\n",
+        ),
+    ] {
+        assert_eq!(
+            apply(
+                &cache,
+                command(&["INCRBYFLOAT", key, increment]),
+                0,
+                20,
+                Some((&mut queue, &mut revision)),
+            )
+            .encode(),
+            expected.as_bytes(),
+            "{key} + {increment}"
+        );
+        for (key, expected) in keys.iter().zip(&before) {
+            assert_eq!(&entry(&cache, 0, key), expected);
+            if let Some(entry) = cache.databases[0].mocha.get_entry(key.as_bytes()) {
+                assert_eq!(entry.value.version, 0);
+            }
+        }
+        assert!(queue.is_empty());
+        assert_eq!(revision, 17);
+    }
+}
+
+#[tokio::test]
 async fn flush_replay_preserves_later_writes_and_database_scope() {
     for flush in ["FLUSHDB", "FLUSHALL"] {
         let cache = MyCache::new(2).unwrap();

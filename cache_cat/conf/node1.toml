@@ -1,7 +1,7 @@
 node-id = 1
 [redis]
 redis-port = 6379
-tls-port = 6479
+# tls-port = 6479
 # 全局统一 redis 哨兵的 master 名字
 sentinel-master-name = "cat"
 # 在没有请求到来时，多少秒进行一次 key 的清理，0 表示不清理

@@ -3,8 +3,7 @@ use std::fmt;
 
 use crate::raft::types::core::response_value::Value;
 
-mod request;
-pub use request::take_request_from_bytes_stream;
+pub use crate::protocol::common::request::take_request_from_bytes_stream;
 
 /// Bound both parser recursion and the recursive values it constructs.
 const MAX_AGGREGATE_DEPTH: usize = 16;
@@ -163,7 +162,7 @@ impl Parser {
         Ok(Some(meta.take(buffer)))
     }
 
-    fn take(self, mut buffer: Bytes) -> Value {
+    pub fn take(self, mut buffer: Bytes) -> Value {
         match self {
             Parser::String { len } => {
                 Value::SimpleString(String::from_utf8_lossy(&buffer[1..len - 2]).into_owned())
@@ -292,7 +291,7 @@ impl Parser {
     /// └──────┴────────────────────┴─────┘
     /// ```
     #[inline]
-    fn read_line(buffer: &[u8]) -> Option<(&[u8], usize)> {
+    pub fn read_line(buffer: &[u8]) -> Option<(&[u8], usize)> {
         let index = Self::find_line(&buffer[1..])?;
         Some((&buffer[1..index + 1], index + 3))
     }

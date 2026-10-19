@@ -36,6 +36,7 @@ use crate::protocol::string::decrby::DecrByReq;
 use crate::protocol::string::fadd::PfAddReq;
 use crate::protocol::string::incr::IncrReq;
 use crate::protocol::string::incrby::IncrByReq;
+use crate::protocol::string::incrbyfloat::IncrByFloatReq;
 use crate::protocol::string::set::SetReq;
 use crate::protocol::zset::zadd::ZAddReq;
 use crate::protocol::zset::zincrby::ZIncrByReq;
@@ -65,6 +66,7 @@ pub enum BaseOperation {
     Set(SetReq),
     Incr(IncrReq),
     IncrBy(IncrByReq),
+    IncrByFloat(IncrByFloatReq),
     Append(AppendReq),
     SetBit(SetBitReq),
     BitField(BitFieldReq),

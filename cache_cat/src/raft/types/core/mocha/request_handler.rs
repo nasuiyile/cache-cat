@@ -146,6 +146,7 @@ fn base_request_inner(
         BaseOperation::Del(param) => my_cache.del(param, update),
         BaseOperation::Incr(param) => my_cache.incr(param, update),
         BaseOperation::IncrBy(param) => my_cache.incr_by(param, update),
+        BaseOperation::IncrByFloat(param) => my_cache.execute_compute(param, update),
         BaseOperation::Append(param) => my_cache.append(param, update),
         BaseOperation::HSet(param) => my_cache.h_set(param, update),
         BaseOperation::HIncr(param) => my_cache.h_incr(param, update),

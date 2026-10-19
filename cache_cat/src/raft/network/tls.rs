@@ -196,9 +196,15 @@ impl TlsContext {
 
             (None, None) => {
                 if config.tls_port.is_some() || config.tls_replication {
-                    return Err(TlsError::InvalidConfig(
-                        "TLS is enabled but tls-cert-file and tls-key-file are missing".into(),
-                    ));
+                    let enabled_by = if config.tls_replication {
+                        "tls-replication"
+                    } else {
+                        "redis.tls-port"
+                    };
+                    return Err(TlsError::InvalidConfig(format!(
+                        "{} enables TLS, but tls-cert-file and tls-key-file are missing",
+                        enabled_by
+                    )));
                 }
                 return Ok(Self {
                     server: None,

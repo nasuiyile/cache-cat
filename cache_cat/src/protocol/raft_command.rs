@@ -74,6 +74,7 @@ use crate::protocol::string::get::GetCommand;
 use crate::protocol::string::getset::GetSetCommand;
 use crate::protocol::string::incr::IncrCommand;
 use crate::protocol::string::incrby::IncrByCommand;
+use crate::protocol::string::incrbyfloat::IncrByFloatCommand;
 use crate::protocol::string::len::StrLenCommand;
 use crate::protocol::string::mget::MgetCommand;
 use crate::protocol::string::mset::MsetCommand;
@@ -151,6 +152,7 @@ impl RaftCommandFactory {
         factory.register("DEL", DelCommand);
         factory.register("INCR", IncrCommand);
         factory.register("INCRBY", IncrByCommand);
+        factory.register("INCRBYFLOAT", IncrByFloatCommand);
         factory.register("MSET", MsetCommand);
         factory.register("MGET", MgetCommand);
         factory.register("LPUSH", LPushCommand);

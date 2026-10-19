@@ -154,6 +154,7 @@ impl fmt::Display for Request {
                 BaseOperation::Del(req) => write!(f, "DEL: {}", req),
                 BaseOperation::Incr(req) => write!(f, "Incr: {}", req),
                 BaseOperation::IncrBy(req) => write!(f, "IncrBy: {}", req),
+                BaseOperation::IncrByFloat(req) => write!(f, "IncrByFloat: {}", req),
                 BaseOperation::Expire(req) => write!(f, "Expire: {}", req),
                 BaseOperation::PExpire(req) => write!(f, "PExpire: {}", req),
                 BaseOperation::Append(req) => write!(f, "Append: {}", req),

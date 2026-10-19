@@ -196,7 +196,7 @@ mod tests {
     use crate::cfg::config::Config;
     use crate::node::parsed_config::ParsedConfig;
     use crate::node::raft_node::RaftNode;
-    use crate::protocol::resp::Parser;
+    use crate::protocol::common::resp::Parser;
     use crate::protocol::transaction::exec::ExecParams;
     use crate::protocol::transaction::multi::MultiCommand;
     use crate::raft::types::core::mocha::core::{MyCache, Update, UpdateType};

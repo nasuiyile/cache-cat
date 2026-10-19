@@ -642,6 +642,124 @@ async fn malformed_queued_command_aborts_exec_and_discards_writes() {
 }
 
 #[tokio::test]
+async fn incrbyfloat_dispatches_bulk_replies_in_resp2_resp3_exec_and_lua() {
+    let (_dir, node, server, mut client, mut replies) = test_connection().await;
+    initialize_single_node(&node).await;
+    for (proto, increment, expected) in [(2, "0.1", "0.1"), (3, "0.2", "0.3")] {
+        if proto == 3 {
+            assert!(matches!(
+                round_trip(&server, &mut client, &mut replies, &["HELLO", "3"]).await,
+                Value::Map(_)
+            ));
+        }
+        let reply = round_trip(
+            &server,
+            &mut client,
+            &mut replies,
+            &["InCrByFlOaT", "number", increment],
+        )
+        .await;
+        assert!(matches!(&reply, Value::BulkString(Some(_))));
+        assert_eq!(
+            reply.encode_proto(proto),
+            format!("$3\r\n{expected}\r\n").as_bytes()
+        );
+    }
+    queue_transaction(
+        &server,
+        &mut client,
+        &mut replies,
+        &[
+            &["INCRBYFLOAT", "number", "0.2"],
+            &["INCRBYFLOAT", "number", "invalid"],
+            &["HSET", "hash", "field", "1"],
+            &["INCRBYFLOAT", "hash", "invalid"],
+            &["SET", "bad", "text"],
+            &["INCRBYFLOAT", "bad", "1"],
+            &["INCRBYFLOAT", "number", "-0.5"],
+            &["GET", "number"],
+        ],
+    )
+    .await;
+    assert_eq!(
+        round_trip(&server, &mut client, &mut replies, &["EXEC"])
+            .await
+            .encode_proto(3),
+        b"*8\r\n$3\r\n0.5\r\n-ERR value is not a valid float\r\n:1\r\n-WRONGTYPE Operation against a key holding the wrong kind of value\r\n+OK\r\n-ERR value is not a valid float\r\n$1\r\n0\r\n$1\r\n0\r\n"
+    );
+    assert_eq!(
+        round_trip(
+            &server,
+            &mut client,
+            &mut replies,
+            &[
+                "EVAL",
+                "redis.setresp(3); local value = redis.call('INCRBYFLOAT', KEYS[1], ARGV[1]); return {type(value), value, redis.call('GET', KEYS[1])}",
+                "1",
+                "number",
+                "1.25",
+            ],
+        )
+        .await
+        .encode_proto(3),
+        b"*3\r\n$6\r\nstring\r\n$4\r\n1.25\r\n$4\r\n1.25\r\n"
+    );
+    assert_eq!(
+        round_trip(
+            &server,
+            &mut client,
+            &mut replies,
+            &[
+                "EVAL",
+                "return {redis.pcall('INCRBYFLOAT', KEYS[1]), redis.pcall('INCRBYFLOAT', KEYS[1], 'invalid'), redis.call('INCRBYFLOAT', KEYS[1], '0.25')}",
+                "1",
+                "number",
+            ],
+        )
+        .await
+        .encode_proto(3),
+        b"*3\r\n-ERR wrong number of arguments for 'incrbyfloat' command\r\n-ERR value is not a valid float\r\n$3\r\n1.5\r\n"
+    );
+    node.app.cluster.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn incrbyfloat_wrong_arity_aborts_exec_without_writing() {
+    let (_dir, node, server, mut client, mut replies) = test_connection().await;
+    for malformed in [
+        vec!["INCRBYFLOAT", "number"],
+        vec!["INCRBYFLOAT", "number", "1.5", "extra"],
+    ] {
+        queue_transaction(
+            &server,
+            &mut client,
+            &mut replies,
+            &[&["INCRBYFLOAT", "number", "1.5"]],
+        )
+        .await;
+        assert_eq!(
+            round_trip(&server, &mut client, &mut replies, &malformed)
+                .await
+                .encode(),
+            b"-ERR wrong number of arguments for 'incrbyfloat' command\r\n"
+        );
+        assert_eq!(
+            round_trip(&server, &mut client, &mut replies, &["EXEC"])
+                .await
+                .encode(),
+            b"-EXECABORT Transaction discarded because of previous errors.\r\n"
+        );
+        assert!(
+            node.app.state_machine.data.kvs.databases[0]
+                .mocha
+                .get_entry(b"number".as_slice())
+                .is_none()
+        );
+    }
+    node.app.cluster.shutdown().await.unwrap();
+}
+
+#[tokio::test]
 async fn unknown_queued_command_is_dirty_but_discard_resets_transaction() {
     let (_dir, _node, server, mut client, mut replies) = test_connection().await;
 

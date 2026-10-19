@@ -1,4 +1,3 @@
-mod float;
 pub mod hdel;
 pub mod hexists;
 pub mod hget;

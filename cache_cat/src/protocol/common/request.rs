@@ -1,7 +1,7 @@
 //! Redis command requests are flat arrays of bulk strings, even in RESP3.
 //! Keep their parser non-recursive; the general decoder is for replies.
 
-use super::{AggregateKind, Parser, RespParseError};
+use crate::protocol::common::resp::{AggregateKind, Parser, RespParseError};
 use crate::raft::types::core::response_value::Value;
 use crate::utils::parse_canonical_i64;
 use bytes::{Buf, BytesMut};

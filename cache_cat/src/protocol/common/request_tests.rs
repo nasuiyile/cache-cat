@@ -1,4 +1,4 @@
-use crate::protocol::resp::{RespParseError, take_request_from_bytes_stream};
+use crate::protocol::common::resp::{RespParseError, take_request_from_bytes_stream};
 use crate::raft::types::core::response_value::Value;
 use bytes::BytesMut;
 

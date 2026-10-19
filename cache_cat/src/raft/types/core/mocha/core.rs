@@ -1,6 +1,6 @@
 use crate::error::ProtocolError;
 use crate::mocha::Mocha;
-use crate::protocol::lua_env::LuaEnv;
+use crate::protocol::common::lua_env::LuaEnv;
 use crate::protocol::stream::xread::XReadParams;
 use crate::raft::application::blocking_keys::BlockingKeys;
 use crate::raft::types::core::response_value::Value;

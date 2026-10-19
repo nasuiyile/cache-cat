@@ -1,7 +1,7 @@
 use crate::error::CacheCatError;
 use crate::node::parsed_config::ParsedConfig;
 use crate::protocol::command::{Client, CommandFactory};
-use crate::protocol::resp::{Parser, take_request_from_bytes_stream};
+use crate::protocol::common::resp::{Parser, take_request_from_bytes_stream};
 use crate::raft::application::pub_sub::PubSub;
 use crate::raft::network::connection::Connection;
 use crate::raft::types::core::response_value::Value;

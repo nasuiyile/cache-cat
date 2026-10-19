@@ -93,7 +93,6 @@ use crate::protocol::set::sunionstore::SUnionStoreCommand;
 use crate::protocol::stream::xadd::XAddCommand;
 use crate::protocol::stream::xgroup::XGroupCommand;
 use crate::protocol::stream::xread::XReadCommand;
-use crate::protocol::stream::xreadgroup::XReadGroupCommand;
 use crate::protocol::string::append::AppendCommand;
 use crate::protocol::string::decr::DecrCommand;
 use crate::protocol::string::decrby::DecrByCommand;
@@ -102,6 +101,7 @@ use crate::protocol::string::get::GetCommand;
 use crate::protocol::string::getset::GetSetCommand;
 use crate::protocol::string::incr::IncrCommand;
 use crate::protocol::string::incrby::IncrByCommand;
+use crate::protocol::string::incrbyfloat::IncrByFloatCommand;
 use crate::protocol::string::len::StrLenCommand;
 use crate::protocol::string::mget::MgetCommand;
 use crate::protocol::string::mset::MsetCommand;
@@ -236,7 +236,7 @@ impl Client {
     async fn reply_to_decode_error(&mut self, error: &std::io::Error) {
         if let Some(error) = error
             .get_ref()
-            .and_then(|source| source.downcast_ref::<crate::protocol::resp::RespParseError>())
+            .and_then(|source| source.downcast_ref::<crate::protocol::common::resp::RespParseError>())
         {
             let _ = self.framed.send(Value::error(format!("ERR {error}"))).await;
         }
@@ -336,6 +336,7 @@ impl CommandFactory {
         factory.register("DEL", DelCommand);
         factory.register("INCR", IncrCommand);
         factory.register("INCRBY", IncrByCommand);
+        factory.register("INCRBYFLOAT", IncrByFloatCommand);
         factory.register("MSET", MsetCommand);
         factory.register("MGET", MgetCommand);
         factory.register("APPEND", AppendCommand);

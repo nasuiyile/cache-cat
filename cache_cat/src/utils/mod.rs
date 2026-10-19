@@ -15,4 +15,3 @@ pub(crate) use times::{checked_redis_deadline, checked_redis_timestamp};
 
 pub(crate) use number::parse_canonical_i64;
 pub(crate) use number::parse_f64;
-pub(crate) use number::parse_i64;
