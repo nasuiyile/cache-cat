@@ -24,6 +24,10 @@ pub struct CliArgs {
     // ------------------------------------------------------------------------
     // Redis
     // ------------------------------------------------------------------------
+    /// Redis listener bind host.
+    #[arg(long = "redis-bind-address")]
+    pub redis_bind_address: Option<String>,
+
     /// Redis port.
     #[arg(long = "redis-port")]
     pub redis_port: Option<u32>,
@@ -55,9 +59,9 @@ pub struct CliArgs {
     #[arg(long = "address")]
     pub raft_address: Option<String>,
 
-    /// Raft advertised host.
+    /// Host advertised to Redis/Sentinel clients and Raft peers.
     #[arg(long = "advertise-host")]
-    pub raft_advertise_host: Option<String>,
+    pub advertise_host: Option<String>,
 
     /// Enable single-node mode.
     #[arg(long = "single")]
@@ -139,6 +143,10 @@ pub fn load_config_with_cli() -> Result<Config, Box<dyn std::error::Error>> {
     // Redis
     // ------------------------------------------------------------------------
 
+    if let Some(v) = cli.redis_bind_address {
+        config.redis.bind_address = Some(v);
+    }
+
     if let Some(v) = cli.redis_port {
         config.redis.redis_port = v;
     }
@@ -171,8 +179,8 @@ pub fn load_config_with_cli() -> Result<Config, Box<dyn std::error::Error>> {
         config.raft.address = v;
     }
 
-    if let Some(v) = cli.raft_advertise_host {
-        config.raft.advertise_host = v;
+    if let Some(v) = cli.advertise_host {
+        config.advertise_host = v;
     }
 
     if let Some(v) = cli.raft_single {

@@ -229,7 +229,7 @@ impl RaftNode {
         let (startup_tx, startup_rx) = oneshot::channel::<StdResult<(), String>>();
 
         let addr = config.raft_endpoint.raft_addr();
-        let redis_addr = config.raft_endpoint.redis_addr();
+        let redis_addr = format!("{}:{}", config.redis_bind_address, config.redis_port);
         let handle = tokio::task::spawn(async move {
             // Signal startup success
             let server = match Server::new(app, addr.clone(), startup_tx, redis_addr, &config) {

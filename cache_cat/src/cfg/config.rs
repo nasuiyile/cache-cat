@@ -1,3 +1,4 @@
+use super::default::default_advertise_host;
 use super::default::default_node_id;
 use super::default::default_raft_config;
 use super::default::default_redis_config;
@@ -15,6 +16,10 @@ pub struct Config {
     #[serde(default = "default_node_id")]
     pub node_id: u16,
 
+    /// Host advertised to both Redis/Sentinel clients and Raft peers.
+    #[serde(default = "default_advertise_host")]
+    pub advertise_host: String,
+
     #[serde(default = "default_redis_config")]
     pub redis: RedisConfig,
 
@@ -29,6 +34,11 @@ pub struct Config {
 #[derive(Debug, Deserialize, Serialize, Clone, Default)]
 #[serde(rename_all = "kebab-case")]
 pub struct RedisConfig {
+    /// Redis and Redis TLS listener bind host. This is independent of the
+    /// Raft listener host.
+    #[serde(default)]
+    pub bind_address: Option<String>,
+
     /// TLS监听端口
     pub tls_port: Option<u32>,
 
@@ -50,8 +60,6 @@ pub struct RaftConfig {
     pub log_path: String,
 
     pub address: String,
-
-    pub advertise_host: String,
 
     /// Single node raft cluster.
     pub single: bool,
@@ -139,6 +147,7 @@ impl Default for Config {
     fn default() -> Self {
         Self {
             node_id: default_node_id(),
+            advertise_host: default_advertise_host(),
             redis: default_redis_config(),
             raft: default_raft_config(),
             tls: default_tls_config(),

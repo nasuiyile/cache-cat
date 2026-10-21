@@ -102,7 +102,7 @@ impl RedisServer {
 
         let tls_addr = config
             .tls_port
-            .map(|port| format!("{}:{}", config.raft_endpoint.addr(), port));
+            .map(|port| format!("{}:{}", config.redis_bind_address, port));
         Ok(Self {
             app,
             redis_addr,

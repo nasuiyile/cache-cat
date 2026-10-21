@@ -1,11 +1,15 @@
 use crate::cfg::config::{RaftConfig, RedisConfig, TlsConfig};
 
 #[inline]
+pub fn default_advertise_host() -> String {
+    "0.0.0.0".to_string()
+}
+
+#[inline]
 pub fn default_raft_config() -> RaftConfig {
     RaftConfig {
         log_path: ".data".to_string(),
         address: "0.0.0.0:5001".to_string(),
-        advertise_host: "0.0.0.0".to_string(),
         single: true,
         join: vec![],
         election_timeout: 699,
@@ -21,6 +25,7 @@ pub const fn default_node_id() -> u16 {
 
 pub fn default_redis_config() -> RedisConfig {
     RedisConfig {
+        bind_address: None,
         tls_port: None,
         redis_port: 6379,
         requirepass: None,

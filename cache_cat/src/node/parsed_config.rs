@@ -15,6 +15,9 @@ pub struct ParsedConfig {
 
     pub redis_port: u32,
 
+    /// Host on which the Redis and Redis TLS listeners bind.
+    pub redis_bind_address: String,
+
     pub raft_single: bool,
 
     pub password: Option<String>,
@@ -64,8 +67,14 @@ pub struct ParsedConfig {
 impl ParsedConfig {
     pub fn from(config: &Config) -> Result<Self> {
         let raft_endpoint = Endpoint::parse(&config.raft.address, config.redis.redis_port)?;
+        let redis_bind_address = config
+            .redis
+            .bind_address
+            .as_deref()
+            .unwrap_or(raft_endpoint.addr())
+            .to_owned();
         let raft_advertise_endpoint = Endpoint::new(
-            &config.raft.advertise_host,
+            &config.advertise_host,
             config.redis.redis_port,
             raft_endpoint.port(),
         );
@@ -81,6 +90,7 @@ impl ParsedConfig {
             raft_endpoint,
             raft_advertise_endpoint,
             redis_port: config.redis.redis_port,
+            redis_bind_address,
             raft_single: config.raft.single,
             raft_join: config.raft.join.clone(),
             log_path: config.raft.log_path.clone(),
@@ -99,5 +109,36 @@ impl ParsedConfig {
             tls_protocols: config.tls.tls_protocols.clone(),
             tls_replication: config.tls.tls_replication.unwrap_or(false),
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::ParsedConfig;
+    use crate::cfg::config::Config;
+
+    #[test]
+    fn redis_bind_host_is_independent_from_raft() {
+        let mut config = Config::default();
+        config.raft.address = "127.0.0.1:5001".into();
+        config.advertise_host = "10.0.0.1".into();
+        config.redis.bind_address = Some("192.0.2.10".into());
+
+        let parsed = ParsedConfig::from(&config).unwrap();
+
+        assert_eq!(parsed.redis_bind_address, "192.0.2.10");
+        assert_eq!(parsed.raft_endpoint.raft_addr(), "127.0.0.1:5001");
+        assert_eq!(parsed.raft_endpoint.redis_addr(), "127.0.0.1:6379");
+        assert_eq!(parsed.raft_advertise_endpoint.redis_addr(), "10.0.0.1:6379");
+    }
+
+    #[test]
+    fn omitted_redis_bind_host_keeps_legacy_raft_host_binding() {
+        let mut config = Config::default();
+        config.raft.address = "127.0.0.1:5001".into();
+
+        let parsed = ParsedConfig::from(&config).unwrap();
+
+        assert_eq!(parsed.redis_bind_address, "127.0.0.1");
     }
 }

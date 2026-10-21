@@ -1,5 +1,10 @@
 node-id = 3
+# Host advertised to Redis/Sentinel clients and Raft peers.
+advertise-host = "127.0.0.1"
+
 [redis]
+# Optional Redis/TLS bind host. When omitted, the host from raft.address is used.
+# bind-address = "127.0.0.1"
 redis-port = 6381
 # tls-port = 6481
 # 全局统一 redis 哨兵的 master 名字
@@ -13,8 +18,6 @@ address = "127.0.0.1:5003"
 log-path = "C:/tmp/raft/cache-cat/3"
 single = false
 join = ["127.0.0.1:5001"]
-# 告诉其他节点 通过该地址访问
-advertise-host = "127.0.0.1"
 # 选举超时时间，节点之间的时钟偏移不能超过该值，需要大于 500
 election-timeout = 999
 # 超过这个值将会直接进行快照，为 0 代表不用快照 需大于500000
