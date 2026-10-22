@@ -97,6 +97,13 @@ fn read_request_inner<const REPLICATED: bool>(
         ReadOperation::XReadGroup(param) => {
             my_cache.execute_multi_read(param, db_number, read_clock)
         }
+        ReadOperation::Scan(param) => {
+            if REPLICATED {
+                param.execute_with_clock(my_cache, db_number, read_clock)
+            } else {
+                param.execute(my_cache, db_number, read_clock)
+            }
+        }
     }
 }
 

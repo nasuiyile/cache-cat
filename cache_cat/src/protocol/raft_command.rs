@@ -38,6 +38,7 @@ use crate::protocol::key::pexpire::PExpireCommand;
 use crate::protocol::key::pttl::PTtlCommand;
 use crate::protocol::key::rename::RenameCommand;
 use crate::protocol::key::renamenx::RenameNxCommand;
+use crate::protocol::key::scan::ScanCommand;
 use crate::protocol::key::ttl::TtlCommand;
 use crate::protocol::key::type_::TypeCommand;
 use crate::protocol::key::unlink::UnlinkCommand;
@@ -221,6 +222,7 @@ impl RaftCommandFactory {
         factory.register("SUNIONSTORE", SUnionStoreCommand);
         factory.register("SDIFFSTORE", SDiffStoreCommand);
         factory.register("KEYS", KeysCommand);
+        factory.register("SCAN", ScanCommand);
         factory.register("ZSCORE", ZScoreCommand);
         factory.register("ZCARD", ZCardCommand);
         factory.register("ZCOUNT", ZCountCommand);

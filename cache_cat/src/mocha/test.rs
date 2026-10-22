@@ -4,6 +4,7 @@ mod tests {
         Entry, EntrySnapshot, ExpireCommand, ExpirePolicy, HierarchicalTimeWheel, Mocha,
     };
     use crossbeam_channel::{Receiver, unbounded};
+    use parking_lot::Mutex;
     use std::sync::Arc;
     use std::sync::atomic::{AtomicU64, Ordering};
     use std::thread;
@@ -29,6 +30,7 @@ mod tests {
             map: Arc::new(papaya::HashMap::new()),
             logic_clock: Arc::new(AtomicU64::new(0)),
             expire_tx,
+            scan_index: Arc::new(Mutex::new(None)),
         };
         (mocha, expire_rx)
     }
