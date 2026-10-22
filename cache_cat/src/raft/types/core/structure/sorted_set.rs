@@ -440,6 +440,11 @@ impl SortedSet {
         self.hash.get(member).copied()
     }
 
+    /// ZSCAN source: members with their scores, in index order.
+    pub fn iter_scores(&self) -> impl Iterator<Item = (&Bytes, f64)> {
+        self.hash.iter().map(|(member, score)| (member, *score))
+    }
+
     /// ZRANK
     ///
     /// 当前复杂度仍然是 O(N)。

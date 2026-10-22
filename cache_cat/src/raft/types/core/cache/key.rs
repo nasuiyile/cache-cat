@@ -178,13 +178,15 @@ impl MyCache {
         } else {
             None
         };
-        let cache = match self.get_cache(update.db_number) {
+        let database = match self.get_cache(update.db_number) {
             Err(err) => return err,
-            Ok(cache) => &cache.mocha,
+            Ok(database) => database,
         };
+        let cache = &database.mocha;
         match update.update_type {
             UpdateType::None => {
                 cache.clear();
+                database.collection_indexes.clear();
             }
             UpdateType::Snapshot { queue, revision } => {
                 queue.push(AtomicRequest {
@@ -195,6 +197,7 @@ impl MyCache {
                     db_number: update.db_number,
                 });
                 cache.clear();
+                database.collection_indexes.clear();
             }
             UpdateType::CAS { revision, .. } => {
                 // Full traversal may already contain writes made after this
@@ -215,6 +218,7 @@ impl MyCache {
             UpdateType::None => {
                 for database in &self.databases {
                     database.mocha.clear();
+                    database.collection_indexes.clear();
                 }
             }
             UpdateType::Snapshot { queue, revision } => {
@@ -227,6 +231,7 @@ impl MyCache {
                 });
                 for database in &self.databases {
                     database.mocha.clear();
+                    database.collection_indexes.clear();
                 }
             }
             UpdateType::CAS { revision, .. } => {

@@ -10,6 +10,7 @@ pub mod smembers;
 pub mod spop;
 pub mod srandmember;
 pub mod srem;
+pub mod sscan;
 pub mod sunion;
 pub mod sunionstore;
 

@@ -147,6 +147,9 @@ impl fmt::Display for Request {
                 ReadOperation::BfScanDump(req) => write!(f, "BfScanDump: {}", req),
                 ReadOperation::XReadGroup(req) => write!(f, "XReadGroup: {}", req),
                 ReadOperation::Scan(req) => write!(f, "Scan: {}", req),
+                ReadOperation::HScan(req) => write!(f, "HScan: {}", req),
+                ReadOperation::SScan(req) => write!(f, "SScan: {}", req),
+                ReadOperation::ZScan(req) => write!(f, "ZScan: {}", req),
             },
             Operation::Base(op) => match op {
                 BaseOperation::Empty => write!(f, "None"),

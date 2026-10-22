@@ -23,6 +23,7 @@ use crate::protocol::hash::hkeys::HKeysCommand;
 use crate::protocol::hash::hlen::HLenCommand;
 use crate::protocol::hash::hmget::HMGetCommand;
 use crate::protocol::hash::hmset::HMSetCommand;
+use crate::protocol::hash::hscan::HScanCommand;
 use crate::protocol::hash::hset::HSetCommand;
 use crate::protocol::hash::hsetnx::HSetNxCommand;
 use crate::protocol::hash::hstrlen::HStrLenCommand;
@@ -63,6 +64,7 @@ use crate::protocol::set::smembers::SMembersCommand;
 use crate::protocol::set::spop::SPopCommand;
 use crate::protocol::set::srandmember::SRandMemberCommand;
 use crate::protocol::set::srem::SRemCommand;
+use crate::protocol::set::sscan::SScanCommand;
 use crate::protocol::set::sunion::SUnionCommand;
 use crate::protocol::set::sunionstore::SUnionStoreCommand;
 use crate::protocol::stream::xadd::XAddCommand;
@@ -96,6 +98,7 @@ use crate::protocol::zset::zrangegetscore::ZRangeByScoreCommand;
 use crate::protocol::zset::zrank::ZRankCommand;
 use crate::protocol::zset::zrem::ZRemCommand;
 use crate::protocol::zset::zrevrank::ZRevRankCommand;
+use crate::protocol::zset::zscan::ZScanCommand;
 use crate::protocol::zset::zscore::ZScoreCommand;
 use crate::raft::types::core::response_value::Value;
 use crate::raft::types::entry::read_operation::ReadOperation;
@@ -177,6 +180,7 @@ impl RaftCommandFactory {
         factory.register("RENAME", RenameCommand);
         factory.register("RENAMENX", RenameNxCommand);
         factory.register("SMEMBERS", SMembersCommand);
+        factory.register("SSCAN", SScanCommand);
         factory.register("HMGET", HMGetCommand);
         factory.register("HMSET", HMSetCommand);
         // factory.register("EVAL", EvalCommand); // Prohibiting nesting (not prohibited)
@@ -204,6 +208,7 @@ impl RaftCommandFactory {
         factory.register("HLEN", HLenCommand);
         factory.register("HSETNX", HSetNxCommand);
         factory.register("HSTRLEN", HStrLenCommand);
+        factory.register("HSCAN", HScanCommand);
         factory.register("DECR", DecrCommand);
         factory.register("GETSET", GetSetCommand);
         factory.register("ZREM", ZRemCommand);
@@ -231,6 +236,7 @@ impl RaftCommandFactory {
         factory.register("UNLINK", UnlinkCommand);
         factory.register("ZREVRANK", ZRevRankCommand);
         factory.register("ZINCRBY", ZIncrByCommand);
+        factory.register("ZSCAN", ZScanCommand);
         factory.register("DBSIZE", DbsizeCommand);
         factory.register("PFCOUNT", PfcountCommand);
         factory.register("PFADD", PfAddCommand);

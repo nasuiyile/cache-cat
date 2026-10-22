@@ -8,6 +8,7 @@ pub mod zrangegetscore;
 pub mod zrank;
 pub mod zrem;
 pub mod zrevrank;
+pub mod zscan;
 pub mod zscore;
 
 #[cfg(test)]

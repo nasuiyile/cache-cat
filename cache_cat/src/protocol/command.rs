@@ -34,6 +34,7 @@ use crate::protocol::hash::hkeys::HKeysCommand;
 use crate::protocol::hash::hlen::HLenCommand;
 use crate::protocol::hash::hmget::HMGetCommand;
 use crate::protocol::hash::hmset::HMSetCommand;
+use crate::protocol::hash::hscan::HScanCommand;
 use crate::protocol::hash::hset::HSetCommand;
 use crate::protocol::hash::hsetnx::HSetNxCommand;
 use crate::protocol::hash::hstrlen::HStrLenCommand;
@@ -91,6 +92,7 @@ use crate::protocol::set::smembers::SMembersCommand;
 use crate::protocol::set::spop::SPopCommand;
 use crate::protocol::set::srandmember::SRandMemberCommand;
 use crate::protocol::set::srem::SRemCommand;
+use crate::protocol::set::sscan::SScanCommand;
 use crate::protocol::set::sunion::SUnionCommand;
 use crate::protocol::set::sunionstore::SUnionStoreCommand;
 use crate::protocol::stream::xadd::XAddCommand;
@@ -128,6 +130,7 @@ use crate::protocol::zset::zrangegetscore::ZRangeByScoreCommand;
 use crate::protocol::zset::zrank::ZRankCommand;
 use crate::protocol::zset::zrem::ZRemCommand;
 use crate::protocol::zset::zrevrank::ZRevRankCommand;
+use crate::protocol::zset::zscan::ZScanCommand;
 use crate::protocol::zset::zscore::ZScoreCommand;
 use crate::raft::network::connection::Connection;
 use crate::raft::network::redis_server::{RedisServer, RespCodec};
@@ -397,9 +400,11 @@ impl CommandFactory {
         factory.register("HLEN", HLenCommand);
         factory.register("HSETNX", HSetNxCommand);
         factory.register("HSTRLEN", HStrLenCommand);
+        factory.register("HSCAN", HScanCommand);
         // Set commands
         factory.register("SADD", SAddCommand);
         factory.register("SMEMBERS", SMembersCommand);
+        factory.register("SSCAN", SScanCommand);
         factory.register("SREM", SRemCommand);
         factory.register("SISMEMBER", SIsMemberCommand);
         factory.register("SPOP", SPopCommand);
@@ -422,6 +427,7 @@ impl CommandFactory {
         factory.register("ZPOPMIN", ZPopMinCommand);
         factory.register("ZREVRANK", ZRevRankCommand);
         factory.register("ZINCRBY", ZIncrByCommand);
+        factory.register("ZSCAN", ZScanCommand);
         // Bitmap commands
         factory.register("SETBIT", SetBitCommand);
         factory.register("GETBIT", GetBitCommand);

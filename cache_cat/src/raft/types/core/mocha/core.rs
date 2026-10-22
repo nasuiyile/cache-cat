@@ -3,6 +3,7 @@ use crate::mocha::Mocha;
 use crate::protocol::common::lua_env::LuaEnv;
 use crate::protocol::stream::xread::XReadParams;
 use crate::raft::application::blocking_keys::BlockingKeys;
+use crate::raft::types::core::collection_index::CollectionIndexCache;
 use crate::raft::types::core::response_value::Value;
 use crate::raft::types::core::value_object::ValueObject;
 use crate::raft::types::entry::request::AtomicRequest;
@@ -37,12 +38,15 @@ impl MyValue {
 pub struct Database {
     // pub cache: Cache<Arc<Vec<u8>>, MyValue>,
     pub mocha: Mocha<Bytes, MyValue>,
+    /// Element order for HSCAN, SSCAN and ZSCAN, built on demand.
+    pub collection_indexes: Arc<CollectionIndexCache>,
 }
 
 impl Clone for Database {
     fn clone(&self) -> Self {
         Self {
             mocha: self.mocha.clone(),
+            collection_indexes: Arc::clone(&self.collection_indexes),
         }
     }
 }
@@ -119,7 +123,10 @@ impl MyCache {
         let mut vec = Vec::new();
         for _ in 0..db_number {
             let mocha = Mocha::new(write_logic_clock.clone());
-            let db = Database { mocha };
+            let db = Database {
+                mocha,
+                collection_indexes: Arc::new(CollectionIndexCache::default()),
+            };
             vec.push(db);
         }
         let lua_env = LuaEnv::new()?;

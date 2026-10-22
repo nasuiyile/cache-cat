@@ -7,7 +7,9 @@
 use crate::error::{CacheCatError, ProtocolError};
 use crate::protocol::command::{Client, Command};
 use crate::protocol::key::type_::value_object_to_type_string;
+use crate::protocol::option_eq;
 use crate::protocol::raft_command::{RaftCommand, ReadRaftCommand};
+use crate::protocol::scan_cursor::{self, ScanOptions};
 use crate::raft::network::redis_server::RedisServer;
 use crate::raft::types::core::mocha::core::MyCache;
 use crate::raft::types::core::response_value::Value;
@@ -17,9 +19,6 @@ use async_trait::async_trait;
 use bytes::Bytes;
 use serde::{Deserialize, Serialize};
 use std::fmt::Display;
-
-/// Page size Redis uses when COUNT is absent.
-const DEFAULT_COUNT: usize = 10;
 
 /// Parameters for SCAN command
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -74,18 +73,12 @@ impl ScanParams {
                     })
             },
         );
-        Self::reply(cursor, keys)
-    }
-
-    fn reply(cursor: u64, keys: Vec<Bytes>) -> Value {
-        Value::Array(Some(vec![
-            Value::BulkString(Some(cursor.to_string().into())),
-            Value::Array(Some(
-                keys.into_iter()
-                    .map(|key| Value::BulkString(Some(key)))
-                    .collect(),
-            )),
-        ]))
+        scan_cursor::reply(
+            cursor,
+            keys.into_iter()
+                .map(|key| Value::BulkString(Some(key)))
+                .collect(),
+        )
     }
 
     /// Parse `SCAN cursor [MATCH pattern] [COUNT count] [TYPE type]`.
@@ -96,58 +89,29 @@ impl ScanParams {
         if items.len() < 2 {
             return Err(ProtocolError::WrongArgCount("scan"));
         }
+        let cursor = scan_cursor::parse_cursor(&items[1])?;
 
-        let cursor = Self::parse_cursor(&items[1])?;
-        let mut count = DEFAULT_COUNT;
-        let mut pattern = None;
-        let mut type_filter: Option<Bytes> = None;
-
-        let mut index = 2;
-        while index < items.len() {
-            let name = items[index]
-                .string_bytes_clone()
-                .ok_or(ProtocolError::SyntaxError)?;
-            let Some(value) = items.get(index + 1).and_then(Value::string_bytes_clone) else {
-                return Err(ProtocolError::SyntaxError);
-            };
-            if name.eq_ignore_ascii_case(b"match") {
-                // A bare "*" is Redis' way of disabling the pattern.
-                pattern = (value.as_ref() != b"*".as_slice()).then_some(value);
-            } else if name.eq_ignore_ascii_case(b"count") {
-                count = Self::parse_count(&value)?;
-            } else if name.eq_ignore_ascii_case(b"type") && type_filter.is_none() {
+        let mut type_filter = None;
+        let options =
+            ScanOptions::parse(cursor, items.get(2..).unwrap_or_default(), |name, rest| {
+                if !option_eq(name, b"type") {
+                    return Ok(None);
+                }
+                // A repeated TYPE overwrites the previous one, like Redis.
+                let value = rest
+                    .first()
+                    .and_then(Value::string_bytes_clone)
+                    .ok_or(ProtocolError::SyntaxError)?;
                 type_filter = Some(value);
-            } else {
-                return Err(ProtocolError::SyntaxError);
-            }
-            index += 2;
-        }
+                Ok(Some(1))
+            })?;
 
         Ok(Self {
-            cursor,
-            count,
-            pattern,
+            cursor: options.cursor,
+            count: options.count,
+            pattern: options.pattern,
             type_filter,
         })
-    }
-
-    fn parse_cursor(value: &Value) -> Result<u64, ProtocolError> {
-        value
-            .string_bytes_clone()
-            .and_then(|text| std::str::from_utf8(&text).ok()?.parse().ok())
-            .ok_or_else(|| ProtocolError::response("ERR invalid cursor"))
-    }
-
-    /// COUNT is a signed value like Redis' long, so only 1 and above are valid.
-    fn parse_count(value: &Bytes) -> Result<usize, ProtocolError> {
-        let count: i64 = std::str::from_utf8(value)
-            .ok()
-            .and_then(|text| text.parse().ok())
-            .ok_or(ProtocolError::NotAnInteger)?;
-        if count < 1 {
-            return Err(ProtocolError::SyntaxError);
-        }
-        Ok(usize::try_from(count).unwrap_or(usize::MAX))
     }
 }
 
@@ -433,9 +397,19 @@ mod tests {
             error_text(&["SCAN", "0", "COUNT", "abc"]),
             "ERR value is not an integer or out of range"
         );
+        // A repeated TYPE overwrites the previous one, like Redis.
         assert_eq!(
-            error_text(&["SCAN", "0", "TYPE", "string", "TYPE", "list"]),
-            "ERR syntax error"
+            params(&["SCAN", "0", "TYPE", "string", "TYPE", "list"])
+                .unwrap()
+                .type_filter,
+            Some(Bytes::from_static(b"list"))
+        );
+        // Option names compare like C strings, so a NUL terminator ends one.
+        assert_eq!(
+            params(&["SCAN", "0", "TYPE\0", "hash"])
+                .unwrap()
+                .type_filter,
+            Some(Bytes::from_static(b"hash"))
         );
         assert_eq!(error_text(&["SCAN", "0", "BOGUS", "1"]), "ERR syntax error");
         let parsed = params(&[

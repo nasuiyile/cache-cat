@@ -12,6 +12,7 @@ use crate::protocol::hash::hgetall::HGetAllParams;
 use crate::protocol::hash::hkeys::HKeysParams;
 use crate::protocol::hash::hlen::HLenParams;
 use crate::protocol::hash::hmget::HMGetParams;
+use crate::protocol::hash::hscan::HScanParams;
 use crate::protocol::hash::hstrlen::HStrLenParams;
 use crate::protocol::hash::hvals::HValsParams;
 use crate::protocol::key::dbsize::DbsizeParams;
@@ -31,6 +32,7 @@ use crate::protocol::set::sinter::SInterParams;
 use crate::protocol::set::sismember::SIsMemberParams;
 use crate::protocol::set::smembers::SMembersParams;
 use crate::protocol::set::srandmember::SRandMemberParams;
+use crate::protocol::set::sscan::SScanParams;
 use crate::protocol::set::sunion::SUnionParams;
 use crate::protocol::stream::xread::XReadParams;
 use crate::protocol::stream::xreadgroup::XReadGroupParams;
@@ -44,6 +46,7 @@ use crate::protocol::zset::zrange::ZRangeParams;
 use crate::protocol::zset::zrangegetscore::ZRangeByScoreParams;
 use crate::protocol::zset::zrank::ZRankParams;
 use crate::protocol::zset::zrevrank::ZRevRankParams;
+use crate::protocol::zset::zscan::ZScanParams;
 use crate::protocol::zset::zscore::ZScoreParams;
 use serde::{Deserialize, Serialize};
 
@@ -96,4 +99,7 @@ pub enum ReadOperation {
     XRead(XReadParams),
     XReadGroup(XReadGroupParams),
     Scan(ScanParams),
+    HScan(HScanParams),
+    SScan(SScanParams),
+    ZScan(ZScanParams),
 }
