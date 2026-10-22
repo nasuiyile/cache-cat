@@ -872,6 +872,15 @@ where
         self.map.pin().len()
     }
 
+    /// Number of entries holding a deadline, reported by INFO keyspace.
+    pub fn expire_count(&self) -> usize {
+        self.map
+            .pin()
+            .iter()
+            .filter(|(_, entry)| entry.expire_at.get().is_some())
+            .count()
+    }
+
     /// Count keys visible at a fixed clock without cloning their keys or values.
     /// The physical map length can differ between replicas while expired entries
     /// await reclamation, so it must not feed replicated state-machine writes.

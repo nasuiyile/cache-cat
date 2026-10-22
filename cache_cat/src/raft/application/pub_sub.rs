@@ -472,6 +472,21 @@ impl PubSub {
             .unwrap_or(0)
     }
 
+    /// Clients currently holding at least one subscription, reported by INFO.
+    pub async fn client_count(&self) -> usize {
+        self.clients.read().await.len()
+    }
+
+    /// Channels with at least one subscriber, reported by INFO.
+    pub async fn channel_count(&self) -> usize {
+        self.subs.read().await.len()
+    }
+
+    /// Patterns with at least one subscriber, reported by INFO.
+    pub async fn pattern_count(&self) -> usize {
+        self.patterns.read().await.len()
+    }
+
     /// Get the current number of subscription modes for the client
     pub async fn client_pattern_count(&self, client_id: u64) -> u64 {
         let clients = self.clients.read().await;

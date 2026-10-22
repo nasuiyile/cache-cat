@@ -74,6 +74,7 @@ use crate::protocol::pub_sub::subscribe::SubscribeCommand;
 use crate::protocol::pub_sub::unsubscribe::UnsubscribeCommand;
 use crate::protocol::sentinel::core::SentinelCommand;
 use crate::protocol::server::bgsave::BgsaveCommand;
+use crate::protocol::server::info::InfoCommand;
 use crate::protocol::server::memory::core::MemoryCommand;
 use crate::protocol::server::save::SaveCommand;
 use crate::protocol::server::shutdown::ShutdownCommand;
@@ -137,6 +138,7 @@ use futures::StreamExt;
 use std::collections::HashMap;
 use std::fmt;
 use std::fmt::{Display, Formatter};
+use std::sync::atomic::Ordering;
 use tokio::select;
 use tokio::sync::mpsc;
 use tokio_util::codec::Framed;
@@ -331,6 +333,7 @@ impl CommandFactory {
         factory.register("CLIENT", ClientCommand::new());
         factory.register("HELLO", HelloCommand);
         factory.register("MEMORY", MemoryCommand::new());
+        factory.register("INFO", InfoCommand);
         // Register data commands
         factory.register("GET", GetCommand);
         factory.register("SET", SetCommand);
@@ -520,6 +523,7 @@ impl CommandFactory {
             && !Self::SUBSCRIBE_MODE_COMMANDS.contains(&parsed.name.as_str())
         {
             if let Some(cmd) = self.commands.get(&parsed.name) {
+                server.total_commands_processed.fetch_add(1, Ordering::Relaxed);
                 let resp = match cmd.execute(client, &parsed.items, server).await {
                     Ok(v) => v,
                     Err(e) => {
@@ -536,6 +540,7 @@ impl CommandFactory {
             return Ok(resp);
         }
 
+        server.total_commands_processed.fetch_add(1, Ordering::Relaxed);
         match block_cmd
             .execute_during_block(client, &parsed, server)
             .await
@@ -677,6 +682,7 @@ impl CommandFactory {
         }
 
         if let Some(cmd) = self.commands.get(&parsed.name) {
+            server.total_commands_processed.fetch_add(1, Ordering::Relaxed);
             let resp = match cmd.execute(client, &parsed.items, server).await {
                 Ok(v) => v,
                 Err(e) => {
@@ -694,6 +700,7 @@ impl CommandFactory {
 
         // Try blocking command
         if let Some(cmd) = self.block_commands.get(&parsed.name) {
+            server.total_commands_processed.fetch_add(1, Ordering::Relaxed);
             match cmd.execute(client, &parsed.items, server).await {
                 Ok((initial_resp, stream)) => {
                     client.flag.blocking = true;

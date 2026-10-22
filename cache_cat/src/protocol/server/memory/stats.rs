@@ -21,26 +21,26 @@ struct MiStatCount {
 }
 
 #[derive(Debug, Deserialize)]
-struct MiProcessStats {
+pub(crate) struct MiProcessStats {
     #[serde(default)]
-    rss_current: u64,
+    pub(crate) rss_current: u64,
 
     #[serde(default)]
     rss_peak: u64,
 
     #[serde(default)]
-    commit_current: u64,
+    pub(crate) commit_current: u64,
 
     #[serde(default)]
-    commit_peak: u64,
+    pub(crate) commit_peak: u64,
 
     #[serde(default)]
     page_faults: u64,
 }
 
 #[derive(Debug, Deserialize)]
-struct MiMallocStats {
-    process: MiProcessStats,
+pub(crate) struct MiMallocStats {
+    pub(crate) process: MiProcessStats,
 
     reserved: MiStatCount,
     committed: MiStatCount,
@@ -77,12 +77,16 @@ struct MemoryStats {
     purged_bytes: u64,
 }
 
+/// Parse the mimalloc statistics once for both MEMORY STATS and INFO.
+pub(crate) fn mimalloc_stats() -> Result<MiMallocStats, &'static str> {
+    let json = MiMalloc::stats_json().map_err(|_| "failed to get mimalloc stats")?;
+
+    serde_json::from_slice(json.to_bytes()).map_err(|_| "failed to parse mimalloc stats")
+}
+
 impl MemoryStats {
     fn collect() -> Result<Self, &'static str> {
-        let json = MiMalloc::stats_json().map_err(|_| "failed to get mimalloc stats")?;
-
-        let raw: MiMallocStats = serde_json::from_slice(json.to_bytes())
-            .map_err(|_| "failed to parse mimalloc stats")?;
+        let raw = mimalloc_stats()?;
 
         Ok(Self {
             /*
