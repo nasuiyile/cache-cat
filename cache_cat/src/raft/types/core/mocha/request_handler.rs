@@ -52,6 +52,7 @@ fn read_request_inner<const REPLICATED: bool>(
         ReadOperation::PTtl(param) => my_cache.execute_read(param, db_number, read_clock),
         ReadOperation::Ttl(param) => my_cache.execute_read(param, db_number, read_clock),
         ReadOperation::HLen(param) => my_cache.execute_read(param, db_number, read_clock),
+        ReadOperation::HStrLen(param) => my_cache.execute_read(param, db_number, read_clock),
         ReadOperation::BitCount(param) => my_cache.execute_read(param, db_number, read_clock),
         ReadOperation::BitPos(param) => my_cache.execute_read(param, db_number, read_clock),
         ReadOperation::SCard(param) => my_cache.execute_read(param, db_number, read_clock),

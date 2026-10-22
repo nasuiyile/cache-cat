@@ -10,6 +10,7 @@ pub mod hmget;
 pub mod hmset;
 pub mod hset;
 pub mod hsetnx;
+pub mod hstrlen;
 pub mod hvals;
 
 #[cfg(test)]
@@ -189,6 +190,75 @@ mod tests {
     }
 
     #[test]
+    fn hstrlen_counts_value_bytes_and_handles_missing_fields() {
+        let hash = hash_entry(
+            &[
+                (
+                    "binary".into(),
+                    HashValue::Str(Bytes::from_static(b"a\0\xff")),
+                ),
+                ("integer".into(), HashValue::Int(-12345)),
+            ],
+            0,
+            false,
+        );
+
+        assert_eq!(
+            hstrlen::HStrLenParams {
+                key: "h".into(),
+                field: "binary".into(),
+            }
+            .execute(Some(hash.clone()))
+            .encode(),
+            b":3\r\n"
+        );
+        assert_eq!(
+            hstrlen::HStrLenParams {
+                key: "h".into(),
+                field: "integer".into(),
+            }
+            .execute(Some(hash.clone()))
+            .encode(),
+            b":6\r\n"
+        );
+        assert_eq!(
+            hstrlen::HStrLenParams {
+                key: "h".into(),
+                field: "missing".into(),
+            }
+            .execute(Some(hash))
+            .encode(),
+            b":0\r\n"
+        );
+        assert_eq!(
+            hstrlen::HStrLenParams {
+                key: "missing".into(),
+                field: "binary".into(),
+            }
+            .execute(None)
+            .encode(),
+            b":0\r\n"
+        );
+    }
+
+    #[test]
+    fn hstrlen_rejects_non_hash_values() {
+        let value = EntrySnapshot {
+            value: MyValue::new(ValueObject::String("value".into())),
+            expire_at: None,
+        };
+        assert_eq!(
+            hstrlen::HStrLenParams {
+                key: "h".into(),
+                field: "f".into(),
+            }
+            .execute(Some(value))
+            .encode(),
+            b"-WRONGTYPE Operation against a key holding the wrong kind of value\r\n"
+        );
+    }
+
+    #[test]
     fn hincrby_accepts_hmset_integers_preserves_ttl_and_aborts_on_overflow() {
         for (old, increment, expected) in [
             ("41", 1, Some(42)),
@@ -288,12 +358,13 @@ mod tests {
 
     #[test]
     fn fixed_arity_hash_commands_reject_extra_arguments() {
-        let commands: [(&dyn RaftCommand, usize); 6] = [
+        let commands: [(&dyn RaftCommand, usize); 7] = [
             (&hget::HGetCommand, 3),
             (&hexists::HExistsCommand, 3),
             (&hgetall::HGetAllCommand, 2),
             (&hkeys::HKeysCommand, 2),
             (&hlen::HLenCommand, 2),
+            (&hstrlen::HStrLenCommand, 3),
             (&hvals::HValsCommand, 2),
         ];
         for (command, arity) in commands {

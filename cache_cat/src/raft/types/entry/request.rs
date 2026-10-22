@@ -123,6 +123,7 @@ impl fmt::Display for Request {
                 ReadOperation::PTtl(req) => write!(f, "Pttl: {}", req),
                 ReadOperation::Ttl(req) => write!(f, "Ttl: {}", req),
                 ReadOperation::HLen(req) => write!(f, "HLen: {}", req),
+                ReadOperation::HStrLen(req) => write!(f, "HStrLen: {}", req),
                 ReadOperation::BitCount(req) => write!(f, "BitCount: {}", req),
                 ReadOperation::BitPos(req) => write!(f, "BitPos: {}", req),
                 ReadOperation::SCard(req) => write!(f, "SCard: {}", req),

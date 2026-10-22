@@ -36,6 +36,7 @@ use crate::protocol::hash::hmget::HMGetCommand;
 use crate::protocol::hash::hmset::HMSetCommand;
 use crate::protocol::hash::hset::HSetCommand;
 use crate::protocol::hash::hsetnx::HSetNxCommand;
+use crate::protocol::hash::hstrlen::HStrLenCommand;
 use crate::protocol::hash::hvals::HValsCommand;
 use crate::protocol::key::dbsize::DbsizeCommand;
 use crate::protocol::key::del::DelCommand;
@@ -390,6 +391,7 @@ impl CommandFactory {
         factory.register("HEXISTS", HExistsCommand);
         factory.register("HLEN", HLenCommand);
         factory.register("HSETNX", HSetNxCommand);
+        factory.register("HSTRLEN", HStrLenCommand);
         // Set commands
         factory.register("SADD", SAddCommand);
         factory.register("SMEMBERS", SMembersCommand);

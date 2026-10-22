@@ -1,6 +1,8 @@
 //! Replicated reads must remain deterministic after rebuilding hash tables.
 
-use crate::protocol::hash::{hgetall::HGetAllParams, hkeys::HKeysParams, hvals::HValsParams};
+use crate::protocol::hash::{
+    hgetall::HGetAllParams, hkeys::HKeysParams, hstrlen::HStrLenParams, hvals::HValsParams,
+};
 use crate::protocol::key::keys::KeysParams;
 use crate::protocol::lua::eval::EvalParams;
 use crate::protocol::set::{
@@ -164,6 +166,44 @@ fn apply_log(cache: &MyCache, log: &[u8]) -> Value {
         update_type: &mut update_type,
     };
     do_request(cache, request.operation, &mut update, true)
+}
+
+#[test]
+fn replicated_hstrlen_reads_match_across_rebuilt_replicas() {
+    let caches = replicas();
+    let operation = Operation::Read(ReadOperation::HStrLen(HStrLenParams {
+        key: "input:hash".into(),
+        field: "a\0".into(),
+    }));
+    let log = bincode2::serialize(&Request::new(4_000, 0, operation)).unwrap();
+    let replies: Vec<_> = caches.iter().map(|cache| apply_log(cache, &log)).collect();
+
+    assert!(replies.iter().all(|reply| reply.encode() == b":3\r\n"));
+    assert!(
+        replies
+            .iter()
+            .skip(1)
+            .all(|reply| reply.encode() == replies[0].encode())
+    );
+
+    let expired_log = bincode2::serialize(&Request::new(
+        11_000,
+        0,
+        Operation::Read(ReadOperation::HStrLen(HStrLenParams {
+            key: "input:hash".into(),
+            field: "a\0".into(),
+        })),
+    ))
+    .unwrap();
+    let expired_replies: Vec<_> = caches
+        .iter()
+        .map(|cache| apply_log(cache, &expired_log))
+        .collect();
+    assert!(
+        expired_replies
+            .iter()
+            .all(|reply| reply.encode() == b":0\r\n")
+    );
 }
 
 fn eval(prefix: &str, api: &str, proto: u8) -> Operation {
