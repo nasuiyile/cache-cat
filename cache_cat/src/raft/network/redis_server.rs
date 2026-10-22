@@ -6,13 +6,16 @@ use crate::raft::application::pub_sub::PubSub;
 use crate::raft::network::connection::Connection;
 use crate::raft::types::core::response_value::Value;
 use crate::raft::types::raft_types::CacheCatApp;
+use crate::utils::now_ms;
 use bytes::BytesMut;
 use std::net::SocketAddr;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 use tokio::net::TcpListener;
 use tokio_rustls::TlsAcceptor;
 use tokio_util::codec::{Decoder, Encoder};
 use tracing::{error, info};
+use uuid::Uuid;
 
 #[derive(Clone)]
 pub struct RedisServer {
@@ -21,11 +24,38 @@ pub struct RedisServer {
     pub tls_addr: Option<String>,
     pub cmd_factory: Arc<CommandFactory>,
     pub broadcast: Arc<PubSub>,
+    /// Identity of this service instance, reported as INFO run_id.
+    pub run_id: String,
+    /// Service start time in milliseconds, the basis of INFO uptime.
+    pub start_time_ms: u64,
+    /// Client connections currently being handled.
+    pub connected_clients: Arc<AtomicU64>,
+    /// Client connections accepted since start.
+    pub total_connections_received: Arc<AtomicU64>,
+    /// Commands dispatched since start.
+    pub total_commands_processed: Arc<AtomicU64>,
 }
 
 pub(super) struct RedisListeners {
     tcp: TcpListener,
     tls: Option<(TcpListener, TlsAcceptor)>,
+}
+
+/// Keeps INFO connected_clients accurate even when the connection task is
+/// aborted before its normal cleanup runs.
+struct ConnectionGuard(Arc<AtomicU64>);
+
+impl ConnectionGuard {
+    fn new(counter: &Arc<AtomicU64>) -> Self {
+        counter.fetch_add(1, Ordering::Relaxed);
+        Self(counter.clone())
+    }
+}
+
+impl Drop for ConnectionGuard {
+    fn drop(&mut self) {
+        self.0.fetch_sub(1, Ordering::Relaxed);
+    }
 }
 
 /// REQUESTS selects the non-recursive Redis command parser at compile time.
@@ -109,6 +139,11 @@ impl RedisServer {
             tls_addr,
             cmd_factory,
             broadcast,
+            run_id: Uuid::new_v4().simple().to_string(),
+            start_time_ms: now_ms(),
+            connected_clients: Arc::new(AtomicU64::new(0)),
+            total_connections_received: Arc::new(AtomicU64::new(0)),
+            total_commands_processed: Arc::new(AtomicU64::new(0)),
         })
     }
 
@@ -124,6 +159,7 @@ impl RedisServer {
         // let framed = Framed::new(stream, RespCodec::new());
         let auth = self.app.config.password.is_none();
         let client = Client::new(client_id, connection, auth);
+        let _connections = ConnectionGuard::new(&self.connected_clients);
         let result = self.cmd_factory.process_connection(&self, client).await;
         self.app.pubsub.remove_client(client_id).await;
         info!("Connection handler ended for {}", peer_addr);
@@ -174,6 +210,7 @@ impl RedisServer {
                             let server = Arc::clone(&self);
                             client_id += 1;
                             let id = client_id;
+                            self.total_connections_received.fetch_add(1, Ordering::Relaxed);
 
                             if let Err(e) = stream.set_nodelay(true) {
                                 error!("Failed to set nodelay for {}: {}", peer_addr, e);
@@ -213,6 +250,7 @@ impl RedisServer {
                                 let server = Arc::clone(&self);
                                 client_id += 1;
                                 let id = client_id;
+                                self.total_connections_received.fetch_add(1, Ordering::Relaxed);
 
                                 if let Err(e) = stream.set_nodelay(true) {
                                     error!("Failed to set nodelay for TLS client {}: {}", peer_addr, e);

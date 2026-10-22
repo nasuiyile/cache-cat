@@ -34,6 +34,7 @@ use crate::protocol::hash::hkeys::HKeysCommand;
 use crate::protocol::hash::hlen::HLenCommand;
 use crate::protocol::hash::hmget::HMGetCommand;
 use crate::protocol::hash::hmset::HMSetCommand;
+use crate::protocol::hash::hscan::HScanCommand;
 use crate::protocol::hash::hset::HSetCommand;
 use crate::protocol::hash::hsetnx::HSetNxCommand;
 use crate::protocol::hash::hstrlen::HStrLenCommand;
@@ -50,6 +51,7 @@ use crate::protocol::key::pexpire::PExpireCommand;
 use crate::protocol::key::pttl::PTtlCommand;
 use crate::protocol::key::rename::RenameCommand;
 use crate::protocol::key::renamenx::RenameNxCommand;
+use crate::protocol::key::scan::ScanCommand;
 use crate::protocol::key::ttl::TtlCommand;
 use crate::protocol::key::type_::TypeCommand;
 use crate::protocol::key::unlink::UnlinkCommand;
@@ -74,6 +76,7 @@ use crate::protocol::pub_sub::subscribe::SubscribeCommand;
 use crate::protocol::pub_sub::unsubscribe::UnsubscribeCommand;
 use crate::protocol::sentinel::core::SentinelCommand;
 use crate::protocol::server::bgsave::BgsaveCommand;
+use crate::protocol::server::info::InfoCommand;
 use crate::protocol::server::memory::core::MemoryCommand;
 use crate::protocol::server::save::SaveCommand;
 use crate::protocol::server::shutdown::ShutdownCommand;
@@ -89,6 +92,7 @@ use crate::protocol::set::smembers::SMembersCommand;
 use crate::protocol::set::spop::SPopCommand;
 use crate::protocol::set::srandmember::SRandMemberCommand;
 use crate::protocol::set::srem::SRemCommand;
+use crate::protocol::set::sscan::SScanCommand;
 use crate::protocol::set::sunion::SUnionCommand;
 use crate::protocol::set::sunionstore::SUnionStoreCommand;
 use crate::protocol::stream::xadd::XAddCommand;
@@ -126,6 +130,7 @@ use crate::protocol::zset::zrangegetscore::ZRangeByScoreCommand;
 use crate::protocol::zset::zrank::ZRankCommand;
 use crate::protocol::zset::zrem::ZRemCommand;
 use crate::protocol::zset::zrevrank::ZRevRankCommand;
+use crate::protocol::zset::zscan::ZScanCommand;
 use crate::protocol::zset::zscore::ZScoreCommand;
 use crate::raft::network::connection::Connection;
 use crate::raft::network::redis_server::{RedisServer, RespCodec};
@@ -137,6 +142,7 @@ use futures::StreamExt;
 use std::collections::HashMap;
 use std::fmt;
 use std::fmt::{Display, Formatter};
+use std::sync::atomic::Ordering;
 use tokio::select;
 use tokio::sync::mpsc;
 use tokio_util::codec::Framed;
@@ -331,6 +337,7 @@ impl CommandFactory {
         factory.register("CLIENT", ClientCommand::new());
         factory.register("HELLO", HelloCommand);
         factory.register("MEMORY", MemoryCommand::new());
+        factory.register("INFO", InfoCommand);
         // Register data commands
         factory.register("GET", GetCommand);
         factory.register("SET", SetCommand);
@@ -360,6 +367,7 @@ impl CommandFactory {
         factory.register("FLUSHDB", FlushDBCommand);
         factory.register("FLUSHALL", FlushAllCommand);
         factory.register("KEYS", KeysCommand);
+        factory.register("SCAN", ScanCommand);
         factory.register("UNLINK", UnlinkCommand);
         factory.register("DBSIZE", DbsizeCommand);
         factory.register("PFCOUNT", PfcountCommand);
@@ -392,9 +400,11 @@ impl CommandFactory {
         factory.register("HLEN", HLenCommand);
         factory.register("HSETNX", HSetNxCommand);
         factory.register("HSTRLEN", HStrLenCommand);
+        factory.register("HSCAN", HScanCommand);
         // Set commands
         factory.register("SADD", SAddCommand);
         factory.register("SMEMBERS", SMembersCommand);
+        factory.register("SSCAN", SScanCommand);
         factory.register("SREM", SRemCommand);
         factory.register("SISMEMBER", SIsMemberCommand);
         factory.register("SPOP", SPopCommand);
@@ -417,6 +427,7 @@ impl CommandFactory {
         factory.register("ZPOPMIN", ZPopMinCommand);
         factory.register("ZREVRANK", ZRevRankCommand);
         factory.register("ZINCRBY", ZIncrByCommand);
+        factory.register("ZSCAN", ZScanCommand);
         // Bitmap commands
         factory.register("SETBIT", SetBitCommand);
         factory.register("GETBIT", GetBitCommand);
@@ -520,6 +531,7 @@ impl CommandFactory {
             && !Self::SUBSCRIBE_MODE_COMMANDS.contains(&parsed.name.as_str())
         {
             if let Some(cmd) = self.commands.get(&parsed.name) {
+                server.total_commands_processed.fetch_add(1, Ordering::Relaxed);
                 let resp = match cmd.execute(client, &parsed.items, server).await {
                     Ok(v) => v,
                     Err(e) => {
@@ -536,6 +548,7 @@ impl CommandFactory {
             return Ok(resp);
         }
 
+        server.total_commands_processed.fetch_add(1, Ordering::Relaxed);
         match block_cmd
             .execute_during_block(client, &parsed, server)
             .await
@@ -677,6 +690,7 @@ impl CommandFactory {
         }
 
         if let Some(cmd) = self.commands.get(&parsed.name) {
+            server.total_commands_processed.fetch_add(1, Ordering::Relaxed);
             let resp = match cmd.execute(client, &parsed.items, server).await {
                 Ok(v) => v,
                 Err(e) => {
@@ -694,6 +708,7 @@ impl CommandFactory {
 
         // Try blocking command
         if let Some(cmd) = self.block_commands.get(&parsed.name) {
+            server.total_commands_processed.fetch_add(1, Ordering::Relaxed);
             match cmd.execute(client, &parsed.items, server).await {
                 Ok((initial_resp, stream)) => {
                     client.flag.blocking = true;

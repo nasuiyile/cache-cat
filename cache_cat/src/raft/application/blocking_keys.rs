@@ -171,6 +171,11 @@ where
     /// Every selected registration is removed from all of its keys before
     /// sending. A receiver that registers again therefore waits for the next
     /// event, even when it runs concurrently with this broadcast.
+    /// Number of registrations still waiting, used by INFO blocked_clients.
+    pub fn waiter_count(&self) -> usize {
+        self.inner.state.lock().waiters.len()
+    }
+
     pub fn wake_all(&self, key: &K, value: V) -> usize
     where
         V: Clone,

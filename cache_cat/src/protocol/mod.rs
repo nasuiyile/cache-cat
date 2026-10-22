@@ -14,6 +14,7 @@ pub mod bitmap;
 pub mod common;
 pub mod pub_sub;
 mod raft_command;
+pub(crate) mod scan_cursor;
 pub mod sentinel;
 pub mod server;
 pub mod stream;

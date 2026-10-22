@@ -40,6 +40,14 @@ impl NodeState {
             .map(|d| (d.as_millis() as u64) < self.election_timeout_max)
             .unwrap_or(false)
     }
+
+    /// Milliseconds since the last heartbeat of a node, absent until the leader
+    /// has published a node-state snapshot.
+    pub fn heartbeat_ms(&self, node_id: NodeId) -> Option<u64> {
+        self.nodes_heartbeat
+            .get(&node_id)
+            .map(|d| d.as_millis() as u64)
+    }
 }
 
 pub struct Cluster {
@@ -110,6 +118,26 @@ impl Cluster {
             }
         }
         res
+    }
+
+    /// Replica view for INFO replication: members other than this node and the
+    /// current leader, with liveness and heartbeat lag in milliseconds.
+    pub async fn replicas(&self) -> Vec<(NodeId, Node, bool, u64)> {
+        let self_id = self.node_id();
+        let leader_id = self.raft.current_leader().await;
+        let node_state = self.node_state.read().await;
+        self.nodes()
+            .into_iter()
+            .filter(|(node_id, _)| *node_id != self_id && Some(*node_id) != leader_id)
+            .map(|(node_id, node)| {
+                (
+                    node_id,
+                    node,
+                    node_state.is_survive(node_id),
+                    node_state.heartbeat_ms(node_id).unwrap_or(0),
+                )
+            })
+            .collect()
     }
 
     // If no leader has been selected, return to self

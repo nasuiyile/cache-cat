@@ -4,9 +4,11 @@ use crate::utils::glob::GlobMatcher;
 use crate::utils::{OptionalU64, now_ms};
 use crossbeam_channel::{Receiver, Sender, bounded, select, unbounded};
 use papaya::{Compute, Equivalent, HashMap, LocalGuard, Operation};
+use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
 use std::borrow::Borrow;
-use std::hash::Hash;
+use std::collections::hash_map::DefaultHasher;
+use std::hash::{Hash, Hasher};
 use std::io::SeekFrom;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -19,6 +21,7 @@ const WHEEL_SIZE: usize = 1 << WHEEL_BITS;
 const WHEEL_MASK: u64 = (WHEEL_SIZE as u64) - 1;
 const WHEEL_LEVELS: usize = 8;
 const LARGE_ADVANCE_THRESHOLD: u64 = 4096;
+const SCAN_PAGE_MULTIPLIER: usize = 10;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ExpirePolicy {
@@ -56,6 +59,34 @@ impl<V> Entry<V> {
         EntrySnapshot {
             value: self.value.clone(),
             expire_at: self.expire_at.get(),
+        }
+    }
+}
+
+/// Key order used by SCAN, rebuilt on demand and never mutated in place.
+///
+/// Sorting by a fixed key hash puts the same keys in the same page on every
+/// replica and keeps a cursor valid across nodes, restarts and index rebuilds.
+#[derive(Debug)]
+struct ScanIndex<K> {
+    entries: Vec<(u64, K)>,
+}
+
+impl<K: Ord> ScanIndex<K> {
+    /// Sort by hash, then by key so equal hashes keep one order everywhere.
+    fn new(entries: impl Iterator<Item = (u64, K)>) -> Self {
+        let mut entries: Vec<(u64, K)> = entries.collect();
+        entries.sort_unstable_by(|a, b| a.0.cmp(&b.0).then_with(|| a.1.cmp(&b.1)));
+        Self { entries }
+    }
+
+    /// Entries from `cursor` on. The cursor points at the first hash group the
+    /// next page still owns, and zero starts a new iteration instead.
+    fn first_after(&self, cursor: u64) -> usize {
+        if cursor == 0 {
+            0
+        } else {
+            self.entries.partition_point(|(hash, _)| *hash < cursor)
         }
     }
 }
@@ -235,6 +266,9 @@ where
     map: Arc<HashMap<K, Entry<V>>>,
     logic_clock: Arc<AtomicU64>,
     expire_tx: Sender<ExpireCommand<K>>,
+    /// Lazily built key order for SCAN. Entries deleted since the build are
+    /// dropped by the existence check instead of being purged eagerly.
+    scan_index: Arc<Mutex<Option<Arc<ScanIndex<K>>>>>,
 }
 
 impl<K, V> Mocha<K, V>
@@ -252,6 +286,7 @@ where
             map,
             logic_clock,
             expire_tx,
+            scan_index: Arc::new(Mutex::new(None)),
         }
     }
 
@@ -762,20 +797,8 @@ where
         let map = self.map.pin();
         map.iter()
             .filter_map(|(key, entry)| {
-                if let Some(expire_at) = entry.expire_at.get() {
-                    // 第一层：按照当前写逻辑时钟判断。
-                    // 对应 get_entry：
-                    // write_clock >= expire_at 表示当前已经过期。
-                    if write_clock >= expire_at {
-                        return None;
-                    }
-
-                    // 第二层：按照传入的读逻辑时钟判断。
-                    // 对应 get_with_read_clock：
-                    // expire_at < read_clock 表示在该读时钟下不可见。
-                    if read_clock.is_some_and(|clock| clock >= expire_at) {
-                        return None;
-                    }
+                if !Self::is_visible(entry, write_clock, read_clock) {
+                    return None;
                 }
 
                 if matcher.matches(key.as_ref()) {
@@ -787,9 +810,92 @@ where
             .collect()
     }
 
+    /// Return one SCAN page: the cursor to resume from and the accepted keys.
+    ///
+    /// A page examines at most `count * 10` index entries, so a sparse MATCH
+    /// filter cannot turn a single call into a full keyspace walk.
+    pub fn scan<F>(
+        &self,
+        cursor: u64,
+        read_clock: Option<u64>,
+        count: usize,
+        rebuild: bool,
+        mut accept: F,
+    ) -> (u64, Vec<K>)
+    where
+        F: FnMut(&K, &V) -> bool,
+    {
+        let write_clock = self.now_logical();
+        let map = self.map.pin();
+        let index = {
+            let mut guard = self.scan_index.lock();
+            // A new iteration must see every key that exists when it starts;
+            // mid-iteration pages reuse whatever order is already available.
+            let refresh = cursor == 0
+                || rebuild
+                || guard.as_ref().is_none_or(|index| {
+                    index.entries.len() > map.len().saturating_mul(2).saturating_add(1024)
+                });
+            if refresh {
+                *guard = Some(Arc::new(ScanIndex::new(
+                    map.iter()
+                        .map(|(key, _)| (Self::key_hash(key), key.clone())),
+                )));
+            }
+            guard
+                .as_ref()
+                .map(Arc::clone)
+                .expect("the scan index is built above")
+        };
+
+        let entries = &index.entries;
+        let budget = count.saturating_mul(SCAN_PAGE_MULTIPLIER);
+        let mut position = index.first_after(cursor);
+        let mut examined = 0;
+        let mut keys = Vec::new();
+        while position < entries.len() && keys.len() < count && examined < budget {
+            let group_hash = entries[position].0;
+            // Always finish the hash group a page reaches: a resumed cursor
+            // skips whole groups, so a split group would be lost.
+            while position < entries.len() && entries[position].0 == group_hash {
+                let (_, key) = &entries[position];
+                if let Some(entry) = map.get(key)
+                    && Self::is_visible(entry, write_clock, read_clock)
+                    && accept(key, &entry.value)
+                {
+                    keys.push(key.clone());
+                }
+                position += 1;
+                examined += 1;
+            }
+        }
+
+        let next = match entries.get(position) {
+            Some((hash, _)) => *hash,
+            None => 0,
+        };
+        (next, keys)
+    }
+
+    /// Fixed-hash order so every replica paginates the same keyspace alike.
+    fn key_hash(key: &K) -> u64 {
+        let mut hasher = DefaultHasher::new();
+        key.hash(&mut hasher);
+        hasher.finish()
+    }
+
+    /// Shared visibility rule: the write clock decides expiry, while the read
+    /// clock hides entries a replica-local clock has already passed.
+    fn is_visible(entry: &Entry<V>, write_clock: u64, read_clock: Option<u64>) -> bool {
+        entry.expire_at.get().is_none_or(|expire_at| {
+            write_clock < expire_at && read_clock.is_none_or(|clock| clock < expire_at)
+        })
+    }
+
     pub fn clear(&self) {
-        let mg = self.map.pin();
-        mg.clear();
+        self.map.pin().clear();
+        // A flushed keyspace leaves no order worth keeping.
+        self.scan_index.lock().take();
     }
 
     /// Filter stored values without cloning keys or payloads. Snapshot replay
@@ -870,6 +976,15 @@ where
     }
     pub fn len(&self) -> usize {
         self.map.pin().len()
+    }
+
+    /// Number of entries holding a deadline, reported by INFO keyspace.
+    pub fn expire_count(&self) -> usize {
+        self.map
+            .pin()
+            .iter()
+            .filter(|(_, entry)| entry.expire_at.get().is_some())
+            .count()
     }
 
     /// Count keys visible at a fixed clock without cloning their keys or values.
