@@ -1,12 +1,12 @@
 /// SplitMix64 with a fixed algorithm for commands replayed by every Raft node.
 /// Using u64 state and u128 index mapping also avoids platform-sized sampling.
 #[derive(Debug, Clone)]
-pub(super) struct DeterministicRng {
+pub(crate) struct DeterministicRng {
     state: u64,
 }
 
 impl DeterministicRng {
-    pub(super) fn for_key(key: &[u8], logical_clock: u64) -> Self {
+    pub(crate) fn for_key(key: &[u8], logical_clock: u64) -> Self {
         // Preserve SPOP's existing FNV-1a seed and clock mixing.
         let mut hash = 0xCBF2_9CE4_8422_2325u64;
         for byte in key {
@@ -27,7 +27,7 @@ impl DeterministicRng {
     }
 
     /// Return an index in [0, upper_bound), independent of pointer width.
-    pub(super) fn next_index(&mut self, upper_bound: usize) -> usize {
+    pub(crate) fn next_index(&mut self, upper_bound: usize) -> usize {
         debug_assert!(upper_bound > 0);
         let random = self.next_u64() as u128;
         let bound = upper_bound as u128;

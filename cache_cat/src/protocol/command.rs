@@ -34,6 +34,7 @@ use crate::protocol::hash::hkeys::HKeysCommand;
 use crate::protocol::hash::hlen::HLenCommand;
 use crate::protocol::hash::hmget::HMGetCommand;
 use crate::protocol::hash::hmset::HMSetCommand;
+use crate::protocol::hash::hrandfield::HRandFieldCommand;
 use crate::protocol::hash::hset::HSetCommand;
 use crate::protocol::hash::hsetnx::HSetNxCommand;
 use crate::protocol::hash::hstrlen::HStrLenCommand;
@@ -235,10 +236,9 @@ impl Client {
     /// Protocol failures get one error reply before the connection is closed.
     /// Transport failures keep their existing handling and do not generate RESP.
     async fn reply_to_decode_error(&mut self, error: &std::io::Error) {
-        if let Some(error) = error
-            .get_ref()
-            .and_then(|source| source.downcast_ref::<crate::protocol::common::resp::RespParseError>())
-        {
+        if let Some(error) = error.get_ref().and_then(|source| {
+            source.downcast_ref::<crate::protocol::common::resp::RespParseError>()
+        }) {
             let _ = self.framed.send(Value::error(format!("ERR {error}"))).await;
         }
     }
@@ -391,6 +391,7 @@ impl CommandFactory {
         factory.register("HEXISTS", HExistsCommand);
         factory.register("HLEN", HLenCommand);
         factory.register("HSETNX", HSetNxCommand);
+        factory.register("HRANDFIELD", HRandFieldCommand);
         factory.register("HSTRLEN", HStrLenCommand);
         // Set commands
         factory.register("SADD", SAddCommand);

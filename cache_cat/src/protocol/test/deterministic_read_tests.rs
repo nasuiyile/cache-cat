@@ -1,7 +1,8 @@
 //! Replicated reads must remain deterministic after rebuilding hash tables.
 
 use crate::protocol::hash::{
-    hgetall::HGetAllParams, hkeys::HKeysParams, hstrlen::HStrLenParams, hvals::HValsParams,
+    hgetall::HGetAllParams, hkeys::HKeysParams, hrandfield::HRandFieldParams,
+    hstrlen::HStrLenParams, hvals::HValsParams,
 };
 use crate::protocol::key::keys::KeysParams;
 use crate::protocol::lua::eval::EvalParams;
@@ -204,6 +205,55 @@ fn replicated_hstrlen_reads_match_across_rebuilt_replicas() {
             .iter()
             .all(|reply| reply.encode() == b":0\r\n")
     );
+}
+
+#[test]
+fn replicated_hrandfield_reads_match_across_rebuilt_replicas() {
+    let reads = [
+        HRandFieldParams {
+            key: "input:hash".into(),
+            count: None,
+            with_values: false,
+        },
+        HRandFieldParams {
+            key: "input:hash".into(),
+            count: Some(2),
+            with_values: true,
+        },
+        HRandFieldParams {
+            key: "input:hash".into(),
+            count: Some(-20),
+            with_values: false,
+        },
+    ];
+
+    for (index, params) in reads.into_iter().enumerate() {
+        let log = bincode2::serialize(&Request::new(
+            4_000 + index as u64,
+            0,
+            Operation::Read(ReadOperation::HRandField(params)),
+        ))
+        .unwrap();
+        let replies: Vec<_> = replicas()
+            .iter()
+            .map(|cache| apply_log(cache, &log))
+            .collect();
+        assert!(
+            replies
+                .iter()
+                .skip(1)
+                .all(|reply| reply.encode() == replies[0].encode()),
+            "replicas disagreed for HRANDFIELD variant {index}"
+        );
+        match index {
+            0 => assert!(matches!(replies[0], Value::BulkString(Some(_)))),
+            1 => assert!(matches!(replies[0], Value::Array(Some(ref values)) if values.len() == 4)),
+            2 => {
+                assert!(matches!(replies[0], Value::Array(Some(ref values)) if values.len() == 20))
+            }
+            _ => unreachable!(),
+        }
+    }
 }
 
 fn eval(prefix: &str, api: &str, proto: u8) -> Operation {

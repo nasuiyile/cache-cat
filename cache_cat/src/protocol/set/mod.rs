@@ -1,4 +1,4 @@
-mod random;
+pub(crate) mod random;
 pub mod sadd;
 pub mod scard;
 pub mod sdiff;

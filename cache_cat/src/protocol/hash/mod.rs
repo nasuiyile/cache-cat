@@ -8,6 +8,7 @@ pub mod hkeys;
 pub mod hlen;
 pub mod hmget;
 pub mod hmset;
+pub mod hrandfield;
 pub mod hset;
 pub mod hsetnx;
 pub mod hstrlen;
