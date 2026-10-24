@@ -294,6 +294,18 @@ where
     pub fn insert_entry(&self, key: K, value: V, policy: ExpirePolicy) -> EntrySnapshot<V> {
         let new_entry = self.make_entry(value, policy);
         let snapshot = new_entry.snapshot();
+        self.insert_new_entry(key, new_entry);
+        snapshot
+    }
+
+    /// Insert an entry when the caller does not need a value snapshot back.
+    /// State-machine writes use this path because cloning a large payload only
+    /// to discard the returned snapshot adds avoidable work to every write.
+    pub(crate) fn insert_entry_without_snapshot(&self, key: K, value: V, policy: ExpirePolicy) {
+        self.insert_new_entry(key, self.make_entry(value, policy));
+    }
+
+    fn insert_new_entry(&self, key: K, new_entry: Entry<V>) {
         let expire_at = new_entry.expire_at;
         let mg = self.map.pin();
         let old_entry = mg.insert(key.clone(), new_entry);
@@ -302,7 +314,6 @@ where
         if expire_at.is_some() && old_entry.is_none_or(|old| old.expire_at != expire_at) {
             self.enqueue_expiry(key, expire_at);
         }
-        snapshot
     }
 
     fn remove_expired_if_current_from(
@@ -394,29 +405,39 @@ where
         K: Borrow<Q>,
         Q: ?Sized + Hash + Ord,
     {
-        match self.get_entry(key) {
-            None => {
-                //用写逻辑时钟也获取不到 可能会产生写逻辑时钟在此刻推进了导致读不到数据。但这是符合预期的。
-                None
-            }
-            Some(my_value) => {
-                match my_value.expire_at {
-                    Some(inner) => {
-                        match read_clock {
-                            None => Some(my_value),
-                            Some(time) => {
-                                if inner <= time {
-                                    // 写逻辑时钟获取到了但是读逻辑时钟没有获取到
-                                    return None;
-                                }
-                                Some(my_value)
-                            }
-                        }
-                    }
-                    None => Some(my_value),
+        let now = self.now_logical();
+        let mg = self.map.pin();
+        let Some((stored_key, entry)) = mg.get_key_value(key) else {
+            // 用写逻辑时钟也获取不到，可能是写逻辑时钟在此刻推进了导致读不到数据；这是符合预期的。
+            return None;
+        };
+
+        let Some(expire_at) = entry.expire_at.get() else {
+            return Some(entry.snapshot());
+        };
+
+        if now >= expire_at {
+            // Keep the lazy-removal behavior of `get_entry`, while avoiding a
+            // value clone for an entry that is already expired.
+            let expired_key = stored_key.clone();
+            mg.compute(expired_key, |current| match current {
+                Some((_, current))
+                    if current.expire_at.get() == Some(expire_at) && now >= expire_at =>
+                {
+                    Operation::Remove
                 }
-            }
+                _ => Operation::Abort(()),
+            });
+            return None;
         }
+
+        if read_clock.is_some_and(|clock| clock >= expire_at) {
+            // The value is still live at the write clock, but not visible at
+            // the caller's read clock.
+            return None;
+        }
+
+        Some(entry.snapshot())
     }
 
     pub fn get_if_alive(&self, key: &K) -> Option<V> {
@@ -428,12 +449,55 @@ where
         K: Borrow<Q>,
         Q: ?Sized + Hash + Ord,
     {
-        self.get_entry(key).is_some()
+        let now = self.now_logical();
+        let mg = self.map.pin();
+        let Some((stored_key, entry)) = mg.get_key_value(key) else {
+            return false;
+        };
+
+        let Some(expire_at) = entry.expire_at.get() else {
+            return true;
+        };
+        if now < expire_at {
+            return true;
+        }
+
+        // Match `get_entry`'s lazy deletion semantics without cloning the
+        // value, which can be a large list/hash/set/stream.
+        let expired_key = stored_key.clone();
+        mg.compute(expired_key, |current| match current {
+            Some((_, current))
+                if current.expire_at.get() == Some(expire_at) && now >= expire_at =>
+            {
+                Operation::Remove
+            }
+            _ => Operation::Abort(()),
+        });
+        false
     }
 
     pub fn ttl_remaining(&self, key: &K) -> Option<u64> {
-        let entry = self.get_entry(key)?;
-        let expire_at = entry.expire_at?;
+        let now = self.now_logical();
+        let mg = self.map.pin();
+        let Some(entry) = mg.get(key) else {
+            return None;
+        };
+        let expire_at = entry.expire_at.get()?;
+
+        if now >= expire_at {
+            // TTL only needs entry metadata. Avoid cloning the payload just to
+            // discover that the key is expired.
+            let key = key.clone();
+            mg.compute(key, |current| match current {
+                Some((_, current))
+                    if current.expire_at.get() == Some(expire_at) && now >= expire_at =>
+                {
+                    Operation::Remove
+                }
+                _ => Operation::Abort(()),
+            });
+            return None;
+        }
 
         Some(expire_at.saturating_sub(self.now_logical()))
     }

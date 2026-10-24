@@ -81,7 +81,7 @@ impl MyCache {
             Some(v) => &v.mocha,
         };
         let keys = cmd.keys();
-        let mut vec = Vec::new();
+        let mut vec = Vec::with_capacity(keys.len());
         for key in keys {
             vec.push(cache.get_with_read_clock(key, Some(read_clock)));
         }

@@ -1,7 +1,7 @@
 use crate::mocha::{EntrySnapshot, ExpirePolicy, MochaOperation};
 use crate::protocol::key::del::DelReq;
 use crate::raft::types::core::mocha::core::{
-    next_snapshot_revision, MyCache, MyValue, Update, UpdateType,
+    MyCache, MyValue, Update, UpdateType, next_snapshot_revision,
 };
 use crate::raft::types::core::mocha::request_handler::base_request;
 use crate::raft::types::core::response_value::Value;
@@ -166,7 +166,7 @@ impl MyCache {
         match changed {
             MochaOperation::Insert { mut value, expire } => {
                 value.version = revision;
-                cache.insert_entry(key, value, expire);
+                cache.insert_entry_without_snapshot(key, value, expire);
             }
             MochaOperation::Remove => {
                 cache.remove(&key);

@@ -243,6 +243,21 @@ mod tests {
     }
 
     #[test]
+    fn read_clock_can_hide_a_live_entry_without_removing_it() {
+        let (mocha, clock) = create_mocha_with_clock(0);
+        let key = "key1".to_string();
+
+        mocha.insert_absolute(key.clone(), "value1".to_string(), 100);
+
+        assert!(mocha.get_with_read_clock(&key, Some(99)).is_some());
+        assert!(mocha.get_with_read_clock(&key, Some(100)).is_none());
+        assert!(mocha.contains_key(&key));
+
+        clock.store(100, Ordering::Relaxed);
+        assert!(!mocha.contains_key(&key));
+    }
+
+    #[test]
     fn test_ttl_remaining() {
         let (mocha, clock) = create_mocha_with_clock(0);
 

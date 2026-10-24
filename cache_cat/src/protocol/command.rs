@@ -666,7 +666,10 @@ impl CommandFactory {
                 return Ok(());
             }
         };
-        client.last_cmd = parsed.name.clone();
+        // Reuse the existing command-name allocation on persistent
+        // connections; command names are short and this runs for every
+        // request.
+        client.last_cmd.clone_from(&parsed.name);
         if !client.authenticated
             && !matches!(parsed.name.as_str(), "AUTH" | "HELLO" | "QUIT" | "RESET")
         {
