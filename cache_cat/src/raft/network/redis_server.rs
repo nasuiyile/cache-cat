@@ -254,6 +254,9 @@ impl RedisServer {
 mod request_tests;
 
 #[cfg(test)]
+mod blpop_tests;
+
+#[cfg(test)]
 mod tests {
     use super::*;
     use crate::cfg::config::Config;

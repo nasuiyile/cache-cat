@@ -1,6 +1,7 @@
 use crate::error::ProtocolError;
 use crate::mocha::Mocha;
 use crate::protocol::common::lua_env::LuaEnv;
+use crate::protocol::list::blpop::BlPopParams;
 use crate::protocol::stream::xread::XReadParams;
 use crate::raft::application::blocking_keys::BlockingKeys;
 use crate::raft::types::core::response_value::Value;
@@ -14,7 +15,7 @@ use std::cmp::max;
 use std::collections::HashSet;
 use std::option::Option;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use tokio::sync::Mutex;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -56,6 +57,12 @@ pub struct MyCache {
     pub blocking_keys: BlockingKeys<(u16, Bytes), Value, XReadParams>,
     /// XADD keys to serve after the entire command or transaction finishes.
     pub(crate) ready_streams: parking_lot::Mutex<HashSet<(u16, Bytes)>>,
+    /// Leader-local list waits; none of this state is replicated or snapshotted.
+    pub list_blocking_keys: BlockingKeys<(u16, Bytes), (), BlPopParams>,
+    /// List-producing writes touched by the current outer command.
+    pub(crate) ready_lists: parking_lot::Mutex<HashSet<(u16, Bytes)>>,
+    /// Avoid locking the queue when a list command recorded no notifications.
+    pub(crate) list_notifications_pending: AtomicBool,
     // 这俩把锁是为了保证每条指令的原子性 多key写，多key读需要同时获取俩把锁 同时获取俩把锁时 先加write_lock
     pub write_lock: Arc<Mutex<()>>, //单key写
     pub read_lock: Arc<RwLock<()>>, //单key读
@@ -130,6 +137,9 @@ impl MyCache {
             databases: vec,
             blocking_keys: BlockingKeys::new(),
             ready_streams: parking_lot::Mutex::new(HashSet::new()),
+            list_blocking_keys: BlockingKeys::new(),
+            ready_lists: parking_lot::Mutex::new(HashSet::new()),
+            list_notifications_pending: AtomicBool::new(false),
             write_lock: Arc::new(Default::default()),
             read_lock: Arc::new(Default::default()),
         })

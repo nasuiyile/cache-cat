@@ -3,6 +3,7 @@
 use crate::error::{CacheCatError, Error, ProtocolError};
 use crate::mocha::EntrySnapshot;
 use crate::protocol::command::{Client, Command};
+use crate::protocol::common::blocking::buffer_until_disconnect;
 use crate::protocol::raft_command::ReadRaftCommand;
 use crate::raft::application::blocking_keys::{Registration, WaitError};
 use crate::raft::network::redis_server::RedisServer;
@@ -17,7 +18,6 @@ use async_trait::async_trait;
 use bytes::Bytes;
 use serde::{Deserialize, Serialize};
 use std::{fmt, future::Future, time::Duration};
-use tokio::io::AsyncReadExt;
 use tokio::time::Instant;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -402,22 +402,6 @@ impl Command for XReadCommand {
         };
         client.flag.blocking = false;
         result
-    }
-}
-
-/// Preserve pipelined input for the connection loop while detecting EOF.
-/// Dropping the competing read future also drops its blocking registration.
-async fn buffer_until_disconnect(client: &mut Client) -> std::io::Result<()> {
-    let mut buffer = [0; 4096];
-    loop {
-        let len = client.framed.get_mut().read(&mut buffer).await?;
-        if len == 0 {
-            return Ok(());
-        }
-        client
-            .framed
-            .read_buffer_mut()
-            .extend_from_slice(&buffer[..len]);
     }
 }
 

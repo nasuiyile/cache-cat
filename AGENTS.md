@@ -8,7 +8,8 @@ Every code change must preserve Redis protocol semantics, including:
 * Command execution behavior
 * Response generation
 
-Every code change must avoid any noticeable performance regression. Do not introduce expensive or performance-intensive operations into the execution path of all commands merely to support a small number of commands.
+Every code change must avoid any noticeable performance regression. Do not introduce expensive or performance-intensive
+operations into the execution path of all commands merely to support a small number of commands.
 
 Before modifying any code, read all design documents under the `docs` directory.
 
@@ -27,4 +28,8 @@ If you notice bugs unrelated to the current modification, report them first inst
 
 `src/mocha` contains the cache implementation for scheduled expiration based on a logical clock and timing wheel.
 
-The system is still in alpha. Changes do not need to maintain compatibility with previous versions, including file version numbers and similar versioning concerns.
+The system is still in alpha. Changes do not need to maintain compatibility with previous versions, including file
+version numbers and similar versioning concerns.
+
+When a new behavior needs to be locked in order to proceed, considering that Raft can only be written on a single
+thread, many locks can be avoided.

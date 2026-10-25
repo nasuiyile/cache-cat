@@ -54,6 +54,7 @@ use crate::protocol::key::renamenx::RenameNxCommand;
 use crate::protocol::key::ttl::TtlCommand;
 use crate::protocol::key::type_::TypeCommand;
 use crate::protocol::key::unlink::UnlinkCommand;
+use crate::protocol::list::blpop::BlPopCommand;
 use crate::protocol::list::lindex::LIndexCommand;
 use crate::protocol::list::llen::LLenCommand;
 use crate::protocol::list::lpop::LPopCommand;
@@ -372,6 +373,7 @@ impl CommandFactory {
         factory.register("LRANGE", LRangeCommand);
         factory.register("LLEN", LLenCommand);
         factory.register("LPOP", LPopCommand);
+        factory.register("BLPOP", BlPopCommand);
         factory.register("RPOP", RPopCommand);
         factory.register("LINDEX", LIndexCommand);
         factory.register("LREM", LRemCommand);
