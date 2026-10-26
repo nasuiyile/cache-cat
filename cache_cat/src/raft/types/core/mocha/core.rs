@@ -3,7 +3,9 @@ use crate::mocha::Mocha;
 use crate::protocol::common::lua_env::LuaEnv;
 use crate::protocol::list::blpop::BlPopParams;
 use crate::protocol::stream::xread::XReadParams;
-use crate::raft::application::blocking_keys::BlockingKeys;
+use crate::raft::application::blocking_keys::{
+    BlockingKeys, CleanupReceiver, ExclusiveRegistration, Registration, WaitError, cleanup_channel,
+};
 use crate::raft::types::core::response_value::Value;
 use crate::raft::types::core::value_object::ValueObject;
 use crate::raft::types::entry::request::AtomicRequest;
@@ -15,7 +17,7 @@ use std::cmp::max;
 use std::collections::HashSet;
 use std::option::Option;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicU64, Ordering};
 use tokio::sync::Mutex;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -53,22 +55,57 @@ pub struct MyCache {
     pub lua_env: LuaEnv,
 
     pub databases: Vec<Database>,
-    /// Pending stream reads, shared with the command handlers.
-    pub blocking_keys: BlockingKeys<(u16, Bytes), Value, XReadParams>,
-    /// XADD keys to serve after the entire command or transaction finishes.
-    pub(crate) ready_streams: parking_lot::Mutex<HashSet<(u16, Bytes)>>,
-    /// Leader-local list waits; none of this state is replicated or snapshotted.
-    pub list_blocking_keys: BlockingKeys<(u16, Bytes), (), BlPopParams>,
-    /// List-producing writes touched by the current outer command.
-    pub(crate) ready_lists: parking_lot::Mutex<HashSet<(u16, Bytes)>>,
-    /// Avoid locking the queue when a list command recorded no notifications.
-    pub(crate) list_notifications_pending: AtomicBool,
     // 这俩把锁是为了保证每条指令的原子性 多key写，多key读需要同时获取俩把锁 同时获取俩把锁时 先加write_lock
-    pub write_lock: Arc<Mutex<()>>, //单key写
-    pub read_lock: Arc<RwLock<()>>, //单key读
+    pub write_lock: Arc<Mutex<WriteState>>, //单key写
+    pub read_lock: Arc<RwLock<()>>,         //单key读
 
     read_logic_clock: Arc<AtomicU64>,  //读逻辑时钟
     write_logic_clock: Arc<AtomicU64>, //写逻辑时钟
+}
+
+/// Mutable node-local waiter state, protected by the existing global write
+/// lock. Connection tasks and serial apply use the same guard; the registries
+/// contain no additional mutex or atomic waiter count.
+#[derive(Debug)]
+pub struct WriteState {
+    pub blocking_keys: BlockingKeys<WriteState, (u16, Bytes), Value, XReadParams>,
+    pub list_blocking_keys: BlockingKeys<WriteState, (u16, Bytes), (), BlPopParams>,
+    cleanup_receiver: Option<CleanupReceiver<WriteState>>,
+}
+
+impl WriteState {
+    /// All registration entry points use the same guarded state. Starting the
+    /// one cleanup task is lazy, so creating MyCache needs no async runtime.
+    fn prepare_registration(&mut self) -> Result<(), WaitError> {
+        self.blocking_keys.start_cleanup(&mut self.cleanup_receiver)
+    }
+
+    pub(crate) fn register_stream(
+        &mut self,
+        keys: Vec<(u16, Bytes)>,
+        deadline: Option<tokio::time::Instant>,
+        params: XReadParams,
+    ) -> Result<Registration<Self, (u16, Bytes), Value, XReadParams>, WaitError> {
+        if keys.is_empty() {
+            return Err(WaitError::EmptyKeys);
+        }
+        self.prepare_registration()?;
+        self.blocking_keys.register_with(keys, deadline, params)
+    }
+
+    pub(crate) fn register_list(
+        &mut self,
+        keys: Vec<(u16, Bytes)>,
+        deadline: Option<tokio::time::Instant>,
+        params: BlPopParams,
+    ) -> Result<ExclusiveRegistration<Self, (u16, Bytes), BlPopParams>, WaitError> {
+        if keys.is_empty() {
+            return Err(WaitError::EmptyKeys);
+        }
+        self.prepare_registration()?;
+        self.list_blocking_keys
+            .register_exclusive_with(keys, deadline, params)
+    }
 }
 
 /// Allocate through the exclusive borrow held by the state machine's existing
@@ -130,17 +167,32 @@ impl MyCache {
             vec.push(db);
         }
         let lua_env = LuaEnv::new()?;
+        // Creating the cache remains synchronous and requires no Tokio
+        // runtime. The first blocking registration starts cleanup lazily.
+        let (cleanup_sender, cleanup_receiver) = cleanup_channel();
+        let write_lock = Arc::new_cyclic(|owner| {
+            Mutex::new(WriteState {
+                blocking_keys: BlockingKeys::new(
+                    owner.clone(),
+                    cleanup_sender.clone(),
+                    |state| &mut *state.blocking_keys,
+                    |state, id, _retry| state.blocking_keys.cancel(id),
+                ),
+                list_blocking_keys: BlockingKeys::new(
+                    owner.clone(),
+                    cleanup_sender,
+                    |state| &mut *state.list_blocking_keys,
+                    |state, id, retry| state.list_blocking_keys.release_exclusive(id, retry),
+                ),
+                cleanup_receiver: Some(cleanup_receiver),
+            })
+        });
         Ok(Self {
             lua_env,
             read_logic_clock: Arc::new(AtomicU64::new(0)),
             write_logic_clock,
             databases: vec,
-            blocking_keys: BlockingKeys::new(),
-            ready_streams: parking_lot::Mutex::new(HashSet::new()),
-            list_blocking_keys: BlockingKeys::new(),
-            ready_lists: parking_lot::Mutex::new(HashSet::new()),
-            list_notifications_pending: AtomicBool::new(false),
-            write_lock: Arc::new(Default::default()),
+            write_lock,
             read_lock: Arc::new(Default::default()),
         })
     }
@@ -231,10 +283,35 @@ impl MyCache {
     }
 }
 
+/// Leader-local notification effects collected by the serial apply task.
+/// Reuse allocation within a batch, but drain after each outer command so
+/// EXEC/Lua publish only their final state. Empty sets allocate no buckets.
+#[derive(Debug, Default)]
+pub struct ApplyEffects {
+    pub(crate) ready_streams: HashSet<(u16, Bytes)>,
+    pub(crate) ready_lists: HashSet<(u16, Bytes)>,
+}
+
+impl ApplyEffects {
+    /// Reuse small tables without retaining a large transaction's buckets.
+    /// Called only after a nonempty notification set has been processed.
+    pub(crate) fn recycle_ready_keys(keys: &mut HashSet<(u16, Bytes)>) {
+        debug_assert!(keys.is_empty());
+        if keys.capacity() > 64 {
+            *keys = HashSet::new();
+        }
+    }
+}
+
 pub struct Update<'a> {
     pub db_number: u16,
     pub write_clock: u64,
     pub update_type: &'a mut UpdateType<'a>,
+    /// Borrowed only by serial command execution; snapshot replay uses None.
+    /// The owner already holds write_lock, so these effects need no own lock.
+    pub effects: Option<&'a mut ApplyEffects>,
+    /// Borrowed from the existing write guard; absent during snapshot replay.
+    pub waiters: Option<&'a mut WriteState>,
 }
 
 pub enum UpdateType<'a> {

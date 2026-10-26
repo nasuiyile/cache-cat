@@ -3,7 +3,7 @@ use crate::node::parsed_config::ParsedConfig;
 use crate::raft::store::snapshot::snapshot_handler::{
     dump_cache_to_path, get_snapshot_file_name, load_cache_from_path,
 };
-use crate::raft::types::core::mocha::core::{MyCache, Update, UpdateType};
+use crate::raft::types::core::mocha::core::{ApplyEffects, MyCache, Update, UpdateType};
 use crate::raft::types::core::mocha::request_handler::{base_request, do_request};
 use crate::raft::types::core::response_value::Value;
 use crate::raft::types::entry::request::AtomicRequest;
@@ -174,6 +174,8 @@ impl StateMachineStore {
                 db_number: atomic_request.db_number,
                 update_type: &mut update_type,
                 write_clock: self.data.kvs.set_write_clock(atomic_request.write_clock),
+                effects: None,
+                waiters: None,
             };
             base_request(&self.data.kvs, atomic_request.request.clone(), &mut update);
         }
@@ -199,7 +201,7 @@ impl RaftStateMachine<TypeConfig> for StateMachineStore {
         Strm: Stream<Item = Result<EntryResponder<TypeConfig>, io::Error>> + Unpin + OptionalSend,
     {
         let mut raft_meta = self.data.raft_meta_data.lock().await;
-        let _lock = self.data.kvs.write_lock.lock().await;
+        let mut write_guard = self.data.kvs.write_lock.lock().await;
         let RaftMetaData {
             snapshot_state,
             snapshot_revision,
@@ -216,10 +218,15 @@ impl RaftStateMachine<TypeConfig> for StateMachineStore {
         } else {
             &mut UpdateType::None
         };
+        // This scratch state belongs to the apply batch. Nested commands
+        // share the borrow; do_request drains it at each outer boundary.
+        let mut effects = ApplyEffects::default();
         let mut update = Update {
             write_clock: 0,
             db_number: 0,
             update_type,
+            effects: Some(&mut effects),
+            waiters: Some(&mut write_guard),
         };
         while let Some((entry, responder)) = entries.try_next().await? {
             *last_applied_log_id = Some(entry.log_id);

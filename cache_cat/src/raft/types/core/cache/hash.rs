@@ -39,6 +39,8 @@ mod tests {
     fn apply(cache: &MyCache, operation: Operation) -> Vec<u8> {
         let mut update_type = UpdateType::None;
         let mut update = Update {
+            effects: None,
+            waiters: None,
             db_number: 0,
             write_clock: 1,
             update_type: &mut update_type,

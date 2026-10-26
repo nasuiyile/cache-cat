@@ -45,6 +45,8 @@ fn all_multi_key_writes_parse_as_redis_operations() {
 fn apply(cache: &MyCache, operation: Operation) -> Value {
     let mut update_type = UpdateType::None;
     let mut update = Update {
+        effects: None,
+        waiters: None,
         db_number: DB,
         write_clock: cache.set_write_clock(CLOCK),
         update_type: &mut update_type,
@@ -61,6 +63,8 @@ fn snapshot(cache: &MyCache, args: &[&str]) -> (Value, Vec<AtomicRequest>) {
         revision: &mut revision,
     };
     let mut update = Update {
+        effects: None,
+        waiters: None,
         db_number: DB,
         write_clock: cache.set_write_clock(CLOCK),
         update_type: &mut update_type,
@@ -85,6 +89,8 @@ fn replay(cache: &MyCache, queue: &[AtomicRequest]) {
             revision: atomic.version,
         };
         let mut update = Update {
+            effects: None,
+            waiters: None,
             db_number: atomic.db_number,
             write_clock: cache.set_write_clock(atomic.write_clock),
             update_type: &mut update_type,
@@ -516,6 +522,8 @@ fn computed_ttl_is_recorded_as_an_absolute_expiration() {
         revision: &mut revision,
     };
     let mut update = Update {
+        effects: None,
+        waiters: None,
         db_number: DB,
         write_clock: cache.set_write_clock(CLOCK),
         update_type: &mut update_type,
@@ -572,6 +580,8 @@ fn snapshot_replays_collection_removal_with_versioned_cas() {
             revision: atomic.version,
         };
         let mut update = Update {
+            effects: None,
+            waiters: None,
             db_number: atomic.db_number,
             write_clock: restored.set_write_clock(atomic.write_clock),
             update_type: &mut update_type,

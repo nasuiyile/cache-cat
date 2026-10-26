@@ -133,6 +133,8 @@ fn pop_side_can_reuse_the_same_deterministic_operation_for_brpop() {
 fn apply(cache: &MyCache, operation: Operation) -> Value {
     let mut update_type = UpdateType::None;
     let mut update = Update {
+        effects: None,
+        waiters: None,
         db_number: DB,
         write_clock: cache.set_write_clock(CLOCK),
         update_type: &mut update_type,
@@ -155,6 +157,8 @@ fn snapshot(cache: &MyCache, request: BlPopReq) -> (Value, Vec<AtomicRequest>) {
         revision: &mut revision,
     };
     let mut update = Update {
+        effects: None,
+        waiters: None,
         db_number: DB,
         write_clock: cache.set_write_clock(CLOCK),
         update_type: &mut update_type,
@@ -177,6 +181,8 @@ fn replay(cache: &MyCache, queue: &[AtomicRequest]) {
             revision: atomic.version,
         };
         let mut update = Update {
+            effects: None,
+            waiters: None,
             db_number: atomic.db_number,
             write_clock: cache.set_write_clock(atomic.write_clock),
             update_type: &mut update_type,
@@ -298,7 +304,14 @@ fn replicated_expiration_skips_expired_keys_and_exec_never_registers_waiters() {
     assert_eq!(responses[0].encode(), b"*-1\r\n");
     assert_eq!(responses[1].encode(), reply("ready", "available"));
     assert_eq!(responses[2].encode(), b"*-1\r\n");
-    assert!(cache.list_blocking_keys.is_empty());
+    assert!(
+        cache
+            .write_lock
+            .try_lock()
+            .unwrap()
+            .list_blocking_keys
+            .is_empty()
+    );
 }
 
 #[test]

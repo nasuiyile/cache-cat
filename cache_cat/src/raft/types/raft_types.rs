@@ -1,8 +1,6 @@
 use super::endpoint::Endpoint;
 use crate::error::{CacheCatError, ProtocolError, StorageError};
 use crate::node::parsed_config::ParsedConfig;
-use crate::protocol::stream::xread::XReadParams;
-use crate::raft::application::blocking_keys::BlockingKeys;
 use crate::raft::application::cluster::Cluster;
 use crate::raft::application::connector::Connector;
 use crate::raft::application::pub_sub::PubSub;
@@ -13,7 +11,6 @@ use crate::raft::types::core::response_value::Value;
 use crate::raft::types::entry::read_operation::ReadOperation;
 use crate::raft::types::entry::request::{Operation, Request};
 use crate::raft::types::file_operator::FileOperator;
-use bytes::Bytes;
 use futures::future::join_all;
 use openraft::RPCTypes::Vote;
 use openraft::error::Timeout;
@@ -53,7 +50,6 @@ openraft::declare_raft_types!(
 );
 
 pub struct CacheCatApp {
-    pub blocking_keys: BlockingKeys<(u16, Bytes), Value, XReadParams>,
     pub config: ParsedConfig,
     pub cluster: Cluster,
     pub state_machine: StateMachineStore,

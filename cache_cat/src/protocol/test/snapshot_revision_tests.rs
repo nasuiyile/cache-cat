@@ -53,6 +53,8 @@ fn apply(
         None => UpdateType::None,
     };
     let mut update = Update {
+        effects: None,
+        waiters: None,
         db_number,
         write_clock: cache.set_write_clock(clock),
         update_type: &mut update_type,
@@ -81,6 +83,8 @@ async fn restore(full: &[u8], queue: &[AtomicRequest], final_clock: u64) -> MyCa
             revision: delta.version,
         };
         let mut update = Update {
+            effects: None,
+            waiters: None,
             db_number: delta.db_number,
             write_clock: cache.set_write_clock(delta.write_clock),
             update_type: &mut update_type,

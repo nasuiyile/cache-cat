@@ -210,6 +210,8 @@ mod tests {
                 let (clock, db_number) = request.split_u64();
                 let mut update_type = UpdateType::None;
                 let mut update = Update {
+                    effects: None,
+                    waiters: None,
                     db_number,
                     write_clock: cache.set_write_clock(clock),
                     update_type: &mut update_type,

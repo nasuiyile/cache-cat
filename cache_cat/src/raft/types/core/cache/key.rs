@@ -281,6 +281,8 @@ mod tests {
                     revision: &mut revision,
                 };
                 let mut update = Update {
+                    effects: None,
+                    waiters: None,
                     db_number: 0,
                     write_clock: 10,
                     update_type: &mut update_type,
@@ -321,6 +323,8 @@ mod tests {
                 revision: 7,
             };
             let mut update = Update {
+                effects: None,
+                waiters: None,
                 db_number: 1,
                 write_clock: 0,
                 update_type: &mut update_type,

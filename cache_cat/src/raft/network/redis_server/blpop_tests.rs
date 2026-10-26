@@ -98,6 +98,9 @@ async fn waiters(server: &RedisServer, expected: usize) {
             .state_machine
             .data
             .kvs
+            .write_lock
+            .lock()
+            .await
             .list_blocking_keys
             .waiter_count()
             != expected
@@ -188,6 +191,9 @@ async fn multiple_keys_are_ordered_and_waiters_are_scoped_to_the_selected_databa
             .state_machine
             .data
             .kvs
+            .write_lock
+            .lock()
+            .await
             .list_blocking_keys
             .waiter_count(),
         1
@@ -404,6 +410,9 @@ async fn an_empty_raft_pop_after_a_stale_signal_registers_again_without_polling(
             .state_machine
             .data
             .kvs
+            .write_lock
+            .lock()
+            .await
             .list_blocking_keys
             .signal_one(&(0, Bytes::from_static(b"queue"))),
         1

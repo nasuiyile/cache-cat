@@ -7,7 +7,7 @@ use crate::protocol::common::blocking::buffer_until_disconnect;
 use crate::protocol::raft_command::ReadRaftCommand;
 use crate::raft::application::blocking_keys::{Registration, WaitError};
 use crate::raft::network::redis_server::RedisServer;
-use crate::raft::types::core::mocha::core::{MyCache, MyValue};
+use crate::raft::types::core::mocha::core::{MyCache, MyValue, WriteState};
 use crate::raft::types::core::mocha::read_command::MultiReadCommand;
 use crate::raft::types::core::response_value::{Resp2MapEncoding, Value};
 use crate::raft::types::core::structure::stream::{Entry, Fields, ReadStart, StreamId};
@@ -297,7 +297,7 @@ impl XReadParams {
     {
         enum InitialRead {
             Ready(Value),
-            Waiting(Registration<(u16, Bytes), Value, XReadParams>),
+            Waiting(Registration<WriteState, (u16, Bytes), Value, XReadParams>),
         }
 
         let deadline = match self.block_ms {
@@ -316,7 +316,7 @@ impl XReadParams {
         let initial_read = async {
             before_read().await?;
             let registration = {
-                let _write_lock = cache.write_lock.lock().await;
+                let mut write_lock = cache.write_lock.lock().await;
                 let _read_lock = cache.read_lock.read();
                 let result = self.read_once(cache, db_number);
                 if !matches!(result, Value::Array(None)) || self.block_ms.is_none() {
@@ -328,9 +328,8 @@ impl XReadParams {
                 // Hold the write lock through both observation and registration.
                 // The writer subsequently builds the response before allowing
                 // another command to delete or change the stream.
-                cache
-                    .blocking_keys
-                    .register_with(keys, deadline, self)
+                write_lock
+                    .register_stream(keys, deadline, self)
                     .map_err(|error| Error::internal(format!("cannot register XREAD: {error:?}")))?
             };
             Ok::<_, CacheCatError>(InitialRead::Waiting(registration))

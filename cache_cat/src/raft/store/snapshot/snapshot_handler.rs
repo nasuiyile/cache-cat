@@ -418,6 +418,8 @@ async fn empty_snapshots_preserve_revision_watermark_across_restarts() {
                 revision: &mut revision,
             };
             let mut update = Update {
+                effects: None,
+                waiters: None,
                 db_number: 0,
                 write_clock: cache.set_write_clock(100),
                 update_type: &mut update_type,

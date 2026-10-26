@@ -189,13 +189,13 @@ impl BlPopParams {
                         ProtocolError::ReadOnly.into()
                     }
                 })?;
-                let _write = cache.write_lock.lock().await;
+                let mut write = cache.write_lock.lock().await;
                 let _read = cache.read_lock.read();
                 let ready = match self.ready_key(cache, db) {
                     Ok(key) => key,
                     Err(error) => return Ok(Err(error)),
                 };
-                if ready.is_some() && cache.list_blocking_keys.is_empty() {
+                if ready.is_some() && write.list_blocking_keys.is_empty() {
                     return Ok(Ok(None));
                 }
                 let keys = self
@@ -205,14 +205,13 @@ impl BlPopParams {
                     .map(|key| (db, key.clone()))
                     .collect();
                 // Registration is atomic with observation relative to apply.
-                let registration = cache
-                    .list_blocking_keys
-                    .register_exclusive_with(keys, deadline, self.clone())
+                let registration = write
+                    .register_list(keys, deadline, self.clone())
                     .map_err(|e| Error::internal(format!("cannot register BLPOP: {e:?}")))?;
                 if let Some(key) = ready {
                     // An older blocked pop owns the next turn, even if a new
                     // connection arrives while its Raft write is in flight.
-                    cache.list_blocking_keys.signal_one(&(db, key));
+                    write.list_blocking_keys.signal_one(&(db, key));
                 }
                 Ok::<_, CacheCatError>(Ok(Some(registration)))
             };
@@ -260,7 +259,7 @@ impl BlPopParams {
                 })?
                 .data;
             if let Some(registration) = &mut registration {
-                registration.finish();
+                registration.finish().await;
             }
             if !matches!(result, Value::Array(None)) {
                 return Ok(result);
