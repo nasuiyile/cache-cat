@@ -53,6 +53,7 @@ fn apply(
         None => UpdateType::None,
     };
     let mut update = Update {
+        execution_id: None,
         effects: None,
         waiters: None,
         db_number,
@@ -83,6 +84,7 @@ async fn restore(full: &[u8], queue: &[AtomicRequest], final_clock: u64) -> MyCa
             revision: delta.version,
         };
         let mut update = Update {
+            execution_id: None,
             effects: None,
             waiters: None,
             db_number: delta.db_number,

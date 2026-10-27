@@ -1,5 +1,5 @@
 use std::{
-    collections::{BTreeSet, HashMap, HashSet},
+    collections::{BTreeMap, BTreeSet, HashMap, HashSet},
     fmt,
     hash::Hash,
     ops::{Deref, DerefMut},
@@ -78,8 +78,11 @@ pub struct BlockingState<K, V, C = ()> {
     keys: HashMap<K, BTreeSet<WaiterId>>,
     waiters: HashMap<WaiterId, Waiter<K, V, C>>,
     next_id: WaiterId,
-    in_flight: Option<(WaiterId, K, Vec<K>)>,
+    // The final flag identifies key hints (BLPOP) versus per-waiter readiness
+    // (consumer groups). Cancelling the latter must not create a blind hint.
+    in_flight: Option<(WaiterId, K, Vec<K>, bool)>,
     ready: HashSet<K>,
+    eligible: BTreeMap<WaiterId, K>,
 }
 
 struct Waiter<K, V, C = ()> {
@@ -294,6 +297,7 @@ impl<K, V, C> Default for BlockingState<K, V, C> {
             next_id: 0,
             in_flight: None,
             ready: HashSet::new(),
+            eligible: BTreeMap::new(),
         }
     }
 }
@@ -305,6 +309,12 @@ impl<K, V, C> BlockingState<K, V, C> {
 
     pub fn is_empty(&self) -> bool {
         self.waiters.is_empty() && self.in_flight.is_none()
+    }
+
+    /// Enumerate only registered keys, for commands such as FLUSHDB/FLUSHALL.
+    /// Ordinary writes never need to scan this index.
+    pub fn registered_keys(&self) -> impl Iterator<Item = &K> {
+        self.keys.keys()
     }
 
     #[cfg(test)]
@@ -397,7 +407,7 @@ where
             || self
                 .in_flight
                 .as_ref()
-                .is_some_and(|(_, _, keys)| keys.contains(key))
+                .is_some_and(|(_, _, keys, _)| keys.contains(key))
         {
             self.ready.insert(key.clone());
         }
@@ -413,9 +423,49 @@ where
                 || self
                     .in_flight
                     .as_ref()
-                    .is_some_and(|(_, _, keys)| keys.contains(&key))
+                    .is_some_and(|(_, _, keys, _)| keys.contains(&key))
             {
                 self.ready.insert(key);
+            }
+        }
+        self.dispatch_pending()
+    }
+
+    /// Re-evaluate consumers affected by this atomic batch, then signal only
+    /// the oldest eligible waiter. Unlike a key hint, eligibility may differ
+    /// for consumers of the same key (for example different stream groups).
+    /// The caller holds the global writer and must refresh every affected key
+    /// after applying the previously signalled request, before finishing it.
+    pub fn signal_ready_many(
+        &mut self,
+        keys: impl IntoIterator<Item = K>,
+        mut is_ready: impl FnMut(&K, &C) -> bool,
+    ) -> usize {
+        if self.is_empty() {
+            return 0;
+        }
+        let mut affected = BTreeMap::new();
+        for key in keys {
+            if let Some(ids) = self.keys.get(&key) {
+                for &id in ids {
+                    affected.entry(id).or_insert_with(|| key.clone());
+                }
+            }
+        }
+        for (id, key) in affected {
+            let waiter = self.waiters.get(&id).expect("inconsistent waiter state");
+            if waiter
+                .deadline
+                .is_some_and(|deadline| Instant::now() >= deadline)
+            {
+                let waiter = self.remove_waiter(id).expect("inconsistent waiter state");
+                let _ = waiter.tx.send(Err(WaitError::Timeout));
+            } else if is_ready(&key, &waiter.context) {
+                self.eligible.insert(id, key);
+            } else {
+                // A previous request may have exhausted this group, even
+                // though another group on the same stream still has entries.
+                self.eligible.remove(&id);
             }
         }
         self.dispatch_pending()
@@ -425,10 +475,10 @@ where
         let removed = if self
             .in_flight
             .as_ref()
-            .is_some_and(|(active, _, _)| *active == id)
+            .is_some_and(|(active, _, _, _)| *active == id)
         {
-            let (_, key, _) = self.in_flight.take().unwrap();
-            if retry && self.keys.contains_key(&key) {
+            let (_, key, _, key_hint) = self.in_flight.take().unwrap();
+            if retry && key_hint && self.keys.contains_key(&key) {
                 self.ready.insert(key);
             }
             true
@@ -445,12 +495,25 @@ where
         }
         loop {
             self.ready.retain(|key| self.keys.contains_key(key));
-            let Some((id, key)) = self
+            let key_hint = self
                 .ready
                 .iter()
-                .filter_map(|key| self.keys.get(key)?.first().map(|id| (*id, key.clone())))
-                .min_by_key(|(id, _)| *id)
-            else {
+                .filter_map(|key| {
+                    self.keys
+                        .get(key)?
+                        .first()
+                        .map(|id| (*id, key.clone(), true))
+                })
+                .min_by_key(|(id, _, _)| *id);
+            let eligible = self
+                .eligible
+                .first_key_value()
+                .map(|(&id, key)| (id, key.clone(), false));
+            let next = match (key_hint, eligible) {
+                (Some(left), Some(right)) => Some(if left.0 < right.0 { left } else { right }),
+                (left, right) => left.or(right),
+            };
+            let Some((id, key, key_hint)) = next else {
                 return 0;
             };
             let waiter = self.remove_waiter(id).expect("inconsistent waiter state");
@@ -461,13 +524,17 @@ where
                 let _ = waiter.tx.send(Err(WaitError::Timeout));
                 continue;
             }
-            self.ready.remove(&key);
-            self.in_flight = Some((id, key.clone(), waiter.keys));
+            if key_hint {
+                self.ready.remove(&key);
+            }
+            self.in_flight = Some((id, key.clone(), waiter.keys, key_hint));
             if waiter.tx.send(Ok((key.clone(), ()))).is_ok() {
                 return 1;
             }
             self.in_flight = None;
-            self.ready.insert(key);
+            if key_hint {
+                self.ready.insert(key);
+            }
         }
     }
 }
@@ -605,6 +672,12 @@ impl<K, V, C> BlockingState<K, V, C>
 where
     K: Eq + Hash,
 {
+    /// Check the existing key index without scanning registered consumers.
+    /// A selected in-flight request no longer needs a readiness notification.
+    pub fn observes_key(&self, key: &K) -> bool {
+        self.keys.contains_key(key)
+    }
+
     pub fn cancel(&mut self, id: WaiterId) -> bool {
         self.remove_waiter(id).is_some()
     }
@@ -617,6 +690,7 @@ where
 
     fn remove_waiter(&mut self, id: WaiterId) -> Option<Waiter<K, V, C>> {
         let waiter = self.waiters.remove(&id)?;
+        self.eligible.remove(&id);
         for key in &waiter.keys {
             let empty = match self.keys.get_mut(key) {
                 Some(queue) => {
@@ -758,6 +832,18 @@ mod tests {
         fn signal_many(&self, keys: impl IntoIterator<Item = &'static str>) -> usize {
             self.owner.try_lock().unwrap().state.signal_many(keys)
         }
+
+        fn signal_ready_many(
+            &self,
+            keys: impl IntoIterator<Item = &'static str>,
+            ready: impl FnMut(&&'static str, &C) -> bool,
+        ) -> usize {
+            self.owner
+                .try_lock()
+                .unwrap()
+                .state
+                .signal_ready_many(keys, ready)
+        }
     }
 
     async fn assert_empty<V, C>(blocking: &TestBlocking<V, C>) {
@@ -770,6 +856,7 @@ mod tests {
                         && state.waiters.is_empty()
                         && state.in_flight.is_none()
                         && state.ready.is_empty()
+                        && state.eligible.is_empty()
                     {
                         assert_eq!(state.waiter_count(), 0);
                         return;
@@ -1356,5 +1443,113 @@ mod tests {
         assert!(weak.upgrade().is_none());
         assert_eq!(registration.wait().await, Err(WaitError::Closed));
         drop(access);
+    }
+
+    #[tokio::test]
+    async fn group_readiness_skips_an_older_unready_group_on_the_same_key() {
+        use futures::FutureExt;
+        let blocking = TestBlocking::exclusive();
+        let mut empty_group = blocking
+            .register_exclusive_with(vec!["stream"], None, "empty")
+            .unwrap();
+        let mut ready_group = blocking
+            .register_exclusive_with(vec!["stream"], None, "ready")
+            .unwrap();
+        assert_eq!(
+            blocking.signal_ready_many(["stream"], |_, group| *group == "ready"),
+            1
+        );
+        assert!(empty_group.wait().now_or_never().is_none());
+        assert_eq!(ready_group.wait().now_or_never(), Some(Ok(("stream", ()))));
+        ready_group.finish().await;
+        assert!(empty_group.wait().now_or_never().is_none());
+        assert_eq!(blocking.signal_ready_many(["stream"], |_, _| true), 1);
+        assert_eq!(empty_group.wait().now_or_never(), Some(Ok(("stream", ()))));
+        empty_group.finish().await;
+        assert_empty(&blocking).await;
+    }
+
+    #[tokio::test]
+    async fn group_readiness_is_refreshed_before_handing_the_turn_to_another_consumer() {
+        use futures::FutureExt;
+        let blocking = TestBlocking::exclusive();
+        let mut first = blocking
+            .register_exclusive_with(vec!["stream"], None, "group-a")
+            .unwrap();
+        let mut second = blocking
+            .register_exclusive_with(vec!["stream"], None, "group-a")
+            .unwrap();
+        let mut other_group = blocking
+            .register_exclusive_with(vec!["stream"], None, "group-b")
+            .unwrap();
+        assert_eq!(blocking.signal_ready_many(["stream"], |_, _| true), 1);
+        assert_eq!(first.wait().now_or_never(), Some(Ok(("stream", ()))));
+        // Another XADD before the selected request commits must not let the
+        // second consumer overtake it, regardless of how many are eligible.
+        assert_eq!(blocking.signal_ready_many(["stream"], |_, _| true), 0);
+        assert!(second.wait().now_or_never().is_none());
+        assert!(other_group.wait().now_or_never().is_none());
+        // Applying the first request exhausted only group-a. Refreshing the
+        // same stream removes group-a's cached eligibility, not group-b's.
+        assert_eq!(
+            blocking.signal_ready_many(["stream"], |_, group| *group == "group-b"),
+            0
+        );
+        first.finish().await;
+        assert!(second.wait().now_or_never().is_none());
+        assert_eq!(other_group.wait().now_or_never(), Some(Ok(("stream", ()))));
+        other_group.finish().await;
+        assert!(second.wait().now_or_never().is_none());
+        assert_eq!(blocking.signal_ready_many(["stream"], |_, _| true), 1);
+        assert_eq!(second.wait().now_or_never(), Some(Ok(("stream", ()))));
+        second.finish().await;
+        assert_empty(&blocking).await;
+    }
+
+    #[tokio::test]
+    async fn cancelled_filtered_turn_hands_off_only_to_eligible_waiters() {
+        use futures::FutureExt;
+        let blocking = TestBlocking::exclusive();
+        let mut first = blocking
+            .register_exclusive_with(vec!["a", "b"], None, true)
+            .unwrap();
+        let mut unready = blocking
+            .register_exclusive_with(vec!["a"], None, false)
+            .unwrap();
+        let mut successor = blocking
+            .register_exclusive_with(vec!["b"], None, true)
+            .unwrap();
+        assert_eq!(blocking.signal_ready_many(["a", "b"], |_, ready| *ready), 1);
+        assert!(first.wait().now_or_never().unwrap().is_ok());
+        assert!(first.cancel().await);
+        assert!(unready.wait().now_or_never().is_none());
+        assert_eq!(successor.wait().now_or_never(), Some(Ok(("b", ()))));
+        successor.finish().await;
+        assert!(unready.wait().now_or_never().is_none());
+        unready.cancel().await;
+        assert_empty(&blocking).await;
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn filtered_waiters_expire_without_resolving_or_losing_other_groups() {
+        use futures::FutureExt;
+        let blocking = TestBlocking::exclusive();
+        let mut expired = blocking
+            .register_exclusive_with(vec!["stream"], Some(Instant::now()), 0)
+            .unwrap();
+        let mut live = blocking
+            .register_exclusive_with(vec!["stream"], None, 1)
+            .unwrap();
+        assert_eq!(
+            blocking.signal_ready_many(["stream"], |_, group| {
+                assert_eq!(*group, 1, "expired waiters must not inspect stream data");
+                true
+            }),
+            1
+        );
+        assert_eq!(expired.wait().await, Err(WaitError::Timeout));
+        assert_eq!(live.wait().now_or_never(), Some(Ok(("stream", ()))));
+        live.finish().await;
+        assert_empty(&blocking).await;
     }
 }

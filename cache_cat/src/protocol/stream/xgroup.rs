@@ -7,7 +7,9 @@ use crate::raft::network::redis_server::RedisServer;
 use crate::raft::types::core::mocha::cas::ComputeCommand;
 use crate::raft::types::core::mocha::core::MyValue;
 use crate::raft::types::core::response_value::Value;
-use crate::raft::types::core::structure::stream::{GroupStart, RedisStream, StreamError};
+use crate::raft::types::core::structure::stream::{
+    GroupGeneration, GroupStart, RedisStream, StreamError,
+};
 use crate::raft::types::core::value_object::ValueObject;
 use crate::raft::types::entry::base_operation::BaseOperation;
 use crate::raft::types::entry::request::Operation;
@@ -28,6 +30,8 @@ pub enum XGroupReq {
         id: GroupStart,
         entries_read: Option<u64>,
         mkstream: bool,
+        /// Filled during apply and retained in snapshot incremental records.
+        generation: Option<GroupGeneration>,
     },
     SetId {
         key: Bytes,
@@ -66,6 +70,7 @@ impl fmt::Display for XGroupReq {
                 id,
                 entries_read,
                 mkstream,
+                ..
             } => {
                 write!(
                     f,
@@ -189,6 +194,7 @@ impl XGroupReq {
                     id,
                     entries_read: er,
                     mkstream: mk,
+                    generation: None,
                 })
             }
             "SETID" => {
@@ -275,9 +281,10 @@ impl ComputeCommand for XGroupReq {
                 group,
                 id,
                 entries_read,
+                generation,
                 ..
             } => s
-                .xgroup_create(&group, id, entries_read)
+                .xgroup_create_at_generation(&group, id, entries_read, generation)
                 .map(|_| Value::ok()),
             Self::SetId {
                 group,
@@ -325,6 +332,7 @@ impl ComputeCommand for XGroupReq {
             id,
             entries_read,
             mkstream,
+            generation,
             ..
         } = self
         else {
@@ -341,7 +349,7 @@ impl ComputeCommand for XGroupReq {
             );
         }
         let mut s = RedisStream::new();
-        let r = s.xgroup_create(&group, id, entries_read);
+        let r = s.xgroup_create_at_generation(&group, id, entries_read, generation);
         match r {
             Ok(()) => (
                 MochaOperation::Insert {

@@ -257,6 +257,9 @@ mod request_tests;
 mod blpop_tests;
 
 #[cfg(test)]
+mod xreadgroup_tests;
+
+#[cfg(test)]
 mod tests {
     use super::*;
     use crate::cfg::config::Config;

@@ -1,8 +1,9 @@
+use crate::raft::types::core::mocha::cas::ComputeCommand;
 use crate::raft::types::core::mocha::core::{
     ApplyEffects, MyCache, Update, UpdateType, WriteState,
 };
 use crate::raft::types::core::response_value::Value;
-use crate::raft::types::core::structure::stream::AddId;
+use crate::raft::types::core::structure::stream::{AddId, GroupGeneration};
 use crate::raft::types::core::value_object::ValueObject;
 use crate::raft::types::entry::base_operation::BaseOperation;
 use crate::raft::types::entry::read_operation::ReadOperation;
@@ -100,9 +101,6 @@ fn read_request_inner<const REPLICATED: bool>(
         ReadOperation::BfInfo(param) => my_cache.execute_read(param, db_number, read_clock),
         ReadOperation::BfCard(param) => my_cache.execute_read(param, db_number, read_clock),
         ReadOperation::BfScanDump(param) => my_cache.execute_read(param, db_number, read_clock),
-        ReadOperation::XReadGroup(param) => {
-            my_cache.execute_multi_read(param, db_number, read_clock)
-        }
     }
 }
 
@@ -128,8 +126,12 @@ fn base_request_inner(
             }
             Value::ok()
         }
-        BaseOperation::Set(param) => my_cache.set(param, update),
+        BaseOperation::Set(param) => {
+            record_group_key(update, &param.key);
+            my_cache.set(param, update)
+        }
         BaseOperation::XAdd(mut param) => {
+            record_group_key(update, &param.key);
             // Resolve automatic IDs before both initialization and mutation so
             // every Raft replica uses the replicated write clock.
             if matches!(param.id, AddId::Auto) {
@@ -153,8 +155,14 @@ fn base_request_inner(
             }
             result
         }
-        BaseOperation::Expire(param) => my_cache.expire(param, update),
-        BaseOperation::PExpire(param) => my_cache.p_expire(param, update),
+        BaseOperation::Expire(param) => {
+            record_group_key(update, &param.key);
+            my_cache.expire(param, update)
+        }
+        BaseOperation::PExpire(param) => {
+            record_group_key(update, &param.key);
+            my_cache.p_expire(param, update)
+        }
         BaseOperation::LPush(param) => {
             let key = list_notification_key(&param.key, update);
             let result = my_cache.l_push(param, update);
@@ -163,7 +171,10 @@ fn base_request_inner(
             }
             result
         }
-        BaseOperation::Del(param) => my_cache.del(param, update),
+        BaseOperation::Del(param) => {
+            record_group_key(update, &param.key);
+            my_cache.del(param, update)
+        }
         BaseOperation::Incr(param) => my_cache.incr(param, update),
         BaseOperation::IncrBy(param) => my_cache.incr_by(param, update),
         BaseOperation::IncrByFloat(param) => my_cache.execute_compute(param, update),
@@ -173,8 +184,12 @@ fn base_request_inner(
         BaseOperation::HIncrByFloat(param) => my_cache.execute_compute(param, update),
         BaseOperation::ZAdd(param) => my_cache.z_add(param, update),
         BaseOperation::SAdd(param) => my_cache.s_add(param, update),
-        BaseOperation::Persist(param) => my_cache.persist(param, update),
+        BaseOperation::Persist(param) => {
+            record_group_key(update, &param.key);
+            my_cache.persist(param, update)
+        }
         BaseOperation::Insert(param) => {
+            record_group_key(update, &param.key);
             // Computed writes from RENAME and BLPOP pass here as well. Only
             // list values can make a blocked list pop eligible to run.
             let key = if matches!(&param.value, ValueObject::List(_)) {
@@ -208,12 +223,21 @@ fn base_request_inner(
         BaseOperation::Decr(param) => my_cache.decr(param, update),
         BaseOperation::ZRem(param) => my_cache.z_rem(param, update),
         BaseOperation::LTrim(param) => my_cache.l_trim(param, update),
-        BaseOperation::FlushDB(param) => my_cache.flush_db(param, update, external),
-        BaseOperation::FlushAll(param) => my_cache.flush_all(param, update, external),
+        BaseOperation::FlushDB(param) => {
+            record_group_database(update, Some(update.db_number));
+            my_cache.flush_db(param, update, external)
+        }
+        BaseOperation::FlushAll(param) => {
+            record_group_database(update, None);
+            my_cache.flush_all(param, update, external)
+        }
         BaseOperation::BitField(param) => my_cache.bit_field(param, update),
         BaseOperation::SPop(param) => my_cache.s_pop(param, update),
         BaseOperation::ZPopMin(param) => my_cache.z_pop_min(param, update),
-        BaseOperation::Unlink(param) => my_cache.unlink(param, update),
+        BaseOperation::Unlink(param) => {
+            record_group_key(update, &param.key);
+            my_cache.unlink(param, update)
+        }
         BaseOperation::ZIncrBy(param) => my_cache.z_incr_by(param, update),
         BaseOperation::HMSet(param) => my_cache.h_mset(param, update),
         BaseOperation::PfAdd(param) => my_cache.p_f_add(param, update),
@@ -222,8 +246,75 @@ fn base_request_inner(
         BaseOperation::BfReserve(param) => my_cache.bf_reserve(param, update),
         BaseOperation::BfInsert(param) => my_cache.bf_insert(param, update),
         BaseOperation::BfLoadChunk(param) => my_cache.bf_load(param, update),
-        BaseOperation::XGroup(param) => my_cache.x_group(param, update),
+        BaseOperation::XGroup(mut param) => {
+            if let crate::protocol::stream::xgroup::XGroupReq::Create { generation, .. } =
+                &mut param
+                && generation.is_none()
+                && let Some((log_index, ordinal)) = &mut update.execution_id
+            {
+                *ordinal = ordinal
+                    .checked_add(1)
+                    .expect("group creation ordinal exhausted");
+                *generation = Some(GroupGeneration {
+                    log_index: *log_index,
+                    ordinal: *ordinal,
+                });
+            }
+            record_group_key(update, param.key());
+            my_cache.x_group(param, update)
+        }
+        BaseOperation::XReadGroup(param) => {
+            record_group_key(update, &param.key);
+            my_cache.execute_compute(param, update)
+        }
     }
+}
+
+/// Only commands that can change a stream/group call this helper. With no
+/// blocked group reader, the path checks local guarded state without cloning,
+/// hashing, allocating, or accessing a separate lock/atomic variable.
+fn record_group_key(update: &mut Update, key: &bytes::Bytes) {
+    record_group_keys(update, std::iter::once(key));
+}
+
+fn record_group_keys<'k>(update: &mut Update, keys: impl Iterator<Item = &'k bytes::Bytes>) {
+    if matches!(update.update_type, UpdateType::CAS { .. })
+        || update.effects.is_none()
+        || !update
+            .waiters
+            .as_deref()
+            .is_some_and(|waiters| !waiters.group_blocking_keys.is_empty())
+    {
+        return;
+    }
+    let db = update.db_number;
+    let waiters = update.waiters.as_deref().expect("waiters checked");
+    let effects = update.effects.as_deref_mut().expect("effects checked");
+    for key in keys {
+        let key = (db, key.clone());
+        if waiters.group_blocking_keys.observes_key(&key) {
+            effects.ready_groups.insert(key);
+        }
+    }
+}
+
+fn record_group_database(update: &mut Update, db: Option<u16>) {
+    if matches!(update.update_type, UpdateType::CAS { .. }) {
+        return;
+    }
+    let (Some(effects), Some(waiters)) = (update.effects.as_deref_mut(), update.waiters.as_deref())
+    else {
+        return;
+    };
+    // FLUSHDB/ALL visit only the registry's indexed keys, never the cache or
+    // every database. All ordinary commands avoid this enumeration.
+    effects.ready_groups.extend(
+        waiters
+            .group_blocking_keys
+            .registered_keys()
+            .filter(|key| db.is_none_or(|db| key.0 == db))
+            .cloned(),
+    );
 }
 
 /// The common producer path does no key cloning, hashing or locking when no
@@ -288,14 +379,42 @@ pub fn do_request(
         }
         Operation::Base(base) => base_request_inner(my_cache, base, update, external),
         Operation::Redis(redis) => match redis {
-            RedisOperation::RedisDel(param) => my_cache.redis_del(param, update, external),
-            RedisOperation::RedisSet(param) => my_cache.redis_set(param, update),
-            RedisOperation::RedisSetNx(param) => my_cache.redis_setnx(param, update),
-            RedisOperation::RedisSetEx(param) => my_cache.redis_setex(param, update),
-            RedisOperation::RedisPSetEx(param) => my_cache.redis_psetex(param, update),
-            RedisOperation::RedisGetSet(param) => my_cache.redis_get_set(param, update),
-            RedisOperation::RedisMset(param) => my_cache.redis_mset(param, update, external),
+            RedisOperation::RedisDel(param) => {
+                record_group_keys(update, param.keys.iter());
+                my_cache.redis_del(param, update, external)
+            }
+            RedisOperation::RedisSet(param) => {
+                record_group_key(update, &param.key);
+                my_cache.redis_set(param, update)
+            }
+            RedisOperation::RedisSetNx(param) => {
+                record_group_key(update, &param.key);
+                my_cache.redis_setnx(param, update)
+            }
+            RedisOperation::RedisSetEx(param) => {
+                record_group_key(update, &param.key);
+                my_cache.redis_setex(param, update)
+            }
+            RedisOperation::RedisPSetEx(param) => {
+                record_group_key(update, &param.key);
+                my_cache.redis_psetex(param, update)
+            }
+            RedisOperation::RedisGetSet(param) => {
+                record_group_key(update, &param.key);
+                my_cache.redis_get_set(param, update)
+            }
+            RedisOperation::RedisMset(param) => {
+                record_group_keys(update, param.pairs.iter().map(|(key, _)| key));
+                my_cache.redis_mset(param, update, external)
+            }
             RedisOperation::RedisBitOp(param) => my_cache.execute_multi_read_compute(param, update),
+            RedisOperation::RedisXReadGroup(param) => {
+                // Refresh every requested stream before handing the exclusive
+                // turn to the next consumer. Other groups may still be ready
+                // after this request exhausts its own group's new entries.
+                record_group_keys(update, param.keys.iter());
+                my_cache.redis_xreadgroup(param, update, external)
+            }
             RedisOperation::RedisBlPop(param) => {
                 if !matches!(update.update_type, UpdateType::CAS { .. })
                     && update.effects.is_some()
@@ -377,7 +496,10 @@ pub fn do_request(
                 }
                 Value::Array(Some(vec))
             }
-            RedisOperation::RedisUnlink(param) => my_cache.redis_unlink(param, update, external),
+            RedisOperation::RedisUnlink(param) => {
+                record_group_keys(update, param.keys.iter());
+                my_cache.redis_unlink(param, update, external)
+            }
             RedisOperation::RedisReply(value) => value,
             RedisOperation::RedisEvalSha { .. } => {
                 // Unresolved hashes must never consult replica-local script caches.
@@ -403,6 +525,18 @@ pub fn do_request(
                 });
             }
             ApplyEffects::recycle_ready_keys(&mut effects.ready_streams);
+        }
+        if !effects.ready_groups.is_empty() {
+            let waiters = update
+                .waiters
+                .as_deref_mut()
+                .expect("effects require an execution guard");
+            waiters
+                .group_blocking_keys
+                .signal_ready_many(effects.ready_groups.drain(), |key, params| {
+                    params.ready(my_cache, key.0, update.write_clock)
+                });
+            ApplyEffects::recycle_ready_keys(&mut effects.ready_groups);
         }
         if !effects.ready_lists.is_empty() {
             let waiters = update
@@ -496,6 +630,7 @@ mod tests {
         let mut write_guard = cache.write_lock.lock().await;
         let mut update_type = UpdateType::None;
         let mut update = Update {
+            execution_id: None,
             db_number,
             write_clock,
             update_type: &mut update_type,
@@ -536,6 +671,7 @@ mod tests {
             revision: 1,
         };
         let mut update = Update {
+            execution_id: None,
             db_number: 0,
             write_clock: 400,
             update_type: &mut update_type,
@@ -1028,6 +1164,7 @@ mod tests {
             revision: 1,
         };
         let mut update = Update {
+            execution_id: None,
             db_number: 0,
             write_clock: 1,
             update_type: &mut update_type,
@@ -1394,6 +1531,7 @@ mod tests {
             revision: 1,
         };
         let mut update = Update {
+            execution_id: None,
             db_number: 0,
             write_clock: 1234,
             update_type: &mut update_type,
@@ -1474,5 +1612,84 @@ mod tests {
         assert!(effects.ready_lists.capacity() > 0);
         assert!(effects.ready_lists.capacity() <= 64);
         next.finish().await;
+    }
+
+    #[tokio::test]
+    async fn unrelated_set_does_not_collect_group_effects_but_watched_delete_notifies() {
+        use crate::protocol::stream::xgroup::XGroupReq;
+        use crate::protocol::stream::xreadgroup::XReadGroupParams;
+        use crate::protocol::string::set::SetReq;
+        use crate::raft::types::core::structure::stream::GroupStart;
+        use futures::FutureExt;
+        let cache = MyCache::new(1).unwrap();
+        let watched = Bytes::from_static(b"watched");
+        apply(
+            &cache,
+            Operation::Base(BaseOperation::XGroup(XGroupReq::Create {
+                key: watched.clone(),
+                group: Bytes::from_static(b"group"),
+                id: GroupStart::Id(StreamId::ZERO),
+                entries_read: None,
+                mkstream: true,
+                generation: None,
+            })),
+            0,
+            1,
+        )
+        .await;
+        let args = [
+            "XREADGROUP",
+            "GROUP",
+            "group",
+            "consumer",
+            "BLOCK",
+            "0",
+            "STREAMS",
+            "watched",
+            ">",
+        ]
+        .map(|part| Value::BulkString(Some(Bytes::copy_from_slice(part.as_bytes()))));
+        let mut waiter = cache
+            .write_lock
+            .lock()
+            .await
+            .register_stream_group(
+                vec![(0, watched.clone())],
+                None,
+                XReadGroupParams::parse(&args).unwrap(),
+            )
+            .unwrap();
+        let mut effects = ApplyEffects::default();
+        apply_with_effects(
+            &cache,
+            Operation::Base(BaseOperation::Set(SetReq {
+                key: Bytes::from_static(b"unrelated"),
+                value: Bytes::from_static(b"value"),
+                ex_time: 0,
+            })),
+            0,
+            2,
+            &mut effects,
+        )
+        .await;
+        assert!(waiter.wait().now_or_never().is_none());
+        assert_eq!(
+            effects.ready_groups.capacity(),
+            0,
+            "unobserved keys must not allocate notification buckets"
+        );
+        apply_with_effects(
+            &cache,
+            Operation::Base(BaseOperation::Del(DelReq {
+                key: watched.clone(),
+            })),
+            0,
+            3,
+            &mut effects,
+        )
+        .await;
+        assert_eq!(waiter.wait().now_or_never(), Some(Ok(((0, watched), ()))));
+        waiter.finish().await;
+        assert!(effects.ready_groups.is_empty());
     }
 }

@@ -1,5 +1,7 @@
 # BLPOP 与 Raft
 
+公共执行模型、XREAD/XREADGROUP 的区别、超时边界及主从时序图见 [读取、阻塞与状态变更命令](blocking_reads_and_raft_zh.md)。
+
 `BLPOP key [key ...] timeout` 的等待状态仅保存在接入主节点本地。timeout 按 Redis 秒数解析，支持小数与 0 无限等待；有限等待使用固定的本地单调时钟 deadline，重试不重置。
 
 ## 确定性状态变更

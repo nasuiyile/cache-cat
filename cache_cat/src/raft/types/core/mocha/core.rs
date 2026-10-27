@@ -3,6 +3,7 @@ use crate::mocha::Mocha;
 use crate::protocol::common::lua_env::LuaEnv;
 use crate::protocol::list::blpop::BlPopParams;
 use crate::protocol::stream::xread::XReadParams;
+use crate::protocol::stream::xreadgroup::XReadGroupParams;
 use crate::raft::application::blocking_keys::{
     BlockingKeys, CleanupReceiver, ExclusiveRegistration, Registration, WaitError, cleanup_channel,
 };
@@ -70,6 +71,7 @@ pub struct MyCache {
 pub struct WriteState {
     pub blocking_keys: BlockingKeys<WriteState, (u16, Bytes), Value, XReadParams>,
     pub list_blocking_keys: BlockingKeys<WriteState, (u16, Bytes), (), BlPopParams>,
+    pub group_blocking_keys: BlockingKeys<WriteState, (u16, Bytes), (), XReadGroupParams>,
     cleanup_receiver: Option<CleanupReceiver<WriteState>>,
 }
 
@@ -91,6 +93,20 @@ impl WriteState {
         }
         self.prepare_registration()?;
         self.blocking_keys.register_with(keys, deadline, params)
+    }
+
+    pub(crate) fn register_stream_group(
+        &mut self,
+        keys: Vec<(u16, Bytes)>,
+        deadline: Option<tokio::time::Instant>,
+        params: XReadGroupParams,
+    ) -> Result<ExclusiveRegistration<Self, (u16, Bytes), XReadGroupParams>, WaitError> {
+        if keys.is_empty() {
+            return Err(WaitError::EmptyKeys);
+        }
+        self.prepare_registration()?;
+        self.group_blocking_keys
+            .register_exclusive_with(keys, deadline, params)
     }
 
     pub(crate) fn register_list(
@@ -180,9 +196,15 @@ impl MyCache {
                 ),
                 list_blocking_keys: BlockingKeys::new(
                     owner.clone(),
-                    cleanup_sender,
+                    cleanup_sender.clone(),
                     |state| &mut *state.list_blocking_keys,
                     |state, id, retry| state.list_blocking_keys.release_exclusive(id, retry),
+                ),
+                group_blocking_keys: BlockingKeys::new(
+                    owner.clone(),
+                    cleanup_sender,
+                    |state| &mut *state.group_blocking_keys,
+                    |state, id, retry| state.group_blocking_keys.release_exclusive(id, retry),
                 ),
                 cleanup_receiver: Some(cleanup_receiver),
             })
@@ -290,6 +312,7 @@ impl MyCache {
 pub struct ApplyEffects {
     pub(crate) ready_streams: HashSet<(u16, Bytes)>,
     pub(crate) ready_lists: HashSet<(u16, Bytes)>,
+    pub(crate) ready_groups: HashSet<(u16, Bytes)>,
 }
 
 impl ApplyEffects {
@@ -304,6 +327,10 @@ impl ApplyEffects {
 }
 
 pub struct Update<'a> {
+    /// The applied Raft log index and the XGROUP CREATE ordinal within it.
+    /// This deterministic identity is copied into newly created group metadata.
+    /// Snapshot replay keeps the token already stored in its concrete operation.
+    pub execution_id: Option<(u64, u64)>,
     pub db_number: u16,
     pub write_clock: u64,
     pub update_type: &'a mut UpdateType<'a>,

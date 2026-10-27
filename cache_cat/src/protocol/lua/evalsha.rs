@@ -296,6 +296,7 @@ mod tests {
             let replica = MyCache::new(2).unwrap();
             let mut update_type = UpdateType::None;
             let mut update = Update {
+                execution_id: None,
                 effects: None,
                 waiters: None,
                 db_number: 0,
@@ -512,6 +513,7 @@ mod tests {
         let replica = MyCache::new(1).unwrap();
         let mut update_type = UpdateType::None;
         let mut update = Update {
+            execution_id: None,
             effects: None,
             waiters: None,
             db_number: 0,

@@ -248,6 +248,7 @@ mod tests {
             let operation: Operation = bincode2::deserialize(&encoded).unwrap();
             let mut update_type = UpdateType::None;
             let mut update = Update {
+                execution_id: None,
                 effects: None,
                 waiters: None,
                 db_number: 0,
@@ -289,6 +290,7 @@ mod tests {
         let operation: Operation = bincode2::deserialize(&encoded).unwrap();
         let mut update_type = UpdateType::None;
         let mut update = Update {
+            execution_id: None,
             effects: None,
             waiters: None,
             db_number: 0,

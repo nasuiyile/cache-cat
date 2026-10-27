@@ -133,6 +133,7 @@ fn pop_side_can_reuse_the_same_deterministic_operation_for_brpop() {
 fn apply(cache: &MyCache, operation: Operation) -> Value {
     let mut update_type = UpdateType::None;
     let mut update = Update {
+        execution_id: None,
         effects: None,
         waiters: None,
         db_number: DB,
@@ -157,6 +158,7 @@ fn snapshot(cache: &MyCache, request: BlPopReq) -> (Value, Vec<AtomicRequest>) {
         revision: &mut revision,
     };
     let mut update = Update {
+        execution_id: None,
         effects: None,
         waiters: None,
         db_number: DB,
@@ -181,6 +183,7 @@ fn replay(cache: &MyCache, queue: &[AtomicRequest]) {
             revision: atomic.version,
         };
         let mut update = Update {
+            execution_id: None,
             effects: None,
             waiters: None,
             db_number: atomic.db_number,
