@@ -5,8 +5,6 @@ use bytes::Bytes;
 pub mod xadd;
 pub mod xread;
 
-pub mod xreadgroup;
-
 pub mod xgroup;
 
 pub(super) fn arg(value: &Value) -> Result<Bytes, ProtocolError> {

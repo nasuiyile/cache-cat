@@ -1,4 +1,3 @@
-pub mod blpop;
 pub mod lindex;
 pub mod llen;
 pub mod lpop;

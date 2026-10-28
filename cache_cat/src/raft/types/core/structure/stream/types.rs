@@ -2,14 +2,6 @@ use crate::raft::types::core::structure::stream::id::{IdRange, StreamId};
 use serde::{Deserialize, Serialize};
 use std::fmt;
 
-/// Stable identity of a group created by a committed Raft operation.
-/// The ordinal distinguishes several creates inside one EXEC or Lua entry.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-pub struct GroupGeneration {
-    pub log_index: u64,
-    pub ordinal: u64,
-}
-
 pub type Fields = Vec<(Vec<u8>, Vec<u8>)>;
 pub type Result<T> = std::result::Result<T, StreamError>;
 

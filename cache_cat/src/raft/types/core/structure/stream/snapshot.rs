@@ -6,13 +6,13 @@ use crate::raft::types::core::structure::stream::core::{
     Consumer, Group, Key, Pending, RedisStream,
 };
 use crate::raft::types::core::structure::stream::id::StreamId;
-use crate::raft::types::core::structure::stream::types::{Entry, Fields, GroupGeneration};
+use crate::raft::types::core::structure::stream::types::{Entry, Fields};
 use blart::TreeMap;
 use serde::ser::SerializeStruct;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use std::{collections::HashMap, fmt, sync::Arc};
 
-pub const SNAPSHOT_VERSION: u32 = 2;
+pub const SNAPSHOT_VERSION: u32 = 3;
 
 /// Owned, versioned logical snapshot. No runtime locks, notifications, identity
 /// pointers, or clock implementations are persisted. Binary names remain bytes.
@@ -35,7 +35,6 @@ pub struct StreamSnapshot {
 #[serde(deny_unknown_fields)]
 pub struct GroupSnapshot {
     pub name: Vec<u8>,
-    pub generation: Option<GroupGeneration>,
     pub last_delivered: StreamId,
     pub entries_read: Option<u64>,
     pub consumers: Vec<ConsumerSnapshot>,
@@ -124,7 +123,6 @@ impl StreamSnapshot {
             // Cursor and entries_read can exceed stream metadata after legal
             // administrative SETID operations. Do not clamp or recompute them.
             let mut group = Group::new(saved.last_delivered, saved.entries_read);
-            group.generation = saved.generation;
             for consumer in saved.consumers {
                 if group.consumers.contains_key(consumer.name.as_slice()) {
                     return Err(SnapshotError("duplicate consumer name".into()));
@@ -190,7 +188,6 @@ impl RedisStream {
                 consumers.sort_unstable_by(|a, b| a.name.cmp(&b.name));
                 GroupSnapshot {
                     name: name.clone(),
-                    generation: g.generation,
                     last_delivered: g.last_delivered,
                     entries_read: g.entries_read,
                     consumers,
@@ -289,7 +286,6 @@ impl Serialize for PendingListRef<'_> {
 #[serde(rename = "GroupSnapshot")]
 struct GroupRef<'a> {
     name: &'a [u8],
-    generation: Option<GroupGeneration>,
     last_delivered: StreamId,
     entries_read: Option<u64>,
     consumers: ConsumersRef<'a>,
@@ -302,7 +298,6 @@ impl Serialize for GroupsRef<'_> {
         ordered.sort_unstable_by(|a, b| a.0.cmp(b.0));
         serializer.collect_seq(ordered.into_iter().map(|(name, g)| GroupRef {
             name,
-            generation: g.generation,
             last_delivered: g.last_delivered,
             entries_read: g.entries_read,
             consumers: ConsumersRef(&g.consumers),

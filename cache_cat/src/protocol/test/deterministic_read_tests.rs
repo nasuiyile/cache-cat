@@ -162,7 +162,6 @@ fn apply_log(cache: &MyCache, log: &[u8]) -> Value {
     let (clock, db_number) = request.split_u64();
     let mut update_type = UpdateType::None;
     let mut update = Update {
-        execution_id: None,
         effects: None,
         waiters: None,
         db_number,

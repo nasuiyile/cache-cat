@@ -6,7 +6,7 @@ Run against a cache-cat instance listening on localhost:6379::
 
 The tests intentionally use ``execute_command`` for XGROUP subcommands so
 their assertions cover the wire-level replies produced by cache-cat. Commands
-outside the XGROUP/XREADGROUP scope (such as XINFO and XPENDING) are avoided
+outside the XGROUP scope (such as XINFO and XPENDING) are avoided
 so this smoke test can run while those command families are developed.
 """
 
@@ -42,9 +42,9 @@ class XGroupCommandTests(unittest.TestCase):
         self.assertIn("BUSYGROUP", str(ctx.exception).upper())
 
 
-    def test_createconsumer_read_pending_ack_and_deleteconsumer(self):
+    def test_createconsumer_and_deleteconsumer(self):
         stream = "xgroup-pel"
-        msg_id = self.redis.xadd(stream, {"field": "value"})
+        self.redis.xadd(stream, {"field": "value"})
         self.redis.execute_command("XGROUP", "CREATE", stream, "g", "0-0")
 
         self.assertEqual(
@@ -57,13 +57,12 @@ class XGroupCommandTests(unittest.TestCase):
             0,
         )
 
-        result = self.redis.xreadgroup("g", "c", {stream: ">"}, count=1)
-        self.assertEqual(result[0][0], stream)
-        self.assertEqual(result[0][1][0][0], msg_id)
-
-        # DELCONSUMER removes the consumer and reports removed PEL entries.
+        # An idle consumer has no pending entries, but is still removed.
         self.assertEqual(
-            self.redis.execute_command("XGROUP", "DELCONSUMER", stream, "g", "c"), 1
+            self.redis.execute_command("XGROUP", "DELCONSUMER", stream, "g", "c"), 0
+        )
+        self.assertEqual(
+            self.redis.execute_command("XGROUP", "CREATECONSUMER", stream, "g", "c"), 1
         )
 
     def test_setid_destroy_and_missing_group_errors(self):
@@ -80,7 +79,7 @@ class XGroupCommandTests(unittest.TestCase):
         self.assertEqual(self.redis.execute_command("XGROUP", "DESTROY", stream, "g"), 0)
 
         with self.assertRaises(ResponseError) as ctx:
-            self.redis.xreadgroup("g", "c", {stream: ">"}, count=1)
+            self.redis.execute_command("XGROUP", "CREATECONSUMER", stream, "g", "c")
         self.assertIn("NOGROUP", str(ctx.exception).upper())
 
     def test_create_mkstream(self):

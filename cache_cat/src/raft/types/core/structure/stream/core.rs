@@ -31,7 +31,6 @@ impl Consumer {
 
 #[derive(Clone, Debug)]
 pub(super) struct Group {
-    pub(super) generation: Option<GroupGeneration>,
     pub(super) last_delivered: StreamId,
     pub(super) entries_read: Option<u64>,
     pub(super) pel: TreeMap<Key, Pending>,
@@ -42,7 +41,6 @@ pub(super) struct Group {
 impl Group {
     pub(super) fn new(last_delivered: StreamId, entries_read: Option<u64>) -> Self {
         Self {
-            generation: None,
             last_delivered,
             entries_read,
             pel: TreeMap::new(),
@@ -265,14 +263,6 @@ impl RedisStream {
             GroupStart::Id(id) => id,
             GroupStart::Last => self.last_generated_id,
         }
-    }
-
-    /// Replicated group identity, preserved by cloning and snapshots.
-    pub(crate) fn group_generation(&self, name: &[u8]) -> Result<Option<GroupGeneration>> {
-        self.groups
-            .get(name)
-            .map(|group| group.generation)
-            .ok_or(StreamError::NoGroup)
     }
 
     pub(crate) fn group_identity(&self, name: &[u8]) -> Result<Arc<()>> {
@@ -554,26 +544,12 @@ impl RedisStream {
         start: GroupStart,
         entries_read: Option<u64>,
     ) -> Result<()> {
-        self.xgroup_create_at_generation(name, start, entries_read, None)
-    }
-
-    /// Create with a deterministic identity assigned by the outer Raft apply.
-    /// Standalone library callers can keep using the unversioned API above.
-    pub(crate) fn xgroup_create_at_generation(
-        &mut self,
-        name: &[u8],
-        start: GroupStart,
-        entries_read: Option<u64>,
-        generation: Option<GroupGeneration>,
-    ) -> Result<()> {
         if self.groups.contains_key(name) {
             return Err(StreamError::GroupExists);
         }
         let id = self.resolve_group_start(start);
         let read = entries_read.map(|n| n.min(self.entries_added));
-        let mut group = Group::new(id, read);
-        group.generation = generation;
-        self.groups.insert(name.to_vec(), group);
+        self.groups.insert(name.to_vec(), Group::new(id, read));
         Ok(())
     }
 
@@ -629,21 +605,7 @@ impl RedisStream {
         mode: GroupRead,
         options: ReadGroupOptions,
     ) -> Result<Vec<GroupEntry>> {
-        self.xreadgroup_at(name, consumer, mode, options, self.clock.now_ms())
-    }
-
-    /// Read and update one consumer using the caller's command timestamp.
-    /// Raft apply passes its replicated write clock here, so consumer activity
-    /// and PEL delivery metadata do not depend on a replica's wall clock.
-    /// Even an empty read creates/touches the consumer, matching Redis.
-    pub(crate) fn xreadgroup_at(
-        &mut self,
-        name: &[u8],
-        consumer: &[u8],
-        mode: GroupRead,
-        options: ReadGroupOptions,
-        now: u64,
-    ) -> Result<Vec<GroupEntry>> {
+        let now = self.clock.now_ms();
         let meta = self.meta();
         let group = self.groups.get_mut(name).ok_or(StreamError::NoGroup)?;
         group.touch(consumer, now);
@@ -1071,7 +1033,3 @@ impl RedisStream {
         Ok(())
     }
 }
-
-#[cfg(test)]
-#[path = "group_read_tests.rs"]
-mod group_read_tests;

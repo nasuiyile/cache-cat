@@ -54,7 +54,6 @@ use crate::protocol::key::renamenx::RenameNxCommand;
 use crate::protocol::key::ttl::TtlCommand;
 use crate::protocol::key::type_::TypeCommand;
 use crate::protocol::key::unlink::UnlinkCommand;
-use crate::protocol::list::blpop::BlPopCommand;
 use crate::protocol::list::lindex::LIndexCommand;
 use crate::protocol::list::llen::LLenCommand;
 use crate::protocol::list::lpop::LPopCommand;
@@ -96,7 +95,6 @@ use crate::protocol::set::sunionstore::SUnionStoreCommand;
 use crate::protocol::stream::xadd::XAddCommand;
 use crate::protocol::stream::xgroup::XGroupCommand;
 use crate::protocol::stream::xread::XReadCommand;
-use crate::protocol::stream::xreadgroup::XReadGroupCommand;
 use crate::protocol::string::append::AppendCommand;
 use crate::protocol::string::decr::DecrCommand;
 use crate::protocol::string::decrby::DecrByCommand;
@@ -374,7 +372,6 @@ impl CommandFactory {
         factory.register("LRANGE", LRangeCommand);
         factory.register("LLEN", LLenCommand);
         factory.register("LPOP", LPopCommand);
-        factory.register("BLPOP", BlPopCommand);
         factory.register("RPOP", RPopCommand);
         factory.register("LINDEX", LIndexCommand);
         factory.register("LREM", LRemCommand);
@@ -462,7 +459,6 @@ impl CommandFactory {
         // Stream
         factory.register("XADD", XAddCommand);
         factory.register("XREAD", XReadCommand);
-        factory.register("XREADGROUP", XReadGroupCommand);
         factory.register("XGROUP", XGroupCommand);
         factory
     }

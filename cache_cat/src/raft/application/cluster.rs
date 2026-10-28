@@ -128,30 +128,6 @@ impl Cluster {
         self.raft.is_leader()
     }
 
-    /// Subscribe only to role/vote changes, not the per-log data metrics.
-    /// Capture the term before returning the future so a quick re-election
-    /// cannot keep waiters from an earlier leadership alive.
-    pub(crate) fn leadership_lost(&self) -> impl Future<Output = ()> + Send + '_ {
-        let mut metrics = self.raft.server_metrics();
-        let vote = metrics.borrow_watched().vote.clone();
-        async move {
-            loop {
-                {
-                    let current = metrics.borrow_and_update();
-                    if current.state != openraft::ServerState::Leader
-                        || current.current_leader != Some(self.node_id())
-                        || current.vote != vote
-                    {
-                        return;
-                    }
-                }
-                if metrics.changed().await.is_err() {
-                    return;
-                }
-            }
-        }
-    }
-
     pub fn node_id(&self) -> NodeId {
         *self.raft.node_id()
     }

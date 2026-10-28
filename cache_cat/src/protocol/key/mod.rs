@@ -130,7 +130,6 @@ mod tests {
                 let cache = seeded_cache();
                 let mut update_type = UpdateType::None;
                 let mut update = Update {
-                    execution_id: None,
                     effects: None,
                     waiters: None,
                     db_number: 1,
@@ -161,7 +160,6 @@ mod tests {
                         UpdateType::None
                     };
                     let mut update = Update {
-                        execution_id: None,
                         effects: None,
                         waiters: None,
                         db_number: 1,
@@ -266,7 +264,6 @@ mod tests {
         let cache = MyCache::new(1).expect("cache");
         let mut update_type = UpdateType::None;
         let mut update = Update {
-            execution_id: None,
             effects: None,
             waiters: None,
             db_number: 0,

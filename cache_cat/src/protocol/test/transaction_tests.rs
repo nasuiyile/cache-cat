@@ -350,7 +350,6 @@ fn select_in_exec_records_each_write_database_for_snapshot_replay() {
         revision: &mut revision,
     };
     let mut update = Update {
-        execution_id: None,
         effects: None,
         waiters: None,
         db_number: 0,
@@ -400,7 +399,6 @@ fn select_in_exec_records_each_write_database_for_snapshot_replay() {
             revision: atomic.version,
         };
         let mut update = Update {
-            execution_id: None,
             effects: None,
             waiters: None,
             db_number: atomic.db_number,
@@ -446,7 +444,6 @@ async fn zcount_dispatches_in_transactions_and_lua() {
     let cache = &node.app.state_machine.data.kvs;
     let mut update_type = UpdateType::None;
     let mut update = Update {
-        execution_id: None,
         effects: None,
         waiters: None,
         db_number: 0,
@@ -845,7 +842,6 @@ async fn ping_and_echo_are_replied_to_by_exec_in_queue_order() {
     let cache = MyCache::new(1).unwrap();
     let mut update_type = UpdateType::None;
     let mut update = Update {
-        execution_id: None,
         effects: None,
         waiters: None,
         db_number: 0,
@@ -884,7 +880,6 @@ fn exec_returns_each_runtime_error_and_continues_with_later_commands() {
     .collect();
     let mut update_type = UpdateType::None;
     let mut update = Update {
-        execution_id: None,
         effects: None,
         waiters: None,
         db_number: 0,

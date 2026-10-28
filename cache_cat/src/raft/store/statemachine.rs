@@ -171,7 +171,6 @@ impl StateMachineStore {
                 revision: atomic_request.version,
             };
             let mut update = Update {
-                execution_id: None,
                 db_number: atomic_request.db_number,
                 update_type: &mut update_type,
                 write_clock: self.data.kvs.set_write_clock(atomic_request.write_clock),
@@ -223,7 +222,6 @@ impl RaftStateMachine<TypeConfig> for StateMachineStore {
         // share the borrow; do_request drains it at each outer boundary.
         let mut effects = ApplyEffects::default();
         let mut update = Update {
-            execution_id: None,
             write_clock: 0,
             db_number: 0,
             update_type,
@@ -236,7 +234,6 @@ impl RaftStateMachine<TypeConfig> for StateMachineStore {
             let response = match entry.payload {
                 EntryPayload::Blank => Value::ok(),
                 EntryPayload::Normal(req) => {
-                    update.execution_id = Some((entry.log_id.index, 0));
                     let (time, db_number) = req.split_u64();
                     let write_clock = st.set_write_clock(time);
                     update.db_number = db_number;

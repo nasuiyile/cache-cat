@@ -319,7 +319,6 @@ mod tests {
     fn apply(cache: &MyCache, operation: Operation) -> Vec<u8> {
         let mut update_type = UpdateType::None;
         let mut update = Update {
-            execution_id: None,
             effects: None,
             waiters: None,
             db_number: 0,
@@ -526,7 +525,6 @@ mod tests {
         let cache = MyCache::new(1).expect("cache");
         let mut update_type = UpdateType::None;
         let mut update = Update {
-            execution_id: None,
             effects: None,
             waiters: None,
             db_number: 0,

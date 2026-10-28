@@ -45,7 +45,6 @@ fn all_multi_key_writes_parse_as_redis_operations() {
 fn apply(cache: &MyCache, operation: Operation) -> Value {
     let mut update_type = UpdateType::None;
     let mut update = Update {
-        execution_id: None,
         effects: None,
         waiters: None,
         db_number: DB,
@@ -64,7 +63,6 @@ fn snapshot(cache: &MyCache, args: &[&str]) -> (Value, Vec<AtomicRequest>) {
         revision: &mut revision,
     };
     let mut update = Update {
-        execution_id: None,
         effects: None,
         waiters: None,
         db_number: DB,
@@ -91,7 +89,6 @@ fn replay(cache: &MyCache, queue: &[AtomicRequest]) {
             revision: atomic.version,
         };
         let mut update = Update {
-            execution_id: None,
             effects: None,
             waiters: None,
             db_number: atomic.db_number,
@@ -525,7 +522,6 @@ fn computed_ttl_is_recorded_as_an_absolute_expiration() {
         revision: &mut revision,
     };
     let mut update = Update {
-        execution_id: None,
         effects: None,
         waiters: None,
         db_number: DB,
@@ -584,7 +580,6 @@ fn snapshot_replays_collection_removal_with_versioned_cas() {
             revision: atomic.version,
         };
         let mut update = Update {
-            execution_id: None,
             effects: None,
             waiters: None,
             db_number: atomic.db_number,

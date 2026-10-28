@@ -1,10 +1,6 @@
-use crate::raft::types::core::mocha::cas::ComputeCommand;
-use crate::raft::types::core::mocha::core::{
-    ApplyEffects, MyCache, Update, UpdateType, WriteState,
-};
+use crate::raft::types::core::mocha::core::{ApplyEffects, MyCache, Update, UpdateType};
 use crate::raft::types::core::response_value::Value;
-use crate::raft::types::core::structure::stream::{AddId, GroupGeneration};
-use crate::raft::types::core::value_object::ValueObject;
+use crate::raft::types::core::structure::stream::AddId;
 use crate::raft::types::entry::base_operation::BaseOperation;
 use crate::raft::types::entry::read_operation::ReadOperation;
 use crate::raft::types::entry::request::{Operation, RedisOperation};
@@ -126,12 +122,8 @@ fn base_request_inner(
             }
             Value::ok()
         }
-        BaseOperation::Set(param) => {
-            record_group_key(update, &param.key);
-            my_cache.set(param, update)
-        }
+        BaseOperation::Set(param) => my_cache.set(param, update),
         BaseOperation::XAdd(mut param) => {
-            record_group_key(update, &param.key);
             // Resolve automatic IDs before both initialization and mutation so
             // every Raft replica uses the replicated write clock.
             if matches!(param.id, AddId::Auto) {
@@ -155,26 +147,10 @@ fn base_request_inner(
             }
             result
         }
-        BaseOperation::Expire(param) => {
-            record_group_key(update, &param.key);
-            my_cache.expire(param, update)
-        }
-        BaseOperation::PExpire(param) => {
-            record_group_key(update, &param.key);
-            my_cache.p_expire(param, update)
-        }
-        BaseOperation::LPush(param) => {
-            let key = list_notification_key(&param.key, update);
-            let result = my_cache.l_push(param, update);
-            if matches!(result, Value::Integer(len) if len > 0) {
-                record_ready_list(update, key);
-            }
-            result
-        }
-        BaseOperation::Del(param) => {
-            record_group_key(update, &param.key);
-            my_cache.del(param, update)
-        }
+        BaseOperation::Expire(param) => my_cache.expire(param, update),
+        BaseOperation::PExpire(param) => my_cache.p_expire(param, update),
+        BaseOperation::LPush(param) => my_cache.l_push(param, update),
+        BaseOperation::Del(param) => my_cache.del(param, update),
         BaseOperation::Incr(param) => my_cache.incr(param, update),
         BaseOperation::IncrBy(param) => my_cache.incr_by(param, update),
         BaseOperation::IncrByFloat(param) => my_cache.execute_compute(param, update),
@@ -184,37 +160,13 @@ fn base_request_inner(
         BaseOperation::HIncrByFloat(param) => my_cache.execute_compute(param, update),
         BaseOperation::ZAdd(param) => my_cache.z_add(param, update),
         BaseOperation::SAdd(param) => my_cache.s_add(param, update),
-        BaseOperation::Persist(param) => {
-            record_group_key(update, &param.key);
-            my_cache.persist(param, update)
-        }
-        BaseOperation::Insert(param) => {
-            record_group_key(update, &param.key);
-            // Computed writes from RENAME and BLPOP pass here as well. Only
-            // list values can make a blocked list pop eligible to run.
-            let key = if matches!(&param.value, ValueObject::List(_)) {
-                list_notification_key(&param.key, update)
-            } else {
-                None
-            };
-            let result = my_cache.insert(param, update);
-            if matches!(&result, Value::SimpleString(reply) if reply == "OK") {
-                record_ready_list(update, key);
-            }
-            result
-        }
+        BaseOperation::Persist(param) => my_cache.persist(param, update),
+        BaseOperation::Insert(param) => my_cache.insert(param, update),
         BaseOperation::HDel(param) => my_cache.h_del(param, update),
         BaseOperation::SRem(param) => my_cache.s_rem(param, update),
         BaseOperation::SetBit(param) => my_cache.set_bit(param, update),
         BaseOperation::LPop(param) => my_cache.l_pop(param, update),
-        BaseOperation::RPush(param) => {
-            let key = list_notification_key(&param.key, update);
-            let result = my_cache.r_push(param, update);
-            if matches!(result, Value::Integer(len) if len > 0) {
-                record_ready_list(update, key);
-            }
-            result
-        }
+        BaseOperation::RPush(param) => my_cache.r_push(param, update),
         BaseOperation::RPop(param) => my_cache.r_pop(param, update),
         BaseOperation::LRem(param) => my_cache.l_rem(param, update),
         BaseOperation::LSet(param) => my_cache.l_set(param, update),
@@ -223,21 +175,12 @@ fn base_request_inner(
         BaseOperation::Decr(param) => my_cache.decr(param, update),
         BaseOperation::ZRem(param) => my_cache.z_rem(param, update),
         BaseOperation::LTrim(param) => my_cache.l_trim(param, update),
-        BaseOperation::FlushDB(param) => {
-            record_group_database(update, Some(update.db_number));
-            my_cache.flush_db(param, update, external)
-        }
-        BaseOperation::FlushAll(param) => {
-            record_group_database(update, None);
-            my_cache.flush_all(param, update, external)
-        }
+        BaseOperation::FlushDB(param) => my_cache.flush_db(param, update, external),
+        BaseOperation::FlushAll(param) => my_cache.flush_all(param, update, external),
         BaseOperation::BitField(param) => my_cache.bit_field(param, update),
         BaseOperation::SPop(param) => my_cache.s_pop(param, update),
         BaseOperation::ZPopMin(param) => my_cache.z_pop_min(param, update),
-        BaseOperation::Unlink(param) => {
-            record_group_key(update, &param.key);
-            my_cache.unlink(param, update)
-        }
+        BaseOperation::Unlink(param) => my_cache.unlink(param, update),
         BaseOperation::ZIncrBy(param) => my_cache.z_incr_by(param, update),
         BaseOperation::HMSet(param) => my_cache.h_mset(param, update),
         BaseOperation::PfAdd(param) => my_cache.p_f_add(param, update),
@@ -246,122 +189,7 @@ fn base_request_inner(
         BaseOperation::BfReserve(param) => my_cache.bf_reserve(param, update),
         BaseOperation::BfInsert(param) => my_cache.bf_insert(param, update),
         BaseOperation::BfLoadChunk(param) => my_cache.bf_load(param, update),
-        BaseOperation::XGroup(mut param) => {
-            if let crate::protocol::stream::xgroup::XGroupReq::Create { generation, .. } =
-                &mut param
-                && generation.is_none()
-                && let Some((log_index, ordinal)) = &mut update.execution_id
-            {
-                *ordinal = ordinal
-                    .checked_add(1)
-                    .expect("group creation ordinal exhausted");
-                *generation = Some(GroupGeneration {
-                    log_index: *log_index,
-                    ordinal: *ordinal,
-                });
-            }
-            record_group_key(update, param.key());
-            my_cache.x_group(param, update)
-        }
-        BaseOperation::XReadGroup(param) => {
-            record_group_key(update, &param.key);
-            my_cache.execute_compute(param, update)
-        }
-    }
-}
-
-/// Only commands that can change a stream/group call this helper. With no
-/// blocked group reader, the path checks local guarded state without cloning,
-/// hashing, allocating, or accessing a separate lock/atomic variable.
-fn record_group_key(update: &mut Update, key: &bytes::Bytes) {
-    record_group_keys(update, std::iter::once(key));
-}
-
-fn record_group_keys<'k>(update: &mut Update, keys: impl Iterator<Item = &'k bytes::Bytes>) {
-    if matches!(update.update_type, UpdateType::CAS { .. })
-        || update.effects.is_none()
-        || !update
-            .waiters
-            .as_deref()
-            .is_some_and(|waiters| !waiters.group_blocking_keys.is_empty())
-    {
-        return;
-    }
-    let db = update.db_number;
-    let waiters = update.waiters.as_deref().expect("waiters checked");
-    let effects = update.effects.as_deref_mut().expect("effects checked");
-    for key in keys {
-        let key = (db, key.clone());
-        if waiters.group_blocking_keys.observes_key(&key) {
-            effects.ready_groups.insert(key);
-        }
-    }
-}
-
-fn record_group_database(update: &mut Update, db: Option<u16>) {
-    if matches!(update.update_type, UpdateType::CAS { .. }) {
-        return;
-    }
-    let (Some(effects), Some(waiters)) = (update.effects.as_deref_mut(), update.waiters.as_deref())
-    else {
-        return;
-    };
-    // FLUSHDB/ALL visit only the registry's indexed keys, never the cache or
-    // every database. All ordinary commands avoid this enumeration.
-    effects.ready_groups.extend(
-        waiters
-            .group_blocking_keys
-            .registered_keys()
-            .filter(|key| db.is_none_or(|db| key.0 == db))
-            .cloned(),
-    );
-}
-
-/// The common producer path does no key cloning, hashing or locking when no
-/// list clients are waiting. Snapshot replay never publishes local signals.
-fn list_notification_key(key: &bytes::Bytes, update: &Update) -> Option<(u16, bytes::Bytes)> {
-    (update.effects.is_some()
-        && !matches!(update.update_type, UpdateType::CAS { .. })
-        && update
-            .waiters
-            .as_deref()
-            .is_some_and(|waiters| !waiters.list_blocking_keys.is_empty()))
-    .then(|| (update.db_number, key.clone()))
-}
-
-fn record_ready_list(update: &mut Update, key: Option<(u16, bytes::Bytes)>) {
-    if let Some(key) = key
-        && let Some(effects) = update.effects.as_deref_mut()
-    {
-        effects.ready_lists.insert(key);
-    }
-}
-
-impl MyCache {
-    fn list_key_is_ready(&self, key: &(u16, bytes::Bytes), read_clock: u64) -> bool {
-        let Ok(database) = self.get_cache(key.0) else {
-            return false;
-        };
-        let Some(entry) = database.mocha.get_with_read_clock(&key.1, Some(read_clock)) else {
-            return false;
-        };
-        match entry.value.data {
-            ValueObject::List(list) => !list.lock().is_empty(),
-            _ => false,
-        }
-    }
-
-    /// Called while holding write_lock. This is only a readiness hint: the
-    /// receiving client must submit a deterministic pop through Raft.
-    pub(crate) fn notify_list_waiters(
-        &self,
-        waiters: &mut WriteState,
-        key: &(u16, bytes::Bytes),
-        read_clock: u64,
-    ) {
-        if self.list_key_is_ready(key, read_clock) {
-            waiters.list_blocking_keys.signal_one(key);
-        }
+        BaseOperation::XGroup(param) => my_cache.x_group(param, update),
     }
 }
 
@@ -379,64 +207,14 @@ pub fn do_request(
         }
         Operation::Base(base) => base_request_inner(my_cache, base, update, external),
         Operation::Redis(redis) => match redis {
-            RedisOperation::RedisDel(param) => {
-                record_group_keys(update, param.keys.iter());
-                my_cache.redis_del(param, update, external)
-            }
-            RedisOperation::RedisSet(param) => {
-                record_group_key(update, &param.key);
-                my_cache.redis_set(param, update)
-            }
-            RedisOperation::RedisSetNx(param) => {
-                record_group_key(update, &param.key);
-                my_cache.redis_setnx(param, update)
-            }
-            RedisOperation::RedisSetEx(param) => {
-                record_group_key(update, &param.key);
-                my_cache.redis_setex(param, update)
-            }
-            RedisOperation::RedisPSetEx(param) => {
-                record_group_key(update, &param.key);
-                my_cache.redis_psetex(param, update)
-            }
-            RedisOperation::RedisGetSet(param) => {
-                record_group_key(update, &param.key);
-                my_cache.redis_get_set(param, update)
-            }
-            RedisOperation::RedisMset(param) => {
-                record_group_keys(update, param.pairs.iter().map(|(key, _)| key));
-                my_cache.redis_mset(param, update, external)
-            }
+            RedisOperation::RedisDel(param) => my_cache.redis_del(param, update, external),
+            RedisOperation::RedisSet(param) => my_cache.redis_set(param, update),
+            RedisOperation::RedisSetNx(param) => my_cache.redis_setnx(param, update),
+            RedisOperation::RedisSetEx(param) => my_cache.redis_setex(param, update),
+            RedisOperation::RedisPSetEx(param) => my_cache.redis_psetex(param, update),
+            RedisOperation::RedisGetSet(param) => my_cache.redis_get_set(param, update),
+            RedisOperation::RedisMset(param) => my_cache.redis_mset(param, update, external),
             RedisOperation::RedisBitOp(param) => my_cache.execute_multi_read_compute(param, update),
-            RedisOperation::RedisXReadGroup(param) => {
-                // Refresh every requested stream before handing the exclusive
-                // turn to the next consumer. Other groups may still be ready
-                // after this request exhausts its own group's new entries.
-                record_group_keys(update, param.keys.iter());
-                my_cache.redis_xreadgroup(param, update, external)
-            }
-            RedisOperation::RedisBlPop(param) => {
-                if !matches!(update.update_type, UpdateType::CAS { .. })
-                    && update.effects.is_some()
-                    && update
-                        .waiters
-                        .as_deref()
-                        .is_some_and(|waiters| !waiters.list_blocking_keys.is_empty())
-                {
-                    // A waiter may be signalled by B, then select an earlier
-                    // key A when its log applies. Recheck every requested key
-                    // after the outer command so B's unconsumed data can serve
-                    // the next waiter, including when this attempt returns an
-                    // error or loses a race to an ordinary pop.
-                    update
-                        .effects
-                        .as_deref_mut()
-                        .expect("notification context checked")
-                        .ready_lists
-                        .extend(param.keys.iter().map(|key| (update.db_number, key.clone())));
-                }
-                my_cache.execute_multi_read_compute(param, update)
-            }
             RedisOperation::RedisSInterStore(param) => {
                 my_cache.execute_multi_read_compute(param, update)
             }
@@ -496,10 +274,7 @@ pub fn do_request(
                 }
                 Value::Array(Some(vec))
             }
-            RedisOperation::RedisUnlink(param) => {
-                record_group_keys(update, param.keys.iter());
-                my_cache.redis_unlink(param, update, external)
-            }
+            RedisOperation::RedisUnlink(param) => my_cache.redis_unlink(param, update, external),
             RedisOperation::RedisReply(value) => value,
             RedisOperation::RedisEvalSha { .. } => {
                 // Unresolved hashes must never consult replica-local script caches.
@@ -525,44 +300,6 @@ pub fn do_request(
                 });
             }
             ApplyEffects::recycle_ready_keys(&mut effects.ready_streams);
-        }
-        if !effects.ready_groups.is_empty() {
-            let waiters = update
-                .waiters
-                .as_deref_mut()
-                .expect("effects require an execution guard");
-            waiters
-                .group_blocking_keys
-                .signal_ready_many(effects.ready_groups.drain(), |key, params| {
-                    params.ready(my_cache, key.0, update.write_clock)
-                });
-            ApplyEffects::recycle_ready_keys(&mut effects.ready_groups);
-        }
-        if !effects.ready_lists.is_empty() {
-            let waiters = update
-                .waiters
-                .as_deref_mut()
-                .expect("effects require an execution guard");
-            if waiters.list_blocking_keys.is_empty() {
-                // A disconnected final waiter must not leave hints for the
-                // next command sharing this execution context.
-                effects.ready_lists.clear();
-            } else if effects.ready_lists.len() == 1 {
-                for key in effects.ready_lists.drain() {
-                    my_cache.notify_list_waiters(waiters, &key, update.write_clock);
-                }
-            } else {
-                // Publish a whole EXEC/Lua batch before selecting its first
-                // waiter. Arbitrary HashSet order must not bypass an older
-                // waiter when a later request watches several keys.
-                effects
-                    .ready_lists
-                    .retain(|key| my_cache.list_key_is_ready(key, update.write_clock));
-                waiters
-                    .list_blocking_keys
-                    .signal_many(effects.ready_lists.drain());
-            }
-            ApplyEffects::recycle_ready_keys(&mut effects.ready_lists);
         }
     }
     result
@@ -630,7 +367,6 @@ mod tests {
         let mut write_guard = cache.write_lock.lock().await;
         let mut update_type = UpdateType::None;
         let mut update = Update {
-            execution_id: None,
             db_number,
             write_clock,
             update_type: &mut update_type,
@@ -671,7 +407,6 @@ mod tests {
             revision: 1,
         };
         let mut update = Update {
-            execution_id: None,
             db_number: 0,
             write_clock: 400,
             update_type: &mut update_type,
@@ -951,387 +686,12 @@ mod tests {
         }
     }
 
-    async fn blocked_pop(
-        cache: &MyCache,
-        key: &Bytes,
-        db_number: u16,
-    ) -> crate::raft::application::blocking_keys::ExclusiveRegistration<
-        WriteState,
-        (u16, Bytes),
-        crate::protocol::list::blpop::BlPopParams,
-    > {
-        use crate::protocol::list::blpop::{BlPopParams, BlPopReq, PopSide};
-        cache
-            .write_lock
-            .lock()
-            .await
-            .register_list(
-                vec![(db_number, key.clone())],
-                None,
-                BlPopParams {
-                    request: BlPopReq {
-                        keys: vec![key.clone()],
-                        side: PopSide::Left,
-                    },
-                    timeout: None,
-                },
-            )
-            .unwrap()
-    }
-
-    fn rpush(key: &Bytes, elements: &[&'static [u8]]) -> Operation {
-        use crate::protocol::list::rpush::RPushReq;
-        Operation::Base(BaseOperation::RPush(RPushReq {
-            key: key.clone(),
-            elements: elements
-                .iter()
-                .map(|value| Bytes::from_static(value))
-                .collect(),
-        }))
-    }
-
-    fn blpop(key: &Bytes) -> Operation {
-        use crate::protocol::list::blpop::{BlPopReq, PopSide};
-        Operation::Redis(RedisOperation::RedisBlPop(BlPopReq {
-            keys: vec![key.clone()],
-            side: PopSide::Left,
-        }))
-    }
-
     #[tokio::test]
-    async fn list_push_signals_one_waiter_and_pop_cascades_in_fifo_order() {
-        use futures::FutureExt;
-        let cache = MyCache::new(2).unwrap();
-        let replica = MyCache::new(2).unwrap();
-        let key = Bytes::from_static(b"list");
-        let mut first = blocked_pop(&cache, &key, 0).await;
-        let mut second = blocked_pop(&cache, &key, 0).await;
-        let mut other_db = blocked_pop(&cache, &key, 1).await;
-
-        for target in [&cache, &replica] {
-            assert!(matches!(
-                apply(target, rpush(&key, &[b"a", b"b"]), 0, 1).await,
-                Value::Integer(2)
-            ));
-        }
-        assert_eq!(
-            first.wait().now_or_never(),
-            Some(Ok(((0, key.clone()), ())))
-        );
-        assert!(second.wait().now_or_never().is_none());
-        assert!(other_db.wait().now_or_never().is_none());
-        let list = cache.databases[0].mocha.get_entry(&key).unwrap();
-        let ValueObject::List(list) = list.value.data else {
-            unreachable!()
-        };
-        assert_eq!(
-            list.lock().len(),
-            2,
-            "signalling must not modify the state machine"
-        );
-
-        let first_reply = apply(&cache, blpop(&key), 0, 2).await;
-        assert_eq!(
-            first_reply.encode(),
-            apply(&replica, blpop(&key), 0, 2).await.encode()
-        );
-        assert_eq!(first_reply.encode(), b"*2\r\n$4\r\nlist\r\n$1\r\na\r\n");
-        assert!(
-            second.wait().now_or_never().is_none(),
-            "the active consumer keeps its turn until completion"
-        );
-        first.finish().await;
-        assert_eq!(
-            second.wait().now_or_never(),
-            Some(Ok(((0, key.clone()), ())))
-        );
-        let second_reply = apply(&cache, blpop(&key), 0, 3).await;
-        assert_eq!(
-            second_reply.encode(),
-            apply(&replica, blpop(&key), 0, 3).await.encode()
-        );
-        assert_eq!(second_reply.encode(), b"*2\r\n$4\r\nlist\r\n$1\r\nb\r\n");
-        second.finish().await;
-        assert!(cache.databases[0].mocha.get_entry(&key).is_none());
-        assert!(replica.databases[0].mocha.get_entry(&key).is_none());
-        assert!(other_db.wait().now_or_never().is_none());
-    }
-
-    #[tokio::test]
-    async fn list_notifications_observe_only_final_exec_and_lua_state() {
-        use futures::FutureExt;
-        let key = Bytes::from_static(b"list");
-        let operations = [
-            Operation::Redis(RedisOperation::RedisExec(ExecParams {
-                operations: vec![
-                    QueuedOperation::new(0, rpush(&key, &[b"a"])),
-                    QueuedOperation::new(
-                        0,
-                        Operation::Base(BaseOperation::Del(DelReq { key: key.clone() })),
-                    ),
-                ],
-            })),
-            Operation::Redis(RedisOperation::RedisEval(EvalParams {
-                script: "redis.call('LPUSH', KEYS[1], 'a'); return redis.call('DEL', KEYS[1])"
-                    .into(),
-                numkeys: 1,
-                keys: vec![key.clone()],
-                args: vec![],
-                proto: 2,
-            })),
-        ];
-        for operation in operations {
-            let cache = MyCache::new(1).unwrap();
-            let mut waiter = blocked_pop(&cache, &key, 0).await;
-            assert!(!matches!(
-                apply(&cache, operation, 0, 1).await,
-                Value::Error(_)
-            ));
-            assert!(waiter.wait().now_or_never().is_none());
-            assert!(cache.databases[0].mocha.get_entry(&key).is_none());
-            apply(&cache, rpush(&key, &[b"later"]), 0, 2).await;
-            assert_eq!(
-                waiter.wait().now_or_never(),
-                Some(Ok(((0, key.clone()), ())))
-            );
-            waiter.finish().await;
-        }
-    }
-
-    #[tokio::test]
-    async fn nested_list_producers_and_rename_wake_destination_waiters() {
-        use crate::protocol::key::rename::RenameParams;
-        use crate::protocol::key::renamenx::RenameNxParams;
-        use futures::FutureExt;
-        let key = Bytes::from_static(b"list");
-        let source = Bytes::from_static(b"source");
-        let operations = [
-            Operation::Redis(RedisOperation::RedisExec(ExecParams {
-                operations: vec![QueuedOperation::new(0, rpush(&key, &[b"a"]))],
-            })),
-            Operation::Redis(RedisOperation::RedisEval(EvalParams {
-                script: "return redis.call('LPUSH', KEYS[1], 'a')".into(),
-                numkeys: 1,
-                keys: vec![key.clone()],
-                args: vec![],
-                proto: 2,
-            })),
-            Operation::Redis(RedisOperation::RedisRename(RenameParams {
-                key: source.clone(),
-                new_key: key.clone(),
-            })),
-            Operation::Redis(RedisOperation::RedisRenameNx(RenameNxParams {
-                key: source.clone(),
-                new_key: key.clone(),
-            })),
-        ];
-        for operation in operations {
-            let cache = MyCache::new(1).unwrap();
-            apply(&cache, rpush(&source, &[b"a"]), 0, 1).await;
-            let mut waiter = blocked_pop(&cache, &key, 0).await;
-            assert!(!matches!(
-                apply(&cache, operation, 0, 2).await,
-                Value::Error(_)
-            ));
-            assert_eq!(
-                waiter.wait().now_or_never(),
-                Some(Ok(((0, key.clone()), ())))
-            );
-            waiter.finish().await;
-        }
-    }
-
-    #[tokio::test]
-    async fn failed_list_push_and_snapshot_replay_do_not_publish_signals() {
-        use crate::protocol::list::rpush::RPushReq;
-        use futures::FutureExt;
-        let cache = MyCache::new(1).unwrap();
-        let key = Bytes::from_static(b"list");
-        let mut waiter = blocked_pop(&cache, &key, 0).await;
-        cache.databases[0].mocha.insert_entry(
-            key.clone(),
-            MyValue::new(ValueObject::String(Bytes::from_static(b"wrong"))),
-            ExpirePolicy::Persistent,
-        );
-        assert!(matches!(
-            apply(&cache, rpush(&key, &[b"a"]), 0, 1).await,
-            Value::Error(_)
-        ));
-        assert!(waiter.wait().now_or_never().is_none());
-        cache.databases[0].mocha.remove(&key);
-        let mut update_type = UpdateType::CAS {
-            expected_revision: crate::utils::OptionalU64::NONE,
-            revision: 1,
-        };
-        let mut update = Update {
-            execution_id: None,
-            db_number: 0,
-            write_clock: 1,
-            update_type: &mut update_type,
-            effects: None,
-            waiters: None,
-        };
-        base_request(
-            &cache,
-            BaseOperation::RPush(RPushReq {
-                key: key.clone(),
-                elements: vec![Bytes::from_static(b"a")],
-            }),
-            &mut update,
-        );
-        assert!(waiter.wait().now_or_never().is_none());
-    }
-
-    #[tokio::test]
-    async fn multikey_pop_preserves_the_signal_for_a_different_trigger_key() {
-        use crate::protocol::list::blpop::{BlPopParams, BlPopReq, PopSide};
-        use futures::FutureExt;
-        let cache = MyCache::new(1).unwrap();
-        let first_key = Bytes::from_static(b"a");
-        let trigger = Bytes::from_static(b"b");
-        let request = BlPopReq {
-            keys: vec![first_key.clone(), trigger.clone()],
-            side: PopSide::Left,
-        };
-        let mut first = cache
-            .write_lock
-            .lock()
-            .await
-            .register_list(
-                vec![(0, first_key.clone()), (0, trigger.clone())],
-                None,
-                BlPopParams {
-                    request: request.clone(),
-                    timeout: None,
-                },
-            )
-            .unwrap();
-        let mut second = blocked_pop(&cache, &trigger, 0).await;
-        apply(&cache, rpush(&trigger, &[b"b-value"]), 0, 1).await;
-        assert_eq!(
-            first.wait().now_or_never(),
-            Some(Ok(((0, trigger.clone()), ())))
-        );
-        apply(&cache, rpush(&first_key, &[b"a-value"]), 0, 2).await;
-        let reply = apply(
-            &cache,
-            Operation::Redis(RedisOperation::RedisBlPop(request)),
-            0,
-            3,
-        )
-        .await;
-        assert_eq!(reply.encode(), b"*2\r\n$1\r\na\r\n$7\r\na-value\r\n");
-        first.finish().await;
-        assert_eq!(
-            second.wait().now_or_never(),
-            Some(Ok(((0, trigger.clone()), ())))
-        );
-        assert_eq!(
-            apply(&cache, blpop(&trigger), 0, 4).await.encode(),
-            b"*2\r\n$1\r\nb\r\n$7\r\nb-value\r\n"
-        );
-        second.finish().await;
-    }
-
-    #[tokio::test]
-    async fn outer_command_clears_ready_lists_after_last_waiter_cancels() {
-        let cache = MyCache::new(1).unwrap();
-        let key = Bytes::from_static(b"list");
-        let mut waiter = blocked_pop(&cache, &key, 0).await;
-        let mut effects = ApplyEffects::default();
-        apply_inner_with_effects(&cache, rpush(&key, &[b"a"]), 0, 1, &mut effects, false).await;
-        assert!(!effects.ready_lists.is_empty());
-        waiter.cancel().await;
-        assert!(cache.write_lock.lock().await.list_blocking_keys.is_empty());
-        apply_with_effects(
-            &cache,
-            Operation::Redis(RedisOperation::RedisExec(ExecParams { operations: vec![] })),
-            0,
-            1,
-            &mut effects,
-        )
-        .await;
-        assert!(effects.ready_lists.is_empty());
-    }
-
-    #[tokio::test]
-    async fn exec_list_batch_serves_older_overlapping_waiter_first() {
-        use crate::protocol::list::blpop::{BlPopParams, BlPopReq, PopSide};
-        use futures::FutureExt;
-        let cache = MyCache::new(1).unwrap();
-        // Choose the client key priority opposite the actual queue traversal,
-        // so this regression exercises reversed notification order for every
-        // randomized HashSet seed. EXEC will touch precisely these two keys.
-        let keys = [Bytes::from_static(b"a"), Bytes::from_static(b"b")];
-        let mut effects = ApplyEffects::default();
-        let (trigger, preferred) = {
-            let ready = &mut effects.ready_lists;
-            ready.extend(keys.into_iter().map(|key| (0, key)));
-            let mut order = ready.iter().map(|(_, key)| key.clone());
-            (order.next().unwrap(), order.next().unwrap())
-        };
-        let mut older = blocked_pop(&cache, &preferred, 0).await;
-        let request = BlPopReq {
-            keys: vec![preferred.clone(), trigger.clone()],
-            side: PopSide::Left,
-        };
-        let mut newer = cache
-            .write_lock
-            .lock()
-            .await
-            .register_list(
-                vec![(0, preferred.clone()), (0, trigger.clone())],
-                None,
-                BlPopParams {
-                    request: request.clone(),
-                    timeout: None,
-                },
-            )
-            .unwrap();
-        let operation = Operation::Redis(RedisOperation::RedisExec(ExecParams {
-            operations: vec![
-                QueuedOperation::new(0, rpush(&trigger, &[b"newer"])),
-                QueuedOperation::new(0, rpush(&preferred, &[b"older"])),
-            ],
-        }));
-        apply_with_effects(&cache, operation, 0, 1, &mut effects).await;
-        assert_eq!(
-            older.wait().now_or_never(),
-            Some(Ok(((0, preferred.clone()), ())))
-        );
-        assert!(newer.wait().now_or_never().is_none());
-        let reply = apply(&cache, blpop(&preferred), 0, 2).await;
-        let Value::Array(Some(reply)) = reply else {
-            panic!("expected a pop")
-        };
-        assert_eq!(reply[1].encode(), b"$5\r\nolder\r\n");
-        older.finish().await;
-        assert_eq!(
-            newer.wait().now_or_never(),
-            Some(Ok(((0, trigger.clone()), ())))
-        );
-        let reply = apply(
-            &cache,
-            Operation::Redis(RedisOperation::RedisBlPop(request)),
-            0,
-            3,
-        )
-        .await;
-        let Value::Array(Some(reply)) = reply else {
-            panic!("expected a pop")
-        };
-        assert_eq!(reply[1].encode(), b"$5\r\nnewer\r\n");
-        newer.finish().await;
-    }
-
-    #[tokio::test]
-    async fn one_exec_publishes_stream_and_list_notifications_in_each_database() {
+    async fn one_exec_publishes_stream_notifications_in_each_database() {
         use futures::FutureExt;
         let cache = MyCache::new(2).unwrap();
         let stream = Bytes::from_static(b"stream");
-        let list = Bytes::from_static(b"list");
         let mut readers = Vec::new();
-        let mut consumers = Vec::new();
         for db in 0..2 {
             readers.push(
                 cache
@@ -1341,7 +701,6 @@ mod tests {
                     .register_stream(vec![(db, stream.clone())], None, read_params(&stream))
                     .unwrap(),
             );
-            consumers.push(blocked_pop(&cache, &list, db).await);
         }
         let mut effects = ApplyEffects::default();
         let result = apply_with_effects(
@@ -1349,9 +708,7 @@ mod tests {
             Operation::Redis(RedisOperation::RedisExec(ExecParams {
                 operations: vec![
                     QueuedOperation::new(0, xadd(&stream, AddId::Explicit(StreamId::new(10, 0)))),
-                    QueuedOperation::new(0, rpush(&list, &[b"zero"])),
                     QueuedOperation::new(1, xadd(&stream, AddId::Explicit(StreamId::new(20, 0)))),
-                    QueuedOperation::new(1, rpush(&list, &[b"one"])),
                 ],
             })),
             0,
@@ -1361,7 +718,6 @@ mod tests {
         .await;
         assert!(matches!(result, Value::Array(Some(_))));
         assert!(effects.ready_streams.is_empty());
-        assert!(effects.ready_lists.is_empty());
         for (db, reader) in readers.into_iter().enumerate() {
             let (ready_key, reply) = reader.wait().now_or_never().unwrap().unwrap();
             assert_eq!(ready_key, (db as u16, stream.clone()));
@@ -1370,70 +726,53 @@ mod tests {
                 expected_reply(if db == 0 { "10-0" } else { "20-0" })
             );
         }
-        assert_eq!(
-            consumers[0].wait().now_or_never(),
-            Some(Ok(((0, list.clone()), ())))
-        );
-        assert!(consumers[1].wait().now_or_never().is_none());
-        apply_with_effects(&cache, blpop(&list), 0, 101, &mut effects).await;
-        consumers[0].finish().await;
-        assert_eq!(
-            consumers[1].wait().now_or_never(),
-            Some(Ok(((1, list.clone()), ())))
-        );
-        consumers[1].finish().await;
     }
 
     #[tokio::test]
-    async fn lua_error_still_publishes_completed_writes_and_drains_effects() {
+    async fn lua_error_still_publishes_completed_xadd_and_drains_effects() {
         use futures::FutureExt;
         let cache = MyCache::new(1).unwrap();
         let stream = Bytes::from_static(b"stream");
-        let list = Bytes::from_static(b"list");
         let reader = cache
             .write_lock
             .lock()
             .await
             .register_stream(vec![(0, stream.clone())], None, read_params(&stream))
             .unwrap();
-        let mut consumer = blocked_pop(&cache, &list, 0).await;
         let mut effects = ApplyEffects::default();
         let result = apply_with_effects(
             &cache,
             Operation::Redis(RedisOperation::RedisEval(EvalParams {
-                script: "redis.call('XADD', KEYS[1], '*', 'field', 'value'); redis.call('RPUSH', KEYS[2], 'value'); error('stop after writes')".into(),
-                numkeys: 2,
-                keys: vec![stream.clone(), list.clone()],
+                script:
+                    "redis.call('XADD', KEYS[1], '*', 'field', 'value'); error('stop after write')"
+                        .into(),
+                numkeys: 1,
+                keys: vec![stream],
                 args: vec![],
                 proto: 2,
             })),
             0,
             1234,
             &mut effects,
-        ).await;
+        )
+        .await;
         assert!(matches!(result, Value::Error(_)));
         let (_, response) = reader.wait().now_or_never().unwrap().unwrap();
         assert_eq!(response.encode(), expected_reply("1234-0"));
-        assert_eq!(consumer.wait().now_or_never(), Some(Ok(((0, list), ()))));
-        consumer.finish().await;
         assert!(effects.ready_streams.is_empty());
-        assert!(effects.ready_lists.is_empty());
     }
 
     #[tokio::test]
-    async fn reused_effects_keep_capacity_without_republishing_previous_command() {
+    async fn reused_effects_keep_capacity_without_republishing_previous_xadd() {
         use crate::protocol::string::set::SetReq;
-        use futures::FutureExt;
         let cache = MyCache::new(1).unwrap();
         let stream = Bytes::from_static(b"stream");
-        let list = Bytes::from_static(b"list");
         let mut reader = cache
             .write_lock
             .lock()
             .await
             .register_stream(vec![(0, stream.clone())], None, read_params(&stream))
             .unwrap();
-        let mut consumer = blocked_pop(&cache, &list, 0).await;
         let mut effects = ApplyEffects::default();
         apply_inner_with_effects(
             &cache,
@@ -1444,24 +783,9 @@ mod tests {
             false,
         )
         .await;
-        apply_inner_with_effects(
-            &cache,
-            rpush(&list, &[b"first"]),
-            0,
-            1234,
-            &mut effects,
-            false,
-        )
-        .await;
-        let capacities = (
-            effects.ready_streams.capacity(),
-            effects.ready_lists.capacity(),
-        );
-        assert!(capacities.0 > 0 && capacities.1 > 0);
-        // Finish deferred bookkeeping after cancellation while retaining the
-        // same batch-local allocation, without holding the lock across await.
+        let capacity = effects.ready_streams.capacity();
+        assert!(capacity > 0);
         assert!(reader.cancel().await);
-        assert!(consumer.cancel().await);
         apply_with_effects(
             &cache,
             Operation::Redis(RedisOperation::RedisReply(Value::ok())),
@@ -1471,24 +795,16 @@ mod tests {
         )
         .await;
         assert!(effects.ready_streams.is_empty());
-        assert!(effects.ready_lists.is_empty());
-        assert_eq!(
-            (
-                effects.ready_streams.capacity(),
-                effects.ready_lists.capacity()
-            ),
-            capacities
-        );
+        assert_eq!(effects.ready_streams.capacity(), capacity);
 
-        // Register directly to make any stale hint observable: both values
-        // still exist, but an unrelated SET must never serve either waiter.
+        // Register directly so stale effects would produce an observable
+        // response from the stream; an unrelated SET must not serve it.
         let mut later_reader = cache
             .write_lock
             .lock()
             .await
             .register_stream(vec![(0, stream.clone())], None, read_params(&stream))
             .unwrap();
-        let mut later_consumer = blocked_pop(&cache, &list, 0).await;
         apply_with_effects(
             &cache,
             Operation::Base(BaseOperation::Set(SetReq {
@@ -1502,36 +818,24 @@ mod tests {
         )
         .await;
         assert!(later_reader.cancel().await);
-        assert!(later_consumer.wait().now_or_never().is_none());
-        assert!(later_consumer.cancel().await);
-        assert_eq!(
-            (
-                effects.ready_streams.capacity(),
-                effects.ready_lists.capacity()
-            ),
-            capacities
-        );
+        assert_eq!(effects.ready_streams.capacity(), capacity);
     }
 
     #[tokio::test]
-    async fn replayed_stream_and_list_producers_do_not_leak_notifications_to_live_apply() {
-        use futures::FutureExt;
+    async fn replayed_xadd_does_not_leak_notifications_to_live_apply() {
         let cache = MyCache::new(1).unwrap();
         let stream = Bytes::from_static(b"stream");
-        let list = Bytes::from_static(b"list");
         let mut reader = cache
             .write_lock
             .lock()
             .await
             .register_stream(vec![(0, stream.clone())], None, read_params(&stream))
             .unwrap();
-        let mut consumer = blocked_pop(&cache, &list, 0).await;
         let mut update_type = UpdateType::CAS {
             expected_revision: crate::utils::OptionalU64::NONE,
             revision: 1,
         };
         let mut update = Update {
-            execution_id: None,
             db_number: 0,
             write_clock: 1234,
             update_type: &mut update_type,
@@ -1542,16 +846,9 @@ mod tests {
         else {
             unreachable!()
         };
-        let Operation::Base(list_write) = rpush(&list, &[b"restored"]) else {
-            unreachable!()
-        };
         assert!(matches!(
             base_request(&cache, stream_write, &mut update),
             Value::BulkString(Some(_))
-        ));
-        assert!(matches!(
-            base_request(&cache, list_write, &mut update),
-            Value::Integer(1)
         ));
         let mut effects = ApplyEffects::default();
         apply_with_effects(
@@ -1563,133 +860,59 @@ mod tests {
         )
         .await;
         assert!(reader.cancel().await);
-        assert!(consumer.wait().now_or_never().is_none());
-        assert!(consumer.cancel().await);
         assert!(effects.ready_streams.is_empty());
-        assert!(effects.ready_lists.is_empty());
+        assert_eq!(effects.ready_streams.capacity(), 0);
     }
+
     #[tokio::test]
-    async fn large_notification_batch_does_not_leave_large_tables_for_small_commands() {
+    async fn large_stream_notification_batch_releases_capacity_before_small_commands() {
         use futures::FutureExt;
         let cache = MyCache::new(1).unwrap();
         let keys: Vec<_> = (0..128)
-            .map(|i| Bytes::from(format!("queue-{i}")))
+            .map(|i| Bytes::from(format!("stream-{i}")))
             .collect();
-        let mut consumer = cache
+        let mut params = read_params(&keys[0]);
+        params.keys = keys.clone();
+        params.ids = vec![XReadId::After(StreamId::ZERO); keys.len()];
+        let reader = cache
             .write_lock
             .lock()
             .await
-            .register_list(
+            .register_stream(
                 keys.iter().map(|key| (0, key.clone())).collect(),
                 None,
-                crate::protocol::list::blpop::BlPopParams {
-                    request: crate::protocol::list::blpop::BlPopReq {
-                        keys: keys.clone(),
-                        side: crate::protocol::list::blpop::PopSide::Left,
-                    },
-                    timeout: None,
-                },
+                params,
             )
             .unwrap();
         let mut effects = ApplyEffects::default();
         let operation = Operation::Redis(RedisOperation::RedisExec(ExecParams {
             operations: keys
                 .iter()
-                .map(|key| QueuedOperation::new(0, rpush(key, &[b"item"])))
+                .map(|key| QueuedOperation::new(0, xadd(key, AddId::Auto)))
                 .collect(),
         }));
         assert!(matches!(
             apply_with_effects(&cache, operation, 0, 1, &mut effects).await,
             Value::Array(Some(_))
         ));
-        assert!(consumer.wait().now_or_never().unwrap().is_ok());
-        assert!(effects.ready_lists.is_empty());
-        assert_eq!(effects.ready_lists.capacity(), 0);
-        consumer.finish().await;
-        let mut next = blocked_pop(&cache, &keys[0], 0).await;
-        apply_with_effects(&cache, rpush(&keys[0], &[b"next"]), 0, 2, &mut effects).await;
-        assert!(next.wait().now_or_never().unwrap().is_ok());
-        assert!(effects.ready_lists.capacity() > 0);
-        assert!(effects.ready_lists.capacity() <= 64);
-        next.finish().await;
-    }
+        let (_, reply) = reader.wait().now_or_never().unwrap().unwrap();
+        assert!(
+            matches!(reply, Value::MapWithResp2 { entries, .. } if entries.len() == keys.len())
+        );
+        assert!(effects.ready_streams.is_empty());
+        assert_eq!(effects.ready_streams.capacity(), 0);
 
-    #[tokio::test]
-    async fn unrelated_set_does_not_collect_group_effects_but_watched_delete_notifies() {
-        use crate::protocol::stream::xgroup::XGroupReq;
-        use crate::protocol::stream::xreadgroup::XReadGroupParams;
-        use crate::protocol::string::set::SetReq;
-        use crate::raft::types::core::structure::stream::GroupStart;
-        use futures::FutureExt;
-        let cache = MyCache::new(1).unwrap();
-        let watched = Bytes::from_static(b"watched");
-        apply(
-            &cache,
-            Operation::Base(BaseOperation::XGroup(XGroupReq::Create {
-                key: watched.clone(),
-                group: Bytes::from_static(b"group"),
-                id: GroupStart::Id(StreamId::ZERO),
-                entries_read: None,
-                mkstream: true,
-                generation: None,
-            })),
-            0,
-            1,
-        )
-        .await;
-        let args = [
-            "XREADGROUP",
-            "GROUP",
-            "group",
-            "consumer",
-            "BLOCK",
-            "0",
-            "STREAMS",
-            "watched",
-            ">",
-        ]
-        .map(|part| Value::BulkString(Some(Bytes::copy_from_slice(part.as_bytes()))));
-        let mut waiter = cache
+        let mut params = read_params(&keys[0]);
+        params.ids[0] = XReadId::After(StreamId::new(1, 0));
+        let next = cache
             .write_lock
             .lock()
             .await
-            .register_stream_group(
-                vec![(0, watched.clone())],
-                None,
-                XReadGroupParams::parse(&args).unwrap(),
-            )
+            .register_stream(vec![(0, keys[0].clone())], None, params)
             .unwrap();
-        let mut effects = ApplyEffects::default();
-        apply_with_effects(
-            &cache,
-            Operation::Base(BaseOperation::Set(SetReq {
-                key: Bytes::from_static(b"unrelated"),
-                value: Bytes::from_static(b"value"),
-                ex_time: 0,
-            })),
-            0,
-            2,
-            &mut effects,
-        )
-        .await;
-        assert!(waiter.wait().now_or_never().is_none());
-        assert_eq!(
-            effects.ready_groups.capacity(),
-            0,
-            "unobserved keys must not allocate notification buckets"
-        );
-        apply_with_effects(
-            &cache,
-            Operation::Base(BaseOperation::Del(DelReq {
-                key: watched.clone(),
-            })),
-            0,
-            3,
-            &mut effects,
-        )
-        .await;
-        assert_eq!(waiter.wait().now_or_never(), Some(Ok(((0, watched), ()))));
-        waiter.finish().await;
-        assert!(effects.ready_groups.is_empty());
+        apply_with_effects(&cache, xadd(&keys[0], AddId::Auto), 0, 2, &mut effects).await;
+        assert!(next.wait().now_or_never().unwrap().is_ok());
+        assert!(effects.ready_streams.capacity() > 0);
+        assert!(effects.ready_streams.capacity() <= 64);
     }
 }

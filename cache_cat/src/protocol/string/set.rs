@@ -459,7 +459,6 @@ mod tests {
             cache.set_write_clock(write_clock);
             let mut update_type = UpdateType::None;
             let mut update = Update {
-                execution_id: None,
                 effects: None,
                 waiters: None,
                 db_number,

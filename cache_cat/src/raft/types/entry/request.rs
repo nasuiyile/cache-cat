@@ -2,13 +2,11 @@ use crate::protocol::bitmap::bitop::BitOpReq;
 use crate::protocol::key::rename::RenameParams;
 use crate::protocol::key::renamenx::RenameNxParams;
 use crate::protocol::key::unlink::UnlinkParams;
-use crate::protocol::list::blpop::BlPopReq;
 use crate::protocol::lua::eval::EvalParams;
 use crate::protocol::lua::evalsha::EvalShaParams;
 use crate::protocol::set::sdiffstore::SDiffStoreReq;
 use crate::protocol::set::sinterstore::SInterStoreReq;
 use crate::protocol::set::sunionstore::SUnionStoreReq;
-use crate::protocol::stream::xreadgroup::XReadGroupReq;
 use crate::protocol::string::getset::GetSetParams;
 use crate::protocol::string::mset::MsetParams;
 use crate::protocol::string::pfmerge::PFMergeReq;
@@ -80,8 +78,6 @@ pub enum RedisOperation {
     RedisRename(RenameParams),
     RedisRenameNx(RenameNxParams),
     RedisBitOp(BitOpReq),
-    RedisBlPop(BlPopReq),
-    RedisXReadGroup(XReadGroupReq),
     RedisSInterStore(SInterStoreReq),
     RedisSUnionStore(SUnionStoreReq),
     RedisSDiffStore(SDiffStoreReq),
@@ -198,7 +194,6 @@ impl fmt::Display for Request {
                 BaseOperation::BfInsert(req) => write!(f, "BfInsert: {}", req),
                 BaseOperation::BfLoadChunk(req) => write!(f, "BfLoadChunk: {}", req),
                 BaseOperation::XGroup(req) => write!(f, "XGroup: {}", req),
-                BaseOperation::XReadGroup(req) => write!(f, "XReadGroup: {}", req),
             },
             Operation::Redis(op) => match op {
                 RedisOperation::RedisSet(req) => write!(f, "RedisSet: {}", req),
@@ -209,8 +204,6 @@ impl fmt::Display for Request {
                 RedisOperation::RedisDel(req) => write!(f, "RedisDel: {}", req),
                 RedisOperation::RedisRename(req) => write!(f, "RedisRename: {}", req),
                 RedisOperation::RedisBitOp(req) => write!(f, "RedisBitOp: {}", req),
-                RedisOperation::RedisBlPop(req) => write!(f, "RedisBlPop: {}", req),
-                RedisOperation::RedisXReadGroup(req) => write!(f, "RedisXReadGroup: {}", req),
                 RedisOperation::RedisSInterStore(req) => write!(f, "RedisSInterStore: {}", req),
                 RedisOperation::RedisSUnionStore(req) => write!(f, "RedisSUnionStore: {}", req),
                 RedisOperation::RedisSDiffStore(req) => write!(f, "RedisSDiffStore: {}", req),

@@ -281,7 +281,6 @@ mod tests {
                     revision: &mut revision,
                 };
                 let mut update = Update {
-                    execution_id: None,
                     effects: None,
                     waiters: None,
                     db_number: 0,
@@ -324,7 +323,6 @@ mod tests {
                 revision: 7,
             };
             let mut update = Update {
-                execution_id: None,
                 effects: None,
                 waiters: None,
                 db_number: 1,

@@ -197,7 +197,6 @@ mod tests {
         assert_eq!(loaded, script);
         let mut update_type = UpdateType::None;
         let mut update = Update {
-            execution_id: None,
             effects: None,
             waiters: None,
             db_number: 0,
