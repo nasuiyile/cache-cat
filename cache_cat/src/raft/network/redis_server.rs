@@ -9,6 +9,8 @@ use crate::raft::types::raft_types::CacheCatApp;
 use bytes::BytesMut;
 use std::net::SocketAddr;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::time::Instant;
 use tokio::net::TcpListener;
 use tokio_rustls::TlsAcceptor;
 use tokio_util::codec::{Decoder, Encoder};
@@ -21,6 +23,8 @@ pub struct RedisServer {
     pub tls_addr: Option<String>,
     pub cmd_factory: Arc<CommandFactory>,
     pub broadcast: Arc<PubSub>,
+    pub(crate) started_at: Instant,
+    pub(crate) connected_clients: Arc<AtomicUsize>,
 }
 
 pub(super) struct RedisListeners {
@@ -109,6 +113,8 @@ impl RedisServer {
             tls_addr,
             cmd_factory,
             broadcast,
+            started_at: Instant::now(),
+            connected_clients: Arc::new(AtomicUsize::new(0)),
         })
     }
 
@@ -121,11 +127,13 @@ impl RedisServer {
     where
         T: Into<Connection>,
     {
+        self.connected_clients.fetch_add(1, Ordering::Relaxed);
         // let framed = Framed::new(stream, RespCodec::new());
         let auth = self.app.config.password.is_none();
         let client = Client::new(client_id, connection, auth);
         let result = self.cmd_factory.process_connection(&self, client).await;
         self.app.pubsub.remove_client(client_id).await;
+        self.connected_clients.fetch_sub(1, Ordering::Relaxed);
         info!("Connection handler ended for {}", peer_addr);
         result
     }

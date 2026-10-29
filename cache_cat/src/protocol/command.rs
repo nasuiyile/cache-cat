@@ -75,6 +75,7 @@ use crate::protocol::pub_sub::subscribe::SubscribeCommand;
 use crate::protocol::pub_sub::unsubscribe::UnsubscribeCommand;
 use crate::protocol::sentinel::core::SentinelCommand;
 use crate::protocol::server::bgsave::BgsaveCommand;
+use crate::protocol::server::info::InfoCommand;
 use crate::protocol::server::memory::core::MemoryCommand;
 use crate::protocol::server::save::SaveCommand;
 use crate::protocol::server::shutdown::ShutdownCommand;
@@ -331,6 +332,7 @@ impl CommandFactory {
         factory.register("CLIENT", ClientCommand::new());
         factory.register("HELLO", HelloCommand);
         factory.register("MEMORY", MemoryCommand::new());
+        factory.register("INFO", InfoCommand);
         // Register data commands
         factory.register("GET", GetCommand);
         factory.register("SET", SetCommand);

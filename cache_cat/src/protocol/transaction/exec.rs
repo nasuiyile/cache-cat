@@ -15,6 +15,19 @@ pub struct ExecParams {
 }
 
 impl ExecParams {
+    pub(crate) async fn resolve_info(&mut self, server: &RedisServer) {
+        for queued in &mut self.operations {
+            if let Operation::Redis(RedisOperation::RedisInfo(params)) = &mut queued.operation {
+                let context = crate::protocol::server::info::InfoParams::collect_context(
+                    &params.sections,
+                    server,
+                )
+                .await;
+                params.context = Some(context);
+            }
+        }
+    }
+
     pub(crate) fn resolve_scripts(&mut self, cache: &MyCache) {
         // Acquire only for EVALSHA and keep one cache view for the whole EXEC.
         let mut scripts = None;
@@ -86,6 +99,7 @@ impl Command for ExecCommand {
             operations: queue.operations,
         };
         params.resolve_scripts(&server.app.state_machine.data.kvs);
+        params.resolve_info(server).await;
 
         let value = server
             .app

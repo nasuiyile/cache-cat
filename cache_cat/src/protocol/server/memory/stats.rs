@@ -59,15 +59,15 @@ struct MiMallocStats {
 }
 
 #[derive(Debug)]
-struct MemoryStats {
-    process_rss: u64,
-    process_peak_rss: u64,
+pub(crate) struct MemoryStats {
+    pub(crate) process_rss: u64,
+    pub(crate) process_peak_rss: u64,
 
     process_commit: u64,
     process_peak_commit: u64,
 
-    reserved: u64,
-    committed: u64,
+    pub(crate) reserved: u64,
+    pub(crate) committed: u64,
 
     page_faults: u64,
 
@@ -78,7 +78,7 @@ struct MemoryStats {
 }
 
 impl MemoryStats {
-    fn collect() -> Result<Self, &'static str> {
+    pub(crate) fn collect() -> Result<Self, &'static str> {
         let json = MiMalloc::stats_json().map_err(|_| "failed to get mimalloc stats")?;
 
         let raw: MiMallocStats = serde_json::from_slice(json.to_bytes())

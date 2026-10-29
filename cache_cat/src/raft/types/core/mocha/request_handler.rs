@@ -276,6 +276,7 @@ pub fn do_request(
             }
             RedisOperation::RedisUnlink(param) => my_cache.redis_unlink(param, update, external),
             RedisOperation::RedisReply(value) => value,
+            RedisOperation::RedisInfo(param) => param.render_from_cache(my_cache),
             RedisOperation::RedisEvalSha { .. } => {
                 // Unresolved hashes must never consult replica-local script caches.
                 Value::error("unresolved EVALSHA in replicated request")

@@ -4,6 +4,7 @@ use crate::protocol::key::renamenx::RenameNxParams;
 use crate::protocol::key::unlink::UnlinkParams;
 use crate::protocol::lua::eval::EvalParams;
 use crate::protocol::lua::evalsha::EvalShaParams;
+use crate::protocol::server::info::InfoParams;
 use crate::protocol::set::sdiffstore::SDiffStoreReq;
 use crate::protocol::set::sinterstore::SInterStoreReq;
 use crate::protocol::set::sunionstore::SUnionStoreReq;
@@ -88,6 +89,9 @@ pub enum RedisOperation {
     /// A deterministic connection-level reply captured while queueing a
     /// command such as PING or ECHO in MULTI.
     RedisReply(crate::raft::types::core::response_value::Value),
+    /// Local observability output.  The server-side fields are resolved at
+    /// EXEC time; keyspace fields are rendered while the log is applied.
+    RedisInfo(InfoParams),
     /// Local MULTI placeholder; EXEC must resolve the script before replication.
     #[serde(skip)]
     RedisEvalSha {
@@ -214,6 +218,7 @@ impl fmt::Display for Request {
                 RedisOperation::RedisGetSet(req) => write!(f, "RedisGetSet: {}", req),
                 RedisOperation::RedisUnlink(req) => write!(f, "RedisUnlink: {}", req),
                 RedisOperation::RedisReply(req) => write!(f, "RedisReply: {:?}", req),
+                RedisOperation::RedisInfo(req) => write!(f, "RedisInfo: {:?}", req),
                 RedisOperation::RedisEvalSha { params, .. } => {
                     write!(f, "RedisEvalSha: {}", params)
                 }
