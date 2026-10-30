@@ -101,8 +101,8 @@ impl MultiReadCommand for MgetParams {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::raft::types::core::structure::scan_map::ScanMap as HashMap;
     use parking_lot::Mutex;
-    use std::collections::HashMap;
     use std::sync::Arc;
 
     #[test]

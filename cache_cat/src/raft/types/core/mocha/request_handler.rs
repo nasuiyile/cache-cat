@@ -38,6 +38,9 @@ fn read_request_inner<const REPLICATED: bool>(
         ReadOperation::HGetAll(param) => {
             my_cache.execute_read_with_mode::<_, REPLICATED>(param, db_number, read_clock)
         }
+        ReadOperation::HScan(param) => {
+            my_cache.execute_read_with_mode::<_, REPLICATED>(param, db_number, read_clock)
+        }
         ReadOperation::HKeys(param) => {
             my_cache.execute_read_with_mode::<_, REPLICATED>(param, db_number, read_clock)
         }

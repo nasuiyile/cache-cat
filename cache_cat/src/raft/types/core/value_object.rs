@@ -5,10 +5,11 @@ use crate::raft::types::core::size_estimate::{
 };
 use crate::raft::types::core::structure::sorted_set::SortedSet;
 use crate::raft::types::core::structure::stream::RedisStream;
+use crate::raft::types::core::structure::scan_map::ScanMap as HashMap;
 use bytes::Bytes;
 use parking_lot::{Mutex, RwLock};
 use serde::{Deserialize, Serialize};
-use std::collections::{HashMap, HashSet, VecDeque};
+use std::collections::{HashSet, VecDeque};
 use std::sync::Arc;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]

@@ -818,7 +818,7 @@ where
     where
         K: AsRef<[u8]>,
     {
-        let matcher = GlobMatcher::new(pattern);
+        let matcher = (pattern != b"*").then(|| GlobMatcher::new(pattern));
 
         // 和 dump_snapshots_to_writer 一样，
         // 整次遍历固定使用同一个写逻辑时钟。
@@ -842,7 +842,7 @@ where
                     }
                 }
 
-                if matcher.matches(key.as_ref()) {
+                if matcher.as_ref().is_none_or(|matcher| matcher.matches(key.as_ref())) {
                     Some(key.clone())
                 } else {
                     None

@@ -17,6 +17,7 @@ use crate::raft::network::redis_server::RedisServer;
 use crate::raft::types::core::mocha::cas::ComputeCommand;
 use crate::raft::types::core::mocha::core::MyValue;
 use crate::raft::types::core::response_value::Value;
+use crate::raft::types::core::structure::scan_map::ScanMap as HashMap;
 use crate::raft::types::core::value_object::{HashValue, ValueObject};
 use crate::raft::types::entry::base_operation::BaseOperation;
 use crate::raft::types::entry::base_operation::BaseOperation::HSet;
@@ -26,7 +27,6 @@ use async_trait::async_trait;
 use bytes::Bytes;
 use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
 use std::fmt;
 use std::sync::Arc;
 

@@ -137,4 +137,30 @@ mod tests {
             Value::Error(_)
         ));
     }
+
+    #[test]
+    fn match_all_includes_empty_key_with_redis_glob_semantics() {
+        let cache = MyCache::new(1).unwrap();
+        for key in [b"".as_slice(), b"a", b"!", b"b"] {
+            cache.databases[0].mocha.insert_persistent(
+                Bytes::copy_from_slice(key),
+                MyValue::new(ValueObject::Int(1)),
+            );
+        }
+        for (pattern, names) in [
+            (b"*".as_slice(), vec![b"".as_slice(), b"!", b"a", b"b"]),
+            (b"", vec![b"".as_slice()]),
+            (b"[!a]", vec![b"!".as_slice(), b"a"]),
+        ] {
+            let params = KeysParams {
+                pattern: Bytes::copy_from_slice(pattern),
+            };
+            let expected =
+                KeysParams::reply(names.into_iter().map(Bytes::copy_from_slice).collect());
+            assert_eq!(
+                params.execute_with_clock(&cache, 0, 0).encode(),
+                expected.encode()
+            );
+        }
+    }
 }

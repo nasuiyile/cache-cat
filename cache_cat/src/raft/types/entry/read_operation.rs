@@ -13,6 +13,7 @@ use crate::protocol::hash::hkeys::HKeysParams;
 use crate::protocol::hash::hlen::HLenParams;
 use crate::protocol::hash::hmget::HMGetParams;
 use crate::protocol::hash::hrandfield::HRandFieldParams;
+use crate::protocol::hash::hscan::HScanParams;
 use crate::protocol::hash::hstrlen::HStrLenParams;
 use crate::protocol::hash::hvals::HValsParams;
 use crate::protocol::key::dbsize::DbsizeParams;
@@ -94,4 +95,5 @@ pub enum ReadOperation {
     BfCard(BfCardParams),
     BfScanDump(BfScanDumpParams),
     XRead(XReadParams),
+    HScan(HScanParams),
 }

@@ -15,12 +15,13 @@ use crate::protocol::transaction::{QueuedOperation, exec::ExecParams};
 use crate::raft::types::core::mocha::core::{MyCache, MyValue, Update, UpdateType};
 use crate::raft::types::core::mocha::request_handler::do_request;
 use crate::raft::types::core::response_value::Value;
+use crate::raft::types::core::structure::scan_map::ScanMap as HashMap;
 use crate::raft::types::core::value_object::{HashValue, ValueObject};
 use crate::raft::types::entry::read_operation::ReadOperation;
 use crate::raft::types::entry::request::{Operation, RedisOperation, Request};
 use bytes::Bytes;
 use parking_lot::Mutex;
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 use std::sync::Arc;
 
 const LABELS: [&str; 11] = [
@@ -440,6 +441,88 @@ fn exec_reads_and_nested_lua_replay_identically_on_rebuilt_replicas() {
         assert_saved_results(cache, "exec:", results.last().unwrap());
         for proto in [2, 3] {
             assert_eq!(reply.encode_proto(proto), replies[0].encode_proto(proto));
+        }
+    }
+}
+
+
+#[test]
+fn hscan_cursor_from_ordinary_read_is_deterministic_in_exec_and_lua_after_restore() {
+    use crate::protocol::hash::hscan::HScanCommand;
+    use crate::protocol::raft_command::RaftCommand;
+    use crate::raft::types::core::mocha::request_handler::read_request;
+
+    for proto in [2, 3] {
+        let caches = replicas();
+        let arguments: Vec<_> = ["HSCAN", "input:hash", "0", "COUNT", "1"]
+            .into_iter()
+            .map(|value| Value::BulkString(Some(value.into())))
+            .collect();
+        let Operation::Read(read) = HScanCommand.raft_request(&arguments).unwrap() else {
+            panic!("HSCAN must be a read");
+        };
+        let Value::Array(Some(page)) = read_request(&caches[0], read, 0, 4_000) else {
+            panic!("HSCAN must return an array");
+        };
+        let cursor = page[0].string_bytes_clone().unwrap();
+        let mut continuation = arguments;
+        continuation[2] = Value::BulkString(Some(cursor.clone()));
+        let scan = HScanCommand.raft_request(&continuation).unwrap();
+        let mut script = EvalParams::new(
+            Bytes::from_static(br#"
+                local result = redis.call('HSCAN', KEYS[1], ARGV[1], 'COUNT', 1)
+                redis.call('SET', KEYS[2], result[2][1])
+                redis.call('HSET', KEYS[1], result[2][1], 'written')
+                return result
+            "#),
+            2,
+            vec!["input:hash".into(), "scan:first".into()],
+            vec![cursor],
+        );
+        script.proto = proto;
+        let operation = Operation::Redis(RedisOperation::RedisExec(ExecParams {
+            operations: vec![
+                QueuedOperation::new(0, scan.clone()),
+                QueuedOperation::new(0, Operation::Redis(RedisOperation::RedisEval(script))),
+                QueuedOperation::new(0, scan),
+            ],
+        }));
+        let log = bincode2::serialize(&Request::new(4_000, 0, operation)).unwrap();
+        let replies: Vec<_> = caches.iter().map(|cache| apply_log(cache, &log)).collect();
+        for (cache, reply) in caches.iter().zip(&replies) {
+            assert_eq!(reply.encode_proto(proto), replies[0].encode_proto(proto));
+            let Value::Array(Some(results)) = reply else {
+                panic!("expected successful EXEC, got {reply:?}");
+            };
+            assert_eq!(results.len(), 3);
+            for result in results {
+                let Value::Array(Some(page)) = result else {
+                    panic!("expected scan response, got {result:?}");
+                };
+                assert_eq!(page[0].string_bytes_clone().unwrap().as_ref(), b"0");
+                let Value::Array(Some(values)) = &page[1] else {
+                    panic!("expected flat scan values");
+                };
+                assert_eq!(values.len(), fields().len() * 2);
+                assert_eq!(values[0].string_bytes_clone().unwrap(), Bytes::new());
+            }
+            assert_eq!(
+                cache
+                    .execute_read(GetParams { key: "scan:first".into() }, 0, 4_000)
+                    .encode(),
+                Value::BulkString(Some(Bytes::new())).encode(),
+            );
+            let hash = cache.databases[0]
+                .mocha
+                .get(b"input:hash".as_slice())
+                .unwrap();
+            let ValueObject::Hash(hash) = hash.data else {
+                panic!("expected hash");
+            };
+            assert_eq!(
+                hash.lock().get(b"".as_slice()).unwrap().to_bytes().as_ref(),
+                b"written"
+            );
         }
     }
 }

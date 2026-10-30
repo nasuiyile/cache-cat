@@ -10,6 +10,7 @@ repository = "https://github.com/nasuiyile/cache-cat"
 license = "Apache-2.0"
 
 [dependencies]
+ahash = "0.8.12"
 openraft = { version = "0.10.0-alpha.34", features = ["type-alias", "serde"] }
 futures = "0.3.32"
 tracing = "0.1.44"

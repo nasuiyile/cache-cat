@@ -5,11 +5,12 @@
 
 use crate::raft::types::core::mocha::bloom_filter::BloomObject;
 use crate::raft::types::core::structure::sorted_set::SortedSet;
+use crate::raft::types::core::structure::scan_map::ScanMap as HashMap;
 use crate::raft::types::core::value_object::HashValue;
 use bytes::Bytes;
 use parking_lot::Mutex;
 use std::alloc::Layout;
-use std::collections::{HashMap, HashSet, VecDeque};
+use std::collections::{HashSet, VecDeque};
 use std::sync::Arc;
 use std::sync::atomic::AtomicUsize;
 
@@ -111,7 +112,7 @@ pub fn estimate_set_usage(value: &Arc<Mutex<HashSet<Bytes>>>, samples: usize) ->
 
 pub fn estimate_hash_usage(value: &Arc<Mutex<HashMap<Bytes, HashValue>>>, samples: usize) -> usize {
     let hash = value.lock();
-    let hash_table = estimate_hash_table_usage::<(Bytes, HashValue)>(hash.capacity());
+    let hash_table = hash.allocated_bytes();
     let payload = sampled_total(
         hash.iter().map(|(field, value)| {
             estimated_bytes_heap_usage(field).saturating_add(match value {

@@ -9,3 +9,6 @@ mod snapshot_revision_tests;
 
 #[cfg(test)]
 mod transaction_tests;
+
+#[cfg(test)]
+mod hscan_snapshot_tests;

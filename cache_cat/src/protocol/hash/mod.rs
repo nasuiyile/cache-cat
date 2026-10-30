@@ -9,6 +9,7 @@ pub mod hlen;
 pub mod hmget;
 pub mod hmset;
 pub mod hrandfield;
+pub mod hscan;
 pub mod hset;
 pub mod hsetnx;
 pub mod hstrlen;
@@ -24,10 +25,10 @@ mod tests {
     use crate::raft::types::core::mocha::core::MyValue;
     use crate::raft::types::core::mocha::read_command::ReadCommand;
     use crate::raft::types::core::response_value::Value;
+    use crate::raft::types::core::structure::scan_map::ScanMap as HashMap;
     use crate::raft::types::core::value_object::{HashValue, ValueObject};
     use bytes::Bytes;
     use parking_lot::Mutex;
-    use std::collections::HashMap;
     use std::sync::Arc;
 
     fn hash_entry(

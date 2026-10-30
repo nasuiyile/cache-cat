@@ -309,8 +309,9 @@ impl Command for HRandFieldCommand {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::raft::types::core::structure::scan_map::ScanMap as HashMap;
     use parking_lot::Mutex;
-    use std::collections::{HashMap, HashSet};
+    use std::collections::HashSet;
     use std::sync::Arc;
 
     fn snapshot(reverse: bool, capacity: usize) -> EntrySnapshot<MyValue> {

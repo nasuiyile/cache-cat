@@ -10,7 +10,15 @@ Currently implemented via moka. All key-value operations for the following data 
 
 ### Hash
 
-Implemented using Rust's built-in hashmap. For concurrent read and write, only flurry can be used.
+Redis Hash fields use `ScanMap<Bytes, HashValue>` inside the existing `Arc<Mutex<_>>`. Entries are dense; bucket chains store entry indices and cached hashes without allocating a node per field. It supports the lookup, insert, remove, iteration, clone and serde APIs used by existing Hash commands. The outer mocha cache and other data types retain their existing maps.
+
+Bucket counts are powers of two, with a maximum load factor of 0.5; the lower load only enlarges the compact bucket array, not the dense entries allocation. The default keyed hasher is `ahash::RandomState`. Each bucket maintains a fingerprint bitset to reject most misses without reading entries. Removal refreshes the filter so churn cannot accumulate stale bits. Growth rebuilds all bucket chains synchronously; there is no incremental rehash or automatic shrinking on removal. Removal swaps in the last entry and repairs its incoming bucket link, keeping ordinary iteration proportional to the number of fields. Growth holds the Hash mutex and can delay serial Raft writes.
+
+`HSCAN key cursor [MATCH pattern] [COUNT count] [NOVALUES]` implements `ReadCommand`. Ordinary reads use a bit-reversed cursor and visit entire buckets, preserving coverage of fields present throughout a full iteration despite growth and insertion/removal of other fields. COUNT defaults to 10 and is a work hint counted before MATCH filtering. A call visits at most `10 * COUNT` buckets, never splitting a collision chain: replies can exceed COUNT or contain no matches with a nonzero cursor. Zero starts or completes an iteration; there is no per-client scan state.
+
+Lua/EXEC reads applied through Raft can affect subsequent writes. Since replicas have different local hash seeds and capacities, this path returns every matching field sorted by field bytes and cursor 0. It also accepts ordinary scan cursors and may repeat previously returned fields. Its cost is O(N + M log M), where N is the field count and M the matching count; ordinary HSCAN does not sort the whole hash. Snapshots serialize only fields and values, rebuilding indexes and randomized seeds on restore. Ordinary cursors are not guaranteed to survive restart, snapshot installation or leader changes; clients should restart at cursor 0 in those cases.
+
+MEMORY USAGE accounts for the allocated entry and bucket arrays. `cache_cat/examples/hash_map_bench.rs` compares lookup, update, deletion, insertion and iteration against the former standard HashMap.
 
 ### List
 
