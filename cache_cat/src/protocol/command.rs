@@ -130,6 +130,7 @@ use crate::protocol::zset::zrank::ZRankCommand;
 use crate::protocol::zset::zrem::ZRemCommand;
 use crate::protocol::zset::zrevrank::ZRevRankCommand;
 use crate::protocol::zset::zscore::ZScoreCommand;
+use crate::protocol::zset::zscan::ZScanCommand;
 use crate::raft::network::connection::Connection;
 use crate::raft::network::redis_server::{RedisServer, RespCodec};
 use crate::raft::types::core::response_value::Value;
@@ -416,6 +417,7 @@ impl CommandFactory {
         factory.register("ZRANGEBYSCORE", ZRangeByScoreCommand);
         factory.register("ZREM", ZRemCommand);
         factory.register("ZSCORE", ZScoreCommand);
+        factory.register("ZSCAN", ZScanCommand);
         factory.register("ZCARD", ZCardCommand);
         factory.register("ZCOUNT", ZCountCommand);
         factory.register("ZRANK", ZRankCommand);

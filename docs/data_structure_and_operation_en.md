@@ -10,7 +10,7 @@ Currently implemented via moka. All key-value operations for the following data 
 
 ### Hash
 
-Redis Hash fields use `ScanMap<Bytes, HashValue>` inside the existing `Arc<Mutex<_>>`. Entries are dense; bucket chains store entry indices and cached hashes without allocating a node per field. It supports the lookup, insert, remove, iteration, clone and serde APIs used by existing Hash commands. The outer mocha cache and other data types retain their existing maps.
+Redis Hash fields use `ScanMap<Bytes, HashValue>` inside the existing `Arc<Mutex<_>>`. Entries are dense; bucket chains store entry indices and cached hashes without allocating a node per field. It supports the lookup, insert, remove, iteration, clone and serde APIs used by existing Hash commands. ZSET also uses ScanMap for its member index, as described below; the outer mocha cache retains its existing map.
 
 Bucket counts are powers of two, with a maximum load factor of 0.5; the lower load only enlarges the compact bucket array, not the dense entries allocation. The default keyed hasher is `ahash::RandomState`. Each bucket maintains a fingerprint bitset to reject most misses without reading entries. Removal refreshes the filter so churn cannot accumulate stale bits. Growth rebuilds all bucket chains synchronously; there is no incremental rehash or automatic shrinking on removal. Removal swaps in the last entry and repairs its incoming bucket link, keeping ordinary iteration proportional to the number of fields. Growth holds the Hash mutex and can delay serial Raft writes.
 
@@ -30,7 +30,15 @@ An unordered set, currently implemented using Rust's hashset. For concurrent rea
 
 ### Sorted Set
 
-Also called Zset in Redis. Currently implemented using Rust's built-in BTreeSet instead of crossbeam's skiplist.
+ZSET uses an indexed skiplist ordered by `(score, member)` and a `ScanMap<Bytes, f64>` hash index for member lookup and cursor scans. Each skiplist node holds a small sorted block of members to reduce dependent memory accesses and allocations. Links carry spans measured in members, and level-zero backward links support reverse ranges. Nodes use stable arena indices and recycled slots, with at most 32 levels and a promotion probability of 1/4. Blocks split when full and merge with adjacent blocks when space permits; score updates staying within a block reuse its allocation. The existing per-value mutex protects both indexes; no additional locks are required.
+
+`ZRANK`, `ZREVRANK`, and `ZCOUNT` take expected O(log N). Rank and score ranges seek their boundaries using spans and then visit the returned members, taking expected O(log N + M), including reverse ranges and large LIMIT offsets. BYLEX also uses indexed boundaries when all scores are equal, as required by Redis; mixed-score BYLEX retains deterministic filtering and may scan the whole set. Member lookup remains expected O(1), while insertions and removals take expected O(log N).
+
+`ZSCAN key cursor [MATCH pattern] [COUNT count]` implements `ReadCommand` and uses the hash index's bit-reversed bucket cursor. COUNT defaults to 10 and is a work hint before MATCH filtering; complete collision chains are returned, and a page may be empty with a nonzero cursor. Ordinary scans do not traverse or sort the whole set. Members present throughout an iteration remain covered despite growth, other member insertions/removals, or score updates. Replies contain a cursor and a flat member/score array; scores are bulk strings under both RESP2 and RESP3.
+
+For reads applied through Raft (Lua/EXEC), ZSCAN returns all matching members sorted by member bytes with cursor 0, independent of local hash seeds, capacity and skiplist layout. This path costs O(N + M log M); ordinary reads do not pay that cost. As with HSCAN, restart, snapshot installation and leader changes require restarting ordinary scans from cursor 0.
+
+Snapshots serialize each logical `(member, score)` once in score/member order and rebuild both indexes on restore. Duplicate members and NaN scores are rejected. This replaces the previous alpha ZSET encoding. MEMORY USAGE accounts for the hash arrays, skiplist arena and level allocations, counting shared member payloads once. `cache_cat/examples/zset_bench.rs` compares queries and writes against the former BTreeSet + HashMap implementation.
 
 ### Others
 

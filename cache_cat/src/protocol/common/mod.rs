@@ -4,3 +4,4 @@ pub mod lua_env;
 pub mod resp;
 
 pub mod request;
+pub(crate) mod scan;

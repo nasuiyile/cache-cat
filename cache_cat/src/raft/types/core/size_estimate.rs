@@ -192,9 +192,14 @@ mod tests {
         long.lock()
             .zincrby(Bytes::from(vec![b'x'; 129]), 1.0)
             .unwrap();
+        // Independent skiplists may choose different random node heights.
+        // Subtract their actual index allocations to isolate member payloads.
+        let short_index = short.lock().index_allocated_bytes();
+        let long_index = long.lock().index_allocated_bytes();
         for samples in [0, 1, 5] {
             assert_eq!(
-                estimate_zset_usage(&long, samples) - estimate_zset_usage(&short, samples),
+                (estimate_zset_usage(&long, samples) - long_index)
+                    - (estimate_zset_usage(&short, samples) - short_index),
                 128
             );
         }

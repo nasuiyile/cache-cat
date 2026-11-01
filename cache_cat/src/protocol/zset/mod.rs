@@ -9,6 +9,7 @@ pub mod zrank;
 pub mod zrem;
 pub mod zrevrank;
 pub mod zscore;
+pub mod zscan;
 
 #[cfg(test)]
 mod rank_tests {

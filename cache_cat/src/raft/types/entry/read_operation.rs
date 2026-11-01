@@ -45,6 +45,7 @@ use crate::protocol::zset::zrangegetscore::ZRangeByScoreParams;
 use crate::protocol::zset::zrank::ZRankParams;
 use crate::protocol::zset::zrevrank::ZRevRankParams;
 use crate::protocol::zset::zscore::ZScoreParams;
+use crate::protocol::zset::zscan::ZScanParams;
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -96,4 +97,5 @@ pub enum ReadOperation {
     BfScanDump(BfScanDumpParams),
     XRead(XReadParams),
     HScan(HScanParams),
+    ZScan(ZScanParams),
 }

@@ -1,11 +1,12 @@
+use super::indexed_skiplist::IndexedSkipList;
+use super::scan_map::ScanMap;
 use crate::protocol::zset::zadd::ZAddReq;
-use crate::raft::types::core::size_estimate::{
-    estimate_hash_table_usage, estimated_bytes_heap_usage, sampled_total,
-};
+use crate::raft::types::core::size_estimate::{estimated_bytes_heap_usage, sampled_total};
 use bytes::Bytes;
 use ordered_float::OrderedFloat;
-use serde::{Deserialize, Serialize};
-use std::collections::{BTreeSet, HashMap};
+use serde::de::{Error, SeqAccess, Visitor};
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
+use std::fmt;
 
 /// A score boundary used by the extended ZRANGE command.
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -22,17 +23,55 @@ pub enum LexBound {
     Value { value: Bytes, exclusive: bool },
 }
 
-#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default)]
 pub struct SortedSet {
     /// 按 (score, member) 排序。
     ///
     /// Redis Sorted Set 在 score 相同时，按照 member 的字典序排列。
-    tree: BTreeSet<(OrderedFloat<f64>, Bytes)>,
+    tree: IndexedSkipList,
 
     /// member -> score
     ///
     /// 用于 O(1) 查询 member 是否存在以及它当前的 score。
-    hash: HashMap<Bytes, f64>,
+    hash: ScanMap<Bytes, f64>,
+}
+
+// Persist logical entries once. Local hash seeds, arena indices and skiplist
+// heights are rebuilt on restore and cannot affect replicated command results.
+impl Serialize for SortedSet {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.collect_seq(self.tree.iter().map(|(score, member)| (member, score.0)))
+    }
+}
+
+impl<'de> Deserialize<'de> for SortedSet {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        struct SortedSetVisitor;
+
+        impl<'de> Visitor<'de> for SortedSetVisitor {
+            type Value = SortedSet;
+
+            fn expecting(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+                formatter.write_str("a sequence of unique sorted-set members and scores")
+            }
+
+            fn visit_seq<A: SeqAccess<'de>>(self, mut seq: A) -> Result<SortedSet, A::Error> {
+                let mut set = SortedSet::new();
+                while let Some((member, score)) = seq.next_element::<(Bytes, f64)>()? {
+                    if score.is_nan() {
+                        return Err(A::Error::custom("sorted-set score cannot be NaN"));
+                    }
+                    if set.hash.insert(member.clone(), score).is_some() {
+                        return Err(A::Error::custom("duplicate sorted-set member"));
+                    }
+                    set.tree.insert((OrderedFloat(score), member));
+                }
+                Ok(set)
+            }
+        }
+
+        deserializer.deserialize_seq(SortedSetVisitor)
+    }
 }
 
 impl SortedSet {
@@ -46,7 +85,7 @@ impl SortedSet {
         let mut changed = 0;
 
         for (member, score) in req.members {
-            let old_score = self.hash.get(&member).copied();
+            let old_score = self.hash.get_mut(&member);
             let exists = old_score.is_some();
 
             // NX: 只添加不存在的 member
@@ -59,7 +98,8 @@ impl SortedSet {
                 continue;
             }
 
-            if let Some(old_score) = old_score {
+            if let Some(stored_score) = old_score {
+                let old_score = *stored_score;
                 // GT: 新 score 必须大于旧 score
                 if req.gt && score <= old_score {
                     continue;
@@ -72,11 +112,10 @@ impl SortedSet {
 
                 // score 真正发生改变才需要修改 tree/hash
                 if old_score != score {
-                    self.tree.remove(&(OrderedFloat(old_score), member.clone()));
+                    self.tree
+                        .update_score(&(OrderedFloat(old_score), member.clone()), score);
 
-                    self.tree.insert((OrderedFloat(score), member.clone()));
-
-                    self.hash.insert(member, score);
+                    *stored_score = score;
 
                     changed += 1;
                 }
@@ -149,24 +188,13 @@ impl SortedSet {
         }
 
         let start_idx = start_idx as usize;
-        let count = (stop_idx - start_idx as i128 + 1) as usize;
-
-        if reverse {
-            self.tree
-                .iter()
-                .rev()
-                .skip(start_idx)
-                .take(count)
-                .map(|(score, member)| (member.clone(), score.0))
-                .collect()
+        let end_idx = stop_idx as usize + 1;
+        let (start, end) = if reverse {
+            (self.len() - end_idx, self.len() - start_idx)
         } else {
-            self.tree
-                .iter()
-                .skip(start_idx)
-                .take(count)
-                .map(|(score, member)| (member.clone(), score.0))
-                .collect()
-        }
+            (start_idx, end_idx)
+        };
+        self.collect_rank_range(start, end, reverse)
     }
 
     /// ZRANGE BYSCORE. `first` and `second` retain the command order: in
@@ -179,62 +207,43 @@ impl SortedSet {
         reverse: bool,
         limit: Option<(i64, i64)>,
     ) -> Vec<(Bytes, f64)> {
-        if self.tree.is_empty() {
+        if matches!(limit, Some((offset, count)) if offset < 0 || count == 0) {
             return Vec::new();
         }
-
         let (lower, upper) = if reverse {
             (second, first)
         } else {
             (first, second)
         };
-        let lower_matches = |score: f64| {
-            if lower.exclusive {
-                score > lower.value
-            } else {
-                score >= lower.value
-            }
-        };
-        let upper_matches = |score: f64| {
-            if upper.exclusive {
-                score < upper.value
-            } else {
-                score <= upper.value
-            }
-        };
-
-        if let Some((offset, _)) = limit {
-            if offset < 0 {
-                return Vec::new();
-            }
-        }
-        if matches!(limit, Some((_, 0))) {
+        if lower.value > upper.value || lower.value.is_nan() || upper.value.is_nan() {
             return Vec::new();
         }
-
+        let below_lower = |(score, _): &(OrderedFloat<f64>, Bytes)| {
+            score.0 < lower.value || (lower.exclusive && score.0 == lower.value)
+        };
+        let within_upper = |(score, _): &(OrderedFloat<f64>, Bytes)| {
+            score.0 < upper.value || (!upper.exclusive && score.0 == upper.value)
+        };
+        let (offset, count) = range_limit(limit);
+        // Seek only the starting boundary. nth/nth_back jump LIMIT offsets
+        // through spans; the other boundary is checked while producing output.
         if reverse {
-            // The tuple tree has no finite member sentinel for an inclusive
-            // upper score, so start from the end and discard scores above the
-            // requested upper bound before taking the bounded range.
-            let iter = self
-                .tree
-                .iter()
+            self.tree
+                .iter_to_prefix(within_upper)
                 .rev()
-                .skip_while(|(score, _)| !upper_matches(score.0))
-                .take_while(|(score, _)| lower_matches(score.0))
-                .map(|(score, member)| (member.clone(), score.0));
-            collect_zrange_limit(iter, limit)
+                .skip(offset)
+                .take_while(|entry| !below_lower(entry))
+                .take(count)
+                .map(|(score, member)| (member.clone(), score.0))
+                .collect()
         } else {
-            // Bytes::new() is the smallest member for a given score, which
-            // lets us avoid scanning entries below the lower score.
-            let start = (OrderedFloat(lower.value), Bytes::new());
-            let iter = self
-                .tree
-                .range(start..)
-                .filter(|(score, _)| lower_matches(score.0))
-                .take_while(|(score, _)| upper_matches(score.0))
-                .map(|(score, member)| (member.clone(), score.0));
-            collect_zrange_limit(iter, limit)
+            self.tree
+                .iter_from_prefix(below_lower)
+                .skip(offset)
+                .take_while(|entry| within_upper(entry))
+                .take(count)
+                .map(|(score, member)| (member.clone(), score.0))
+                .collect()
         }
     }
 
@@ -248,36 +257,66 @@ impl SortedSet {
         reverse: bool,
         limit: Option<(i64, i64)>,
     ) -> Vec<(Bytes, f64)> {
+        if matches!(limit, Some((offset, count)) if offset < 0 || count == 0) {
+            return Vec::new();
+        }
         let (lower, upper) = if reverse {
             (second, first)
         } else {
             (first, second)
         };
-        let in_range = |member: &Bytes| {
-            let lower_ok = match lower {
-                LexBound::NegativeInfinity => true,
-                LexBound::PositiveInfinity => false,
-                LexBound::Value { value, exclusive } => {
-                    if *exclusive {
-                        member > value
-                    } else {
-                        member >= value
-                    }
+        let lower_ok = |member: &Bytes| match lower {
+            LexBound::NegativeInfinity => true,
+            LexBound::PositiveInfinity => false,
+            LexBound::Value { value, exclusive } => {
+                if *exclusive {
+                    member > value
+                } else {
+                    member >= value
                 }
-            };
-            let upper_ok = match upper {
-                LexBound::NegativeInfinity => false,
-                LexBound::PositiveInfinity => true,
-                LexBound::Value { value, exclusive } => {
-                    if *exclusive {
-                        member < value
-                    } else {
-                        member <= value
-                    }
-                }
-            };
-            lower_ok && upper_ok
+            }
         };
+        let upper_ok = |member: &Bytes| match upper {
+            LexBound::NegativeInfinity => false,
+            LexBound::PositiveInfinity => true,
+            LexBound::Value { value, exclusive } => {
+                if *exclusive {
+                    member < value
+                } else {
+                    member <= value
+                }
+            }
+        };
+
+        // BYLEX is defined by Redis only when all scores are equal. In that
+        // case member comparisons are monotonic in the skiplist, so seek the
+        // starting boundary through its upper levels. Keep the deterministic
+        // filtering behavior for mixed-score sets, without burdening writes
+        // with an additional member index.
+        if self.tree.iter().next().map(|entry| entry.0)
+            == self.tree.iter().next_back().map(|entry| entry.0)
+        {
+            let (offset, count) = range_limit(limit);
+            return if reverse {
+                self.tree
+                    .iter_to_prefix(|(_, member)| upper_ok(member))
+                    .rev()
+                    .skip(offset)
+                    .take_while(|(_, member)| lower_ok(member))
+                    .take(count)
+                    .map(|(score, member)| (member.clone(), score.0))
+                    .collect()
+            } else {
+                self.tree
+                    .iter_from_prefix(|(_, member)| !lower_ok(member))
+                    .skip(offset)
+                    .take_while(|(_, member)| upper_ok(member))
+                    .take(count)
+                    .map(|(score, member)| (member.clone(), score.0))
+                    .collect()
+            };
+        }
+        let in_range = |member: &Bytes| lower_ok(member) && upper_ok(member);
 
         if reverse {
             let iter = self
@@ -312,29 +351,8 @@ impl SortedSet {
     /// - false => score <= max
     /// - true  => score < max
     pub fn zcount(&self, min: f64, max: f64, min_exclusive: bool, max_exclusive: bool) -> i64 {
-        if self.tree.is_empty() {
-            return 0;
-        }
-        if min > max {
-            return 0;
-        }
-        self.tree
-            .iter()
-            .filter(|(score, _)| {
-                let score = score.0;
-                let min_ok = if min_exclusive {
-                    score > min
-                } else {
-                    score >= min
-                };
-                let max_ok = if max_exclusive {
-                    score < max
-                } else {
-                    score <= max
-                };
-                min_ok && max_ok
-            })
-            .count() as i64
+        let (start, end) = self.score_ranks(min, max, min_exclusive, max_exclusive);
+        end.saturating_sub(start) as i64
     }
     /// ZRANGEBYSCORE
     ///
@@ -351,45 +369,18 @@ impl SortedSet {
         max: f64,
         limit: Option<(usize, usize)>,
     ) -> Vec<(Bytes, f64)> {
-        if self.tree.is_empty() {
+        if matches!(limit, Some((_, 0))) {
             return Vec::new();
         }
-        if min > max {
+        if min > max || min.is_nan() || max.is_nan() {
             return Vec::new();
         }
-        let skip_count = limit.map(|(offset, _)| offset).unwrap_or(0);
-        let take_count = limit.map(|(_, count)| count).unwrap_or(usize::MAX);
-        if take_count == 0 {
-            return Vec::new();
-        }
-        /*
-         * BTreeSet 的 key 是：
-         *
-         *     (score, member)
-         *
-         * Bytes::new() 是所有非空 Bytes 的最小值，因此可以从：
-         *
-         *     (min, "")
-         *
-         * 开始 range。
-         *
-         * 不能写：
-         *
-         *     ..=(max, Bytes::new())
-         *
-         * 因为这会漏掉：
-         *
-         *     (max, "abc")
-         *     (max, "xyz")
-         *
-         * 所以这里只设置下界，然后通过 take_while 控制 score 上界。
-         */
-        let start = (OrderedFloat(min), Bytes::new());
+        let (offset, count) = limit.unwrap_or((0, usize::MAX));
         self.tree
-            .range(start..)
+            .iter_from_prefix(|(score, _)| score.0 < min)
+            .skip(offset)
             .take_while(|(score, _)| score.0 <= max)
-            .skip(skip_count)
-            .take(take_count)
+            .take(count)
             .map(|(score, member)| (member.clone(), score.0))
             .collect()
     }
@@ -416,7 +407,8 @@ impl SortedSet {
     ///
     /// member 不存在时，相当于从 0 开始增加。
     pub fn zincrby(&mut self, member: Bytes, increment: f64) -> Option<f64> {
-        let old_score = self.hash.get(&member).copied();
+        let stored_score = self.hash.get_mut(&member);
+        let old_score = stored_score.as_deref().copied();
         let new_score = old_score.unwrap_or(0.0) + increment;
         // Redis 不允许 NaN score。
         if new_score.is_nan() {
@@ -427,10 +419,13 @@ impl SortedSet {
             if old_score == new_score {
                 return Some(new_score);
             }
-            self.tree.remove(&(OrderedFloat(old_score), member.clone()));
+            self.tree
+                .update_score(&(OrderedFloat(old_score), member.clone()), new_score);
+            *stored_score.unwrap() = new_score;
+        } else {
+            self.tree.insert((OrderedFloat(new_score), member.clone()));
+            self.hash.insert(member, new_score);
         }
-        self.tree.insert((OrderedFloat(new_score), member.clone()));
-        self.hash.insert(member, new_score);
         Some(new_score)
     }
 
@@ -442,43 +437,24 @@ impl SortedSet {
 
     /// ZRANK
     ///
-    /// 当前复杂度仍然是 O(N)。
+    /// Expected O(log N), using skiplist spans.
     pub fn zrank(&self, member: &Bytes) -> Option<i64> {
         let score = self.hash.get(member).copied()?;
-        /*
-         * 已经知道 score，所以不需要像原代码一样：
-         *
-         * self.tree.iter().position(|(_, m)| m == member)
-         *
-         * 从逻辑上搜索 member。
-         *
-         * 不过 std::collections::BTreeSet 不提供 order-statistics，
-         * 所以获取 rank 本身仍需要迭代，复杂度 O(N)。
-         */
         let key = (OrderedFloat(score), member.clone());
-        self.tree
-            .iter()
-            .position(|item| item == &key)
-            .map(|rank| rank as i64)
+        self.tree.rank(&key).map(|rank| rank as i64)
     }
 
     /// ZREVRANK
     ///
-    /// 当前复杂度 O(N)。
+    /// Expected O(log N), using the forward rank and total length.
     pub fn zrevrank(&self, member: &Bytes) -> Option<i64> {
-        let score = self.hash.get(member).copied()?;
-        let key = (OrderedFloat(score), member.clone());
-        self.tree
-            .iter()
-            .rev()
-            .position(|item| item == &key)
-            .map(|rank| rank as i64)
+        self.zrank(member).map(|rank| self.len() as i64 - rank - 1)
     }
 
     /// 检查集合是否为空。
     #[inline]
     pub fn is_empty(&self) -> bool {
-        self.hash.is_empty()
+        self.tree.is_empty()
     }
 
     /// ZPOPMIN
@@ -503,12 +479,6 @@ impl SortedSet {
     /// 估算树、哈希表和成员 payload；不包含 SortedSet 的内联大小。
     /// SAMPLES 0 全量遍历，tree/hash 共享的成员字节只计算一次。
     pub fn estimated_heap_usage(&self, samples: usize) -> usize {
-        let hash_memory = estimate_hash_table_usage::<(Bytes, f64)>(self.hash.capacity());
-
-        // BTreeSet 不公开节点容量，每项暂按值大小加两个指针估算。
-        let tree_entry_size = size_of::<(OrderedFloat<f64>, Bytes)>()
-            .saturating_add(size_of::<usize>().saturating_mul(2));
-        let tree_memory = self.tree.len().saturating_mul(tree_entry_size);
         let member_payload = sampled_total(
             self.tree
                 .iter()
@@ -517,9 +487,78 @@ impl SortedSet {
             samples,
         );
 
-        hash_memory
-            .saturating_add(tree_memory)
-            .saturating_add(member_payload)
+        self.index_allocated_bytes().saturating_add(member_payload)
+    }
+
+    /// Storage owned by the indexes, excluding the shared member payloads.
+    pub(crate) fn index_allocated_bytes(&self) -> usize {
+        self.hash
+            .allocated_bytes()
+            .saturating_add(self.tree.allocated_bytes())
+    }
+
+    /// Stateless bucket scan. COUNT measures visited members before filtering.
+    pub fn scan<F>(&self, cursor: u64, count: usize, visit: F) -> u64
+    where
+        F: FnMut(&Bytes, &f64),
+    {
+        self.hash.scan(cursor, count, visit)
+    }
+
+    /// Unordered members for the canonical replicated ZSCAN path.
+    pub fn iter(&self) -> impl ExactSizeIterator<Item = (&Bytes, &f64)> {
+        self.hash.iter()
+    }
+
+    /// Rank boundaries for a score interval, without visiting its members.
+    fn score_ranks(
+        &self,
+        min: f64,
+        max: f64,
+        min_exclusive: bool,
+        max_exclusive: bool,
+    ) -> (usize, usize) {
+        if min > max || min.is_nan() || max.is_nan() {
+            return (0, 0);
+        }
+        let start = self
+            .tree
+            .partition_point(|(score, _)| score.0 < min || (min_exclusive && score.0 == min));
+        let end = self
+            .tree
+            .partition_point(|(score, _)| score.0 < max || (!max_exclusive && score.0 == max));
+        (start, end.max(start))
+    }
+
+    /// Seek rank endpoints directly, including reverse traversal.
+    fn collect_rank_range(&self, start: usize, end: usize, reverse: bool) -> Vec<(Bytes, f64)> {
+        if start >= end {
+            return Vec::new();
+        }
+        let iter = self.tree.iter_range(start, end);
+        if reverse {
+            iter.rev()
+                .map(|(score, member)| (member.clone(), score.0))
+                .collect()
+        } else {
+            iter.map(|(score, member)| (member.clone(), score.0))
+                .collect()
+        }
+    }
+}
+
+// Callers have already rejected negative offsets and zero counts.
+fn range_limit(limit: Option<(i64, i64)>) -> (usize, usize) {
+    match limit {
+        None => (0, usize::MAX),
+        Some((offset, count)) => (
+            offset as usize,
+            if count < 0 {
+                usize::MAX
+            } else {
+                count as usize
+            },
+        ),
     }
 }
 
