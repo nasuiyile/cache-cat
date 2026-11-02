@@ -668,40 +668,6 @@ impl Value {
         }
     }
 
-    pub(crate) fn parse_u64(&self) -> Option<u64> {
-        match self {
-            Value::BulkString(Some(data)) => String::from_utf8_lossy(data).parse::<u64>().ok(),
-
-            Value::SimpleString(s) => s.parse::<u64>().ok(),
-
-            Value::Integer(i) if *i >= 0 => Some(*i as u64),
-
-            _ => None,
-        }
-    }
-
-    #[inline]
-    pub(crate) fn try_parse_u64(&self) -> Result<u64, ProtocolError> {
-        self.parse_u64().ok_or(ProtocolError::NotAnInteger)
-    }
-
-    pub(crate) fn parse_i64(&self) -> Option<i64> {
-        match self {
-            Value::BulkString(Some(data)) => String::from_utf8_lossy(data).parse::<i64>().ok(),
-
-            Value::SimpleString(s) => s.parse::<i64>().ok(),
-
-            Value::Integer(i) => Some(*i),
-
-            _ => None,
-        }
-    }
-
-    #[inline]
-    pub(crate) fn try_parse_i64(&self) -> Result<i64, ProtocolError> {
-        self.parse_i64().ok_or(ProtocolError::NotAnInteger)
-    }
-
     /// Parse a canonical Redis integer without constructing an error, for
     /// commands that must defer integer errors until after key/type checks.
     #[inline]
@@ -714,9 +680,8 @@ impl Value {
         }
     }
 
-    /// Strict counterpart of `try_parse_i64`, matching Redis
-    /// `getLongLongFromObjectOrReply` (`string2ll`): rejects whitespace, a `+`
-    /// sign, leading zeros and `-0`.
+    /// Parse a canonical Redis integer, matching `getLongLongFromObjectOrReply`
+    /// (`string2ll`): rejects whitespace, a `+` sign, leading zeros and `-0`.
     pub(crate) fn try_parse_canonical_i64(&self) -> Result<i64, ProtocolError> {
         match self {
             Value::BulkString(Some(data)) => parse_canonical_i64(data),
@@ -725,51 +690,6 @@ impl Value {
             _ => None,
         }
         .ok_or(ProtocolError::NotAnInteger)
-    }
-
-    pub(crate) fn parse_usize(&self) -> Option<usize> {
-        match self {
-            Value::BulkString(Some(data)) => String::from_utf8_lossy(data).parse::<usize>().ok(),
-
-            Value::SimpleString(s) => s.parse::<usize>().ok(),
-
-            Value::Integer(i) if *i >= 0 => Some(*i as usize),
-
-            _ => None,
-        }
-    }
-
-    #[inline]
-    pub(crate) fn try_parse_usize(&self) -> Result<usize, ProtocolError> {
-        self.parse_usize().ok_or(ProtocolError::NotAnInteger)
-    }
-
-    pub(crate) fn parse_bool_u8(&self) -> Option<u8> {
-        match self {
-            Value::BulkString(Some(data)) => {
-                if let Ok(v) = String::from_utf8_lossy(data).parse::<u8>()
-                    && v <= 1
-                {
-                    Some(v)
-                } else {
-                    None
-                }
-            }
-
-            Value::SimpleString(s) => {
-                if let Ok(v) = s.parse::<u8>()
-                    && v <= 1
-                {
-                    Some(v)
-                } else {
-                    None
-                }
-            }
-
-            Value::Integer(i) if matches!(*i, 0..=1) => Some(*i as u8),
-
-            _ => None,
-        }
     }
 }
 

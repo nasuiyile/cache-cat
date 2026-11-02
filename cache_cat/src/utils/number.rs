@@ -1,10 +1,3 @@
-/// Parse bytes as i64, returns None if invalid
-#[inline]
-pub fn parse_i64(data: &[u8]) -> Option<i64> {
-    let s = std::str::from_utf8(data).ok()?;
-    s.trim().parse::<i64>().ok()
-}
-
 /// Parse bytes as i64 only when they are the canonical decimal form of that
 /// number, mirroring Redis `string2ll`: no surrounding whitespace, no `+` sign,
 /// no leading zeros and no `-0`.
