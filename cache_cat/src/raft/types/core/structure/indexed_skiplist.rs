@@ -99,6 +99,100 @@ impl Default for IndexedSkipList {
     }
 }
 
+/// Restore sorted members without per-member tree searches. Only this
+/// builder can observe unfinished spans; finish completes them before use.
+pub(super) struct SortedSkipListBuilder {
+    list: IndexedSkipList,
+    tails: [usize; MAX_LEVEL],
+    ranks: [usize; MAX_LEVEL],
+    block: Vec<Key>,
+}
+
+impl SortedSkipListBuilder {
+    pub(super) fn new(size_hint: usize) -> Self {
+        let mut list = IndexedSkipList::new();
+        // Serialized lengths are untrusted. Grow further as members arrive.
+        list.nodes
+            .reserve_exact(size_hint.min(4096).div_ceil(BLOCK_SIZE / 2));
+        Self {
+            list,
+            tails: [NONE; MAX_LEVEL],
+            ranks: [0; MAX_LEVEL],
+            // Match normal split blocks' spare allocation, so writes can use
+            // the available member slots without first reallocating the Vec.
+            block: Vec::with_capacity(size_hint.min(BLOCK_SIZE + 1)),
+        }
+    }
+
+    /// Reject non-increasing (score, member) order, including across blocks.
+    pub(super) fn push(&mut self, key: Key) -> bool {
+        debug_assert!(!key.0.0.is_nan());
+        let previous = self.block.last().or_else(|| {
+            if self.list.tail == NONE {
+                None
+            } else {
+                self.list.node(self.list.tail).keys.last()
+            }
+        });
+        if previous.is_some_and(|previous| !compare_keys(previous, &key).is_lt()) {
+            return false;
+        }
+        if self.block.capacity() == 0 {
+            self.block.reserve_exact(BLOCK_SIZE + 1);
+        }
+        self.block.push(key);
+        if self.block.len() > BLOCK_SIZE {
+            // Match ordinary sorted insertion: a full block splits at its
+            // midpoint, leaving a tail that can grow to BLOCK_SIZE members.
+            // Only move this bounded suffix; no tree search or span updates
+            // are needed for the individual members.
+            let mut tail = Vec::with_capacity(BLOCK_SIZE + 1);
+            tail.extend(self.block.drain(BLOCK_SIZE / 2..));
+            self.flush_block();
+            self.block = tail;
+        }
+        true
+    }
+
+    fn flush_block(&mut self) {
+        if self.block.is_empty() {
+            return;
+        }
+        let mut node = Node::new(
+            std::mem::take(&mut self.block),
+            IndexedSkipList::random_height(),
+        );
+        let index = self.list.nodes.len();
+        self.list.len += node.keys.len();
+        node.backward = self.list.tail;
+        // A link spans from its source block's end to its target block's end.
+        // Each link is written once, when the next block at that level arrives.
+        for level in 0..node.links.len() {
+            *self.list.link_mut(self.tails[level], level) = Link {
+                next: index,
+                span: self.list.len - self.ranks[level],
+            };
+            self.tails[level] = index;
+            self.ranks[level] = self.list.len;
+        }
+        self.list.levels = self.list.levels.max(node.links.len());
+        self.list.allocated_links += node.links.len();
+        self.list.allocated_keys += node.keys.capacity();
+        self.list.tail = index;
+        self.list.nodes.push(Some(node));
+    }
+
+    pub(super) fn finish(mut self) -> IndexedSkipList {
+        // Keep the same spare capacity as ordinary insertion, including the
+        // tail, so subsequent insertions and merges need no extra allocation.
+        self.flush_block();
+        for level in 0..self.list.levels {
+            self.list.link_mut(self.tails[level], level).span = self.list.len - self.ranks[level];
+        }
+        self.list
+    }
+}
+
 impl IndexedSkipList {
     pub(super) fn new() -> Self {
         Self {
@@ -760,6 +854,67 @@ mod tests {
                 index = link.next;
                 rank = next_rank;
             }
+        }
+    }
+
+    #[test]
+    fn sorted_builder_preserves_spans_and_allocation_counts_after_mutations() {
+        for count in [
+            0, 1, 31, 32, 33, 47, 48, 49, 63, 64, 65, 127, 128, 129, 4097,
+        ] {
+            let mut expected: BTreeSet<_> = (0..count).map(key).collect();
+            let mut builder = SortedSkipListBuilder::new(expected.len());
+            for key in &expected {
+                assert!(builder.push(key.clone()));
+            }
+            let mut list = builder.finish();
+            assert_invariants(&list);
+            if count > BLOCK_SIZE as u32 {
+                let mut inserted = IndexedSkipList::new();
+                for key in &expected {
+                    inserted.insert(key.clone());
+                }
+                let shape = |list: &IndexedSkipList| {
+                    list.nodes
+                        .iter()
+                        .flatten()
+                        .map(|node| (node.keys.len(), node.keys.capacity()))
+                        .collect::<Vec<_>>()
+                };
+                assert_eq!(shape(&list), shape(&inserted));
+            }
+            assert_eq!(list.iter().cloned().collect::<BTreeSet<_>>(), expected);
+            for (rank, key) in expected.iter().enumerate() {
+                assert_eq!(list.rank(key), Some(rank));
+            }
+            // Filled blocks must still support splitting, cross-block moves,
+            // merging, cloning, and reuse after every member has been removed.
+            for value in count..count + 80 {
+                let key = key(value);
+                assert_eq!(list.insert(key.clone()), expected.insert(key));
+            }
+            let moved: Vec<_> = expected.iter().step_by(7).cloned().collect();
+            for old in moved {
+                assert!(list.update_score(&old, 100.0));
+                expected.remove(&old);
+                expected.insert((OrderedFloat(100.0), old.1));
+            }
+            let removed: Vec<_> = expected.iter().step_by(3).cloned().collect();
+            for key in removed {
+                assert!(list.remove(&key));
+                expected.remove(&key);
+            }
+            assert_invariants(&list);
+            let mut copy = list.clone();
+            assert_invariants(&copy);
+            assert_eq!(list.allocated_keys, copy.allocated_keys);
+            assert_eq!(list.allocated_links, copy.allocated_links);
+            for key in expected {
+                assert_eq!(copy.pop_first(), Some(key));
+            }
+            assert_invariants(&copy);
+            assert!(copy.insert(key(42)));
+            assert_invariants(&copy);
         }
     }
 

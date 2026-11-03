@@ -33,3 +33,5 @@ version numbers and similar versioning concerns.
 
 When a new behavior needs to be locked in order to proceed, considering that Raft can only be written on a single
 thread, many locks can be avoided.
+
+Ensure good reusability of the code, maintain overall code readability, and do not allow significant changes that may affect performance. Before making any changes, it is necessary to consider the extreme demand of some users for Redis.

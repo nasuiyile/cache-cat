@@ -424,6 +424,146 @@ fn snapshot_rejects_duplicate_members_and_nan_scores() {
 }
 
 #[test]
+fn snapshot_restore_preserves_rank_pages_at_block_boundaries() {
+    for count in [
+        0, 1, 31, 32, 33, 47, 48, 49, 63, 64, 65, 127, 128, 129, 4097,
+    ] {
+        let model: HashMap<Bytes, f64> = (0..count)
+            .map(|i| {
+                let score = match i % 17 {
+                    0 => f64::NEG_INFINITY,
+                    7 => -0.0,
+                    8 => 0.0,
+                    16 => f64::INFINITY,
+                    score => score as f64 - 8.0,
+                };
+                (Bytes::from(format!("member:{i:05}")), score)
+            })
+            .collect();
+        let mut source = SortedSet::new();
+        source.zadd(request(
+            model
+                .iter()
+                .map(|(member, score)| (member.clone(), *score))
+                .collect(),
+        ));
+        let bytes = bincode2::serialize(&source).unwrap();
+        let restored: SortedSet = bincode2::deserialize(&bytes).unwrap();
+        verify(&restored, &model);
+        // Preserve signed zero as well as the logical order of equal scores.
+        assert_eq!(bincode2::serialize(&restored).unwrap(), bytes);
+        for (member, score) in &model {
+            assert_eq!(restored.zscore(member).unwrap().to_bits(), score.to_bits());
+        }
+        let ordered = sorted(&model);
+        for start in [0, 31, 63, 64, 65, 127, 128, count / 2] {
+            if start >= count {
+                continue;
+            }
+            let end = (start + 67).min(count);
+            assert_eq!(
+                restored.zrange(start as i64, end as i64 - 1),
+                ordered[start..end],
+                "count={count}, start={start}"
+            );
+            let reversed: Vec<_> = ordered.iter().rev().skip(start).take(67).cloned().collect();
+            assert_eq!(
+                restored.zrange_rank(start as i64, start as i64 + 66, true),
+                reversed,
+                "count={count}, reverse start={start}"
+            );
+        }
+        let lower = ScoreBound {
+            value: -1.0,
+            exclusive: true,
+        };
+        let upper = ScoreBound {
+            value: 1.0,
+            exclusive: false,
+        };
+        let expected: Vec<_> = ordered
+            .iter()
+            .filter(|(_, score)| *score > -1.0 && *score <= 1.0)
+            .cloned()
+            .collect();
+        assert_eq!(
+            restored.zrange_score(&lower, &upper, false, Some((1, 67))),
+            limited(&expected, Some((1, 67)))
+        );
+    }
+}
+
+#[test]
+fn snapshot_restore_supports_writes_after_full_blocks_and_a_partial_tail() {
+    let mut model: HashMap<Bytes, f64> = (0..4097)
+        .map(|i| (Bytes::from(format!("member:{i:05}")), (i % 37) as f64))
+        .collect();
+    let bytes = bincode2::serialize(&sorted(&model)).unwrap();
+    let mut restored: SortedSet = bincode2::deserialize(&bytes).unwrap();
+    for i in 0..4097 {
+        let member = Bytes::from(format!("member:{i:05}"));
+        if i % 3 == 0 {
+            assert_eq!(restored.zrem(&[member.clone()]), 1);
+            model.remove(&member);
+        } else if i % 3 == 1 {
+            let score = -(i as f64);
+            assert_eq!(restored.zadd(request(vec![(member.clone(), score)])), 0);
+            model.insert(member, score);
+        } else {
+            let score = model.get_mut(&member).unwrap();
+            *score += 0.5;
+            assert_eq!(restored.zincrby(member, 0.5), Some(*score));
+        }
+    }
+    verify(&restored, &model);
+    for i in 0..193 {
+        let member = Bytes::from(format!("new:{i:05}"));
+        let score = (i % 13) as f64 - 4.0;
+        assert_eq!(restored.zadd(request(vec![(member.clone(), score)])), 1);
+        model.insert(member, score);
+    }
+    verify(&restored, &model);
+    for count in [1, 63, 64, 65, 129, usize::MAX] {
+        let expected: Vec<_> = sorted(&model).into_iter().take(count).collect();
+        assert_eq!(restored.zpop_min(Some(count)), expected);
+        for (member, _) in expected {
+            model.remove(&member);
+        }
+        verify(&restored, &model);
+    }
+    assert_eq!(restored.zadd(request(vec![(Bytes::new(), -0.0)])), 1);
+    verify(&restored, &HashMap::from([(Bytes::new(), -0.0)]));
+}
+
+#[test]
+fn snapshot_rejects_disorder_and_duplicates_across_blocks() {
+    let valid: Vec<_> = (0..4097)
+        .map(|i| (Bytes::from(format!("member:{i:05}")), i as f64))
+        .collect();
+    let mut descending = valid.clone();
+    descending.swap(47, 48);
+    let mut duplicate = valid.clone();
+    duplicate.push((valid[0].0.clone(), 4097.0));
+    let mut nan = valid;
+    nan.push((Bytes::from_static(b"nan"), f64::NAN));
+    for invalid in [
+        descending,
+        duplicate,
+        nan,
+        vec![
+            (Bytes::from_static(b"z"), 0.0),
+            (Bytes::from_static(b"a"), -0.0),
+        ],
+    ] {
+        assert!(
+            bincode2::deserialize::<SortedSet>(&bincode2::serialize(&invalid).unwrap()).is_err()
+        );
+    }
+    // The untrusted sequence length must not cause a huge eager allocation.
+    assert!(bincode2::deserialize::<SortedSet>(&u64::MAX.to_le_bytes()).is_err());
+}
+
+#[test]
 fn mixed_score_lex_ranges_preserve_existing_filter_behavior() {
     // Redis leaves BYLEX ordering unspecified when scores differ. Preserve
     // cache-cat's existing deterministic filtering for this case as well.

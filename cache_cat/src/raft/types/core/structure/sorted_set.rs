@@ -1,4 +1,4 @@
-use super::indexed_skiplist::IndexedSkipList;
+use super::indexed_skiplist::{IndexedSkipList, SortedSkipListBuilder};
 use super::scan_map::ScanMap;
 use crate::protocol::zset::zadd::ZAddReq;
 use crate::raft::types::core::size_estimate::{estimated_bytes_heap_usage, sampled_total};
@@ -56,17 +56,46 @@ impl<'de> Deserialize<'de> for SortedSet {
             }
 
             fn visit_seq<A: SeqAccess<'de>>(self, mut seq: A) -> Result<SortedSet, A::Error> {
-                let mut set = SortedSet::new();
+                let size_hint = seq.size_hint().unwrap_or(0);
+                // Small sets retain the insertion layout, whose spare block
+                // capacity avoids slowing writes after restore. Bincode gives
+                // an exact length; formats without a hint use this path too.
+                let mut bulk = (size_hint > 4096).then(|| SortedSkipListBuilder::new(size_hint));
+                let mut tree = IndexedSkipList::new();
+                // Bound initial allocations for untrusted serialized lengths.
+                let mut hash = if bulk.is_some() {
+                    ScanMap::with_capacity(4096)
+                } else {
+                    ScanMap::new()
+                };
                 while let Some((member, score)) = seq.next_element::<(Bytes, f64)>()? {
                     if score.is_nan() {
                         return Err(A::Error::custom("sorted-set score cannot be NaN"));
                     }
-                    if set.hash.insert(member.clone(), score).is_some() {
+                    if hash.insert(member.clone(), score).is_some() {
                         return Err(A::Error::custom("duplicate sorted-set member"));
                     }
-                    set.tree.insert((OrderedFloat(score), member));
+                    let key = (OrderedFloat(score), member);
+                    let ordered = match &mut bulk {
+                        Some(builder) => builder.push(key),
+                        None => {
+                            if tree.iter().next_back().is_some_and(|last| last >= &key) {
+                                false
+                            } else {
+                                tree.insert(key)
+                            }
+                        }
+                    };
+                    if !ordered {
+                        return Err(A::Error::custom(
+                            "sorted-set entries are not in score/member order",
+                        ));
+                    }
                 }
-                Ok(set)
+                Ok(SortedSet {
+                    tree: bulk.map_or(tree, SortedSkipListBuilder::finish),
+                    hash,
+                })
             }
         }
 
