@@ -137,7 +137,7 @@ fn members(value: &ValueObject) -> HashSet<Bytes> {
     let ValueObject::Set(set) = value else {
         panic!("expected a set");
     };
-    set.lock().clone()
+    set.lock().iter().cloned().collect()
 }
 
 fn expected_members(values: &[&str]) -> HashSet<Bytes> {

@@ -82,8 +82,8 @@ impl MultiReadCommand for SDiffParams {
     fn execute(&self, values: Vec<Option<EntrySnapshot<MyValue>>>) -> Value {
         let mut values = values.into_iter();
 
-        // use `HashSet` for quickly remove
-        let mut results = match values.next() {
+        // Source members are unique; filtering needs no temporary hash index.
+        let mut results: Option<Vec<Bytes>> = match values.next() {
             // has no key
             None => {
                 return ProtocolError::WrongArgCount("wrong number of arguments for command")
@@ -97,7 +97,7 @@ impl MultiReadCommand for SDiffParams {
                     return ProtocolError::WrongType.into();
                 };
 
-                Some(data.lock().clone())
+                Some(data.lock().iter().cloned().collect())
             }
         };
 
@@ -142,6 +142,20 @@ impl MultiReadCommand for SDiffParams {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::raft::types::core::structure::scan_set::ScanSet;
+    use parking_lot::Mutex;
+    use std::sync::Arc;
+
+    fn set_entry(members: &[&'static [u8]]) -> EntrySnapshot<MyValue> {
+        let members: ScanSet<_> = members
+            .iter()
+            .map(|member| Bytes::from_static(member))
+            .collect();
+        EntrySnapshot {
+            value: MyValue::new(ValueObject::Set(Arc::new(Mutex::new(members)))),
+            expire_at: None,
+        }
+    }
 
     #[test]
     fn wrong_type_is_reported_even_when_first_key_is_missing() {
@@ -159,6 +173,55 @@ mod tests {
             assert_eq!(
                 params.execute(values).encode(),
                 b"-WRONGTYPE Operation against a key holding the wrong kind of value\r\n"
+            );
+        }
+    }
+
+    #[test]
+    fn repeated_keys_filter_binary_members_without_mutating_sources() {
+        let source = set_entry(&[b"", b"\0", b"\xff", b"a"]);
+        let other = set_entry(&[b"", b"a"]);
+        let params = SDiffParams {
+            keys: vec!["source".into(), "other".into(), "other".into()],
+        };
+        let values = vec![Some(source.clone()), Some(other.clone()), Some(other)];
+        let expected = Value::Set(vec![
+            Value::BulkString(Some(Bytes::from_static(b"\0"))),
+            Value::BulkString(Some(Bytes::from_static(b"\xff"))),
+        ]);
+        for reply in [
+            super::super::canonical_set_reply(params.execute(values.clone())),
+            params.execute_with_clock(values, 42),
+        ] {
+            for proto in [2, 3] {
+                assert_eq!(reply.encode_proto(proto), expected.encode_proto(proto));
+            }
+        }
+        let ValueObject::Set(original) = &source.value.data else {
+            unreachable!();
+        };
+        assert_eq!(original.lock().len(), 4);
+
+        let params = SDiffParams {
+            keys: vec!["source".into(), "source".into()],
+        };
+        let empty = params.execute(vec![Some(source.clone()), Some(source.clone())]);
+        assert_eq!(empty.encode(), b"*0\r\n");
+        let wrong_type = EntrySnapshot {
+            value: MyValue::new(ValueObject::Int(1)),
+            expire_at: None,
+        };
+        let params = SDiffParams {
+            keys: vec!["source".into(), "source".into(), "wrong".into()],
+        };
+        let values = vec![Some(source.clone()), Some(source), Some(wrong_type)];
+        for reply in [
+            params.execute(values.clone()),
+            params.execute_with_clock(values, 42),
+        ] {
+            assert_eq!(
+                reply.encode(),
+                Value::from(ProtocolError::WrongType).encode()
             );
         }
     }

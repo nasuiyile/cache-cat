@@ -31,6 +31,9 @@ fn read_request_inner<const REPLICATED: bool>(
         ReadOperation::SMembers(param) => {
             my_cache.execute_read_with_mode::<_, REPLICATED>(param, db_number, read_clock)
         }
+        ReadOperation::SScan(param) => {
+            my_cache.execute_read_with_mode::<_, REPLICATED>(param, db_number, read_clock)
+        }
         ReadOperation::HMGet(param) => my_cache.execute_read(param, db_number, read_clock),
         ReadOperation::GetBit(param) => my_cache.execute_read(param, db_number, read_clock),
         ReadOperation::ZRangeByScore(param) => my_cache.execute_read(param, db_number, read_clock),

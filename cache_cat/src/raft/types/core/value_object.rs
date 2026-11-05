@@ -3,13 +3,14 @@ use crate::raft::types::core::size_estimate::{
     estimate_bloom_usage, estimate_hash_usage, estimate_list_usage, estimate_set_usage,
     estimate_zset_usage, estimated_bytes_heap_usage,
 };
+use crate::raft::types::core::structure::scan_set::ScanSet;
 use crate::raft::types::core::structure::sorted_set::SortedSet;
 use crate::raft::types::core::structure::stream::RedisStream;
 use crate::raft::types::core::structure::scan_map::ScanMap as HashMap;
 use bytes::Bytes;
 use parking_lot::{Mutex, RwLock};
 use serde::{Deserialize, Serialize};
-use std::collections::{HashSet, VecDeque};
+use std::collections::VecDeque;
 use std::sync::Arc;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -38,7 +39,7 @@ pub enum ValueObject {
     #[serde(with = "mutex_zset_serde")]
     ZSet(Arc<Mutex<SortedSet>>),
     #[serde(with = "mutex_hashset_serde")]
-    Set(Arc<Mutex<HashSet<Bytes>>>),
+    Set(Arc<Mutex<ScanSet<Bytes>>>),
     #[serde(with = "mutex_bloom_serde")]
     Bloom(Arc<Mutex<BloomObject>>),
     #[serde(with = "mutex_stream_serde")]
@@ -152,7 +153,7 @@ impl_mutex_serde!(
 
 impl_mutex_serde!(mutex_zset_serde, SortedSet);
 
-impl_mutex_serde!(mutex_hashset_serde, HashSet<Bytes>);
+impl_mutex_serde!(mutex_hashset_serde, ScanSet<Bytes>);
 
 impl_mutex_serde!(mutex_bloom_serde, BloomObject);
 

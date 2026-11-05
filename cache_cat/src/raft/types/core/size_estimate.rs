@@ -6,11 +6,12 @@
 use crate::raft::types::core::mocha::bloom_filter::BloomObject;
 use crate::raft::types::core::structure::sorted_set::SortedSet;
 use crate::raft::types::core::structure::scan_map::ScanMap as HashMap;
+use crate::raft::types::core::structure::scan_set::ScanSet;
 use crate::raft::types::core::value_object::HashValue;
 use bytes::Bytes;
 use parking_lot::Mutex;
 use std::alloc::Layout;
-use std::collections::{HashSet, VecDeque};
+use std::collections::VecDeque;
 use std::sync::Arc;
 use std::sync::atomic::AtomicUsize;
 
@@ -97,15 +98,15 @@ pub fn estimate_list_usage(value: &Arc<Mutex<VecDeque<Bytes>>>, samples: usize) 
         .saturating_add(payload)
 }
 
-pub fn estimate_set_usage(value: &Arc<Mutex<HashSet<Bytes>>>, samples: usize) -> usize {
+pub fn estimate_set_usage(value: &Arc<Mutex<ScanSet<Bytes>>>, samples: usize) -> usize {
     let set = value.lock();
-    let hash_table = estimate_hash_table_usage::<Bytes>(set.capacity());
+    let hash_table = set.allocated_bytes();
     let payload = sampled_total(
         set.iter().map(estimated_bytes_heap_usage),
         set.len(),
         samples,
     );
-    estimate_arc_allocation::<Mutex<HashSet<Bytes>>>()
+    estimate_arc_allocation::<Mutex<ScanSet<Bytes>>>()
         .saturating_add(hash_table)
         .saturating_add(payload)
 }
@@ -160,15 +161,22 @@ mod tests {
     }
 
     #[test]
-    fn reserved_set_counts_unused_buckets_and_control_group() {
-        let set = Arc::new(Mutex::new(HashSet::<Bytes>::with_capacity(3)));
-        assert_eq!(set.lock().capacity(), 3);
-        let buckets = 4 * size_of::<Bytes>();
-        let controls = 4 + 16;
+    fn reserved_set_counts_backing_arrays_and_retains_them_after_removal() {
+        let set = Arc::new(Mutex::new(ScanSet::<Bytes>::with_capacity(3)));
+        let reserved = estimate_set_usage(&set, 0);
         assert_eq!(
-            estimate_set_usage(&set, 0),
-            estimate_arc_allocation::<Mutex<HashSet<Bytes>>>() + buckets + controls
+            reserved,
+            estimate_arc_allocation::<Mutex<ScanSet<Bytes>>>() + set.lock().allocated_bytes()
         );
+        assert!(reserved > estimate_arc_allocation::<Mutex<ScanSet<Bytes>>>());
+
+        let member = Bytes::from(vec![b'x'; 128]);
+        set.lock().insert(member.clone());
+        for samples in [0, 1, 5] {
+            assert_eq!(estimate_set_usage(&set, samples), reserved + 128);
+        }
+        assert!(set.lock().remove(&member));
+        assert_eq!(estimate_set_usage(&set, 0), reserved);
     }
 
     #[test]

@@ -50,8 +50,10 @@ struct Entry<K, V> {
 /// Hashes are cached, so resizing and fixing a moved entry after removal do not
 /// rehash field bytes. The default hasher uses randomized keys to resist
 /// precomputed collision sets. Ordinary iteration order is unspecified.
+/// Hash/ZSET use the default 0.5 bucket load; Set opts into 0.75 at compile time
+/// (the one- and two-bucket cases permit full occupancy).
 #[derive(Clone)]
-pub struct ScanMap<K, V, S = RandomState> {
+pub struct ScanMap<K, V, S = RandomState, const DENSE_BUCKETS: bool = false> {
     entries: Vec<Entry<K, V>>,
     buckets: Vec<Bucket>,
     hash_builder: S,
@@ -67,7 +69,7 @@ impl<K, V> ScanMap<K, V> {
     }
 }
 
-impl<K, V, S> ScanMap<K, V, S> {
+impl<K, V, S, const DENSE_BUCKETS: bool> ScanMap<K, V, S, DENSE_BUCKETS> {
     pub fn with_hasher(hash_builder: S) -> Self {
         Self {
             entries: Vec::new(),
@@ -101,7 +103,16 @@ impl<K, V, S> ScanMap<K, V, S> {
 
     /// Number of entries that fit without reallocating either backing array.
     pub fn capacity(&self) -> usize {
-        (self.buckets.len() / 2).min(self.entries.capacity())
+        Self::bucket_capacity(self.buckets.len()).min(self.entries.capacity())
+    }
+
+    #[inline]
+    fn bucket_capacity(buckets: usize) -> usize {
+        if DENSE_BUCKETS {
+            buckets - buckets / 4
+        } else {
+            buckets / 2
+        }
     }
 
     pub fn hasher(&self) -> &S {
@@ -121,11 +132,17 @@ impl<K, V, S> ScanMap<K, V, S> {
             .len()
             .checked_add(additional)
             .expect("hash table capacity overflow");
-        if needed > self.buckets.len() / 2 {
+        if needed > Self::bucket_capacity(self.buckets.len()) {
             let capacity = needed
                 .max(MIN_BUCKETS)
                 .checked_next_power_of_two()
-                .and_then(|capacity| capacity.checked_mul(2))
+                .and_then(|capacity| {
+                    if !DENSE_BUCKETS || needed > Self::bucket_capacity(capacity) {
+                        capacity.checked_mul(2)
+                    } else {
+                        Some(capacity)
+                    }
+                })
                 .expect("hash table capacity overflow");
             self.rehash(capacity);
         }
@@ -138,10 +155,162 @@ impl<K, V, S> ScanMap<K, V, S> {
         }
     }
 
+    /// Clone for Set snapshot writes without discarding useful entry capacity.
+    /// Very sparse bucket arrays are rebuilt with the same hashes and seed.
+    /// Shrinking can repeat scan results, but cannot skip a stable member.
+    pub(super) fn clone_for_write(&self) -> Self
+    where
+        K: Clone,
+        V: Clone,
+        S: Clone,
+    {
+        let len = self.len();
+        let capacity = if len == 0 {
+            0
+        } else {
+            let minimum = len.checked_add(1).unwrap_or(len);
+            let ceiling = minimum
+                .checked_next_power_of_two()
+                .unwrap_or(self.entries.capacity());
+            // Keep ordinary growth slack, bound historical excess after many
+            // removals, and leave at least one slot for the following SADD.
+            minimum.max(self.entries.capacity().min(ceiling))
+        };
+        let mut entries = Vec::with_capacity(capacity);
+        entries.extend_from_slice(&self.entries);
+        let shrink = self.buckets.len() > len.saturating_mul(8);
+        let mut cloned = Self {
+            entries,
+            buckets: if shrink {
+                Vec::new()
+            } else {
+                self.buckets.clone()
+            },
+            hash_builder: self.hash_builder.clone(),
+        };
+        if shrink {
+            cloned.reserve(0);
+        }
+        cloned
+    }
+
     /// Removes all entries while keeping the allocation and hash seed.
     pub fn clear(&mut self) {
         self.buckets.fill(EMPTY_BUCKET);
         self.entries.clear();
+    }
+
+    /// Retains matching entries without reallocating or hashing keys again.
+    /// Dense maps compact entries and rebuild links once after removals;
+    /// sparse maps repair only affected chains. Both paths remain valid if
+    /// the predicate or a removed entry's destructor unwinds.
+    pub fn retain<F>(&mut self, mut keep: F)
+    where
+        F: FnMut(&K, &mut V) -> bool,
+    {
+        // After heavy deletion, clearing every bucket would dominate the
+        // remaining members. Repair just the affected chains in sparse maps.
+        if self.buckets.len() > self.entries.len().saturating_mul(8) {
+            self.retain_by_removal(keep);
+            return;
+        }
+
+        struct RebuildOnDrop<'a, K, V, S, const DENSE_BUCKETS: bool> {
+            map: &'a mut ScanMap<K, V, S, DENSE_BUCKETS>,
+            changed: bool,
+        }
+
+        impl<K, V, S, const DENSE_BUCKETS: bool> Drop for RebuildOnDrop<'_, K, V, S, DENSE_BUCKETS> {
+            fn drop(&mut self) {
+                if !self.changed {
+                    return;
+                }
+                // Vec::retain_mut first restores a compact, valid vector when
+                // unwinding. This guard then restores its cached-hash index.
+                self.map.buckets.fill(EMPTY_BUCKET);
+                let mask = self.map.buckets.len() - 1;
+                for (index, entry) in self.map.entries.iter_mut().enumerate() {
+                    let bucket = &mut self.map.buckets[entry.hash as usize & mask];
+                    entry.next = bucket.head;
+                    bucket.head = index;
+                    bucket.fingerprints |= fingerprint(entry.hash);
+                }
+            }
+        }
+
+        let mut guard = RebuildOnDrop {
+            map: self,
+            changed: false,
+        };
+        let RebuildOnDrop { map, changed } = &mut guard;
+        map.entries.retain_mut(|entry| {
+            let retain = keep(&entry.key, &mut entry.value);
+            // Mark before Vec drops the entry: its destructor may panic.
+            *changed |= !retain;
+            retain
+        });
+    }
+
+    fn retain_by_removal<F>(&mut self, mut keep: F)
+    where
+        F: FnMut(&K, &mut V) -> bool,
+    {
+        let mut index = 0;
+        while index < self.entries.len() {
+            let entry = &mut self.entries[index];
+            if keep(&entry.key, &mut entry.value) {
+                index += 1;
+                continue;
+            }
+            let bucket = entry.hash as usize & (self.buckets.len() - 1);
+            let mut previous = EMPTY;
+            let mut current = self.buckets[bucket].head;
+            while current != index {
+                previous = current;
+                current = self.entries[current].next;
+            }
+            // Repair before dropping members so either destructor or the
+            // next predicate may unwind without leaving stale bucket links.
+            self.remove_linked_entry(index, bucket, previous);
+            // swap_remove moved an unvisited entry into this index.
+        }
+    }
+
+    #[inline]
+    fn remove_linked_entry(&mut self, index: usize, bucket: usize, previous: usize) -> (K, V) {
+        let next = self.entries[index].next;
+        if previous == EMPTY {
+            self.buckets[bucket].head = next;
+        } else {
+            self.entries[previous].next = next;
+        }
+        let removed = self.entries.swap_remove(index);
+        if index < self.entries.len() {
+            // The former last entry is now at index. Only its incoming link
+            // needs repair; cached hashes avoid touching the key bytes again.
+            let old_index = self.entries.len();
+            let moved_bucket = self.entries[index].hash as usize & (self.buckets.len() - 1);
+            if self.buckets[moved_bucket].head == old_index {
+                self.buckets[moved_bucket].head = index;
+            } else {
+                let mut previous = self.buckets[moved_bucket].head;
+                while self.entries[previous].next != old_index {
+                    previous = self.entries[previous].next;
+                }
+                self.entries[previous].next = index;
+            }
+        }
+        // Rebuild this short chain's exact filter, so repeated insert/delete
+        // churn cannot saturate stale fingerprint bits and slow down misses.
+        let mut fingerprints = 0;
+        let mut current = self.buckets[bucket].head;
+        while current != EMPTY {
+            let entry = &self.entries[current];
+            fingerprints |= fingerprint(entry.hash);
+            current = entry.next;
+        }
+        self.buckets[bucket].fingerprints = fingerprints;
+        (removed.key, removed.value)
     }
 
     fn rehash(&mut self, capacity: usize) {
@@ -188,8 +357,10 @@ impl<K, V, S> ScanMap<K, V, S> {
     ///
     /// Bucket counts are powers of two and rehashing preserves field hashes.
     /// Bit reversal visits newly split buckets before advancing past their old
-    /// bucket. Fields present throughout a full scan cannot be skipped by growth
-    /// or deletion of other fields, even though dense entries move on deletion.
+    /// bucket. Shrinking revisits a merged bucket that includes the cursor's
+    /// unvisited suffix, so duplicates are possible but coverage is preserved.
+    /// Fields present throughout a full scan cannot be skipped by resizing or
+    /// deletion of other fields, even though dense entries move on deletion.
     /// The caller must exclude writes for this call, not for the whole iteration.
     pub fn scan<F>(&self, mut cursor: u64, count: usize, mut visit: F) -> u64
     where
@@ -224,7 +395,7 @@ impl<K, V, S> ScanMap<K, V, S> {
     }
 }
 
-impl<K: Eq + Hash, V, S: BuildHasher> ScanMap<K, V, S> {
+impl<K: Eq + Hash, V, S: BuildHasher, const DENSE_BUCKETS: bool> ScanMap<K, V, S, DENSE_BUCKETS> {
     #[inline]
     fn find<Q>(&self, key: &Q, hash: u64) -> Option<usize>
     where
@@ -282,7 +453,9 @@ impl<K: Eq + Hash, V, S: BuildHasher> ScanMap<K, V, S> {
         if let Some(index) = self.find(&key, hash) {
             return Some(std::mem::replace(&mut self.entries[index].value, value));
         }
-        if self.len() == self.buckets.len() / 2 || self.len() == self.entries.capacity() {
+        if self.len() == Self::bucket_capacity(self.buckets.len())
+            || self.len() == self.entries.capacity()
+        {
             self.reserve(1);
         }
         let bucket = hash as usize & (self.buckets.len() - 1);
@@ -332,55 +505,26 @@ impl<K: Eq + Hash, V, S: BuildHasher> ScanMap<K, V, S> {
         if index == EMPTY {
             return None;
         }
-        let next = self.entries[index].next;
-        if previous == EMPTY {
-            self.buckets[bucket].head = next;
-        } else {
-            self.entries[previous].next = next;
-        }
-        let removed = self.entries.swap_remove(index);
-        if index < self.entries.len() {
-            // The former last entry is now at index. Only its incoming link
-            // needs repair; cached hashes avoid touching the key bytes again.
-            let old_index = self.entries.len();
-            let moved_bucket = self.entries[index].hash as usize & (self.buckets.len() - 1);
-            if self.buckets[moved_bucket].head == old_index {
-                self.buckets[moved_bucket].head = index;
-            } else {
-                let mut previous = self.buckets[moved_bucket].head;
-                while self.entries[previous].next != old_index {
-                    previous = self.entries[previous].next;
-                }
-                self.entries[previous].next = index;
-            }
-        }
-        // Rebuild this short chain's exact filter, so repeated insert/delete
-        // churn cannot saturate stale fingerprint bits and slow down misses.
-        let mut fingerprints = 0;
-        let mut current = self.buckets[bucket].head;
-        while current != EMPTY {
-            let entry = &self.entries[current];
-            fingerprints |= fingerprint(entry.hash);
-            current = entry.next;
-        }
-        self.buckets[bucket].fingerprints = fingerprints;
-        Some((removed.key, removed.value))
+        Some(self.remove_linked_entry(index, bucket, previous))
     }
 }
 
-impl<K, V, S: Default> Default for ScanMap<K, V, S> {
+impl<K, V, S: Default, const DENSE_BUCKETS: bool> Default for ScanMap<K, V, S, DENSE_BUCKETS> {
     fn default() -> Self {
         Self::with_hasher(S::default())
     }
 }
 
-impl<K: fmt::Debug, V: fmt::Debug, S> fmt::Debug for ScanMap<K, V, S> {
+impl<K: fmt::Debug, V: fmt::Debug, S, const DENSE_BUCKETS: bool> fmt::Debug
+    for ScanMap<K, V, S, DENSE_BUCKETS>
+{
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter.debug_map().entries(self.iter()).finish()
     }
 }
 
-impl<K: Eq + Hash, V, S: BuildHasher, Q: Hash + Eq + ?Sized> Index<&Q> for ScanMap<K, V, S>
+impl<K: Eq + Hash, V, S: BuildHasher, Q: Hash + Eq + ?Sized, const DENSE_BUCKETS: bool> Index<&Q>
+    for ScanMap<K, V, S, DENSE_BUCKETS>
 where
     K: Borrow<Q>,
 {
@@ -391,7 +535,9 @@ where
     }
 }
 
-impl<K: Eq + Hash, V, S: BuildHasher> Extend<(K, V)> for ScanMap<K, V, S> {
+impl<K: Eq + Hash, V, S: BuildHasher, const DENSE_BUCKETS: bool> Extend<(K, V)>
+    for ScanMap<K, V, S, DENSE_BUCKETS>
+{
     fn extend<I: IntoIterator<Item = (K, V)>>(&mut self, iter: I) {
         let iter = iter.into_iter();
         self.reserve(iter.size_hint().0);
@@ -401,7 +547,9 @@ impl<K: Eq + Hash, V, S: BuildHasher> Extend<(K, V)> for ScanMap<K, V, S> {
     }
 }
 
-impl<K: Eq + Hash, V, S: BuildHasher + Default> FromIterator<(K, V)> for ScanMap<K, V, S> {
+impl<K: Eq + Hash, V, S: BuildHasher + Default, const DENSE_BUCKETS: bool> FromIterator<(K, V)>
+    for ScanMap<K, V, S, DENSE_BUCKETS>
+{
     fn from_iter<I: IntoIterator<Item = (K, V)>>(iter: I) -> Self {
         let mut map = Self::default();
         map.extend(iter);
@@ -438,7 +586,7 @@ impl<K, V> DoubleEndedIterator for Iter<'_, K, V> {
 impl<K, V> ExactSizeIterator for Iter<'_, K, V> {}
 impl<K, V> FusedIterator for Iter<'_, K, V> {}
 
-impl<'a, K, V, S> IntoIterator for &'a ScanMap<K, V, S> {
+impl<'a, K, V, S, const DENSE_BUCKETS: bool> IntoIterator for &'a ScanMap<K, V, S, DENSE_BUCKETS> {
     type Item = (&'a K, &'a V);
     type IntoIter = Iter<'a, K, V>;
 
@@ -464,7 +612,7 @@ impl<K, V> Iterator for IntoIter<K, V> {
 impl<K, V> ExactSizeIterator for IntoIter<K, V> {}
 impl<K, V> FusedIterator for IntoIter<K, V> {}
 
-impl<K, V, S> IntoIterator for ScanMap<K, V, S> {
+impl<K, V, S, const DENSE_BUCKETS: bool> IntoIterator for ScanMap<K, V, S, DENSE_BUCKETS> {
     type Item = (K, V);
     type IntoIter = IntoIter<K, V>;
 
@@ -476,7 +624,9 @@ impl<K, V, S> IntoIterator for ScanMap<K, V, S> {
 // Persist logical entries only. Hash seeds, bucket links and allocation sizes
 // are local implementation details, as with std HashMap. Restoring a snapshot
 // may change ordinary scan cursors; replicated reads use their canonical path.
-impl<K: Serialize, V: Serialize, S> Serialize for ScanMap<K, V, S> {
+impl<K: Serialize, V: Serialize, S, const DENSE_BUCKETS: bool> Serialize
+    for ScanMap<K, V, S, DENSE_BUCKETS>
+{
     fn serialize<T: Serializer>(&self, serializer: T) -> Result<T::Ok, T::Error> {
         let mut map = serializer.serialize_map(Some(self.len()))?;
         for (key, value) in self {
@@ -486,22 +636,22 @@ impl<K: Serialize, V: Serialize, S> Serialize for ScanMap<K, V, S> {
     }
 }
 
-impl<'de, K, V, S> Deserialize<'de> for ScanMap<K, V, S>
+impl<'de, K, V, S, const DENSE_BUCKETS: bool> Deserialize<'de> for ScanMap<K, V, S, DENSE_BUCKETS>
 where
     K: Deserialize<'de> + Eq + Hash,
     V: Deserialize<'de>,
     S: BuildHasher + Default,
 {
     fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        struct MapVisitor<K, V, S>(PhantomData<(K, V, S)>);
+        struct MapVisitor<K, V, S, const DENSE_BUCKETS: bool>(PhantomData<(K, V, S)>);
 
-        impl<'de, K, V, S> Visitor<'de> for MapVisitor<K, V, S>
+        impl<'de, K, V, S, const DENSE_BUCKETS: bool> Visitor<'de> for MapVisitor<K, V, S, DENSE_BUCKETS>
         where
             K: Deserialize<'de> + Eq + Hash,
             V: Deserialize<'de>,
             S: BuildHasher + Default,
         {
-            type Value = ScanMap<K, V, S>;
+            type Value = ScanMap<K, V, S, DENSE_BUCKETS>;
 
             fn expecting(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
                 formatter.write_str("a map")
@@ -521,7 +671,7 @@ where
             }
         }
 
-        deserializer.deserialize_map(MapVisitor(PhantomData))
+        deserializer.deserialize_map(MapVisitor::<K, V, S, DENSE_BUCKETS>(PhantomData))
     }
 }
 
@@ -551,6 +701,24 @@ mod tests {
     }
 
     type PredictableMap = ScanMap<u64, u64, BuildHasherDefault<IdentityHasher>>;
+    type BucketMap<const DENSE: bool> =
+        ScanMap<u64, u64, BuildHasherDefault<IdentityHasher>, DENSE>;
+
+    fn finish_resized_scan<const DENSE: bool>(
+        map: &BucketMap<DENSE>,
+        mut cursor: u64,
+        seen: &mut HashSet<u64>,
+    ) {
+        for _ in 0..=map.buckets.len() {
+            cursor = map.scan(cursor, 1, |key, _| {
+                seen.insert(*key);
+            });
+            if cursor == 0 {
+                return;
+            }
+        }
+        panic!("bounded resized table must finish scanning");
+    }
 
     fn assert_matches(map: &PredictableMap, reference: &HashMap<u64, u64>) {
         assert_eq!(map.len(), reference.len());
@@ -607,6 +775,153 @@ mod tests {
         }
         assert!(map.is_empty());
         assert!(map.capacity() > 0, "deletion must not automatically shrink");
+    }
+
+    #[test]
+    fn retain_visits_each_entry_once_and_repairs_collisions_without_allocating() {
+        for capacity in [64, 4096] {
+            let mut map = PredictableMap::with_capacity_and_hasher(capacity, Default::default());
+            map.extend((0..64_u64).map(|key| (((key % 4) << 58) | (key * 1024), key)));
+            let mut reference: HashMap<_, _> = map.iter().map(|(&k, &v)| (k, v)).collect();
+            let allocated = map.allocated_bytes();
+            let mut visited = HashSet::new();
+            map.retain(|key, value| {
+                assert!(
+                    visited.insert(*key),
+                    "moved entries are visited exactly once"
+                );
+                *value += 1;
+                *value % 3 != 0
+            });
+            reference.retain(|_, value| {
+                *value += 1;
+                *value % 3 != 0
+            });
+            assert_eq!(visited.len(), 64);
+            assert_eq!(map.allocated_bytes(), allocated);
+            assert_matches(&map, &reference);
+            map.retain(|_, _| false);
+            assert_matches(&map, &HashMap::new());
+            assert_eq!(map.allocated_bytes(), allocated);
+            map.insert(1024, 42);
+            assert_eq!(map.remove(&1024), Some(42));
+        }
+    }
+
+    #[test]
+    fn retain_keeps_bucket_links_valid_when_predicate_panics() {
+        for capacity in [64, 4096] {
+            let mut map = PredictableMap::with_capacity_and_hasher(capacity, Default::default());
+            map.extend((0..64_u64).map(|key| (key * 1024, key)));
+            let mut reference: HashMap<_, _> = map.iter().map(|(&k, &v)| (k, v)).collect();
+            let mut visited = 0;
+            let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                map.retain(|key, value| {
+                    visited += 1;
+                    *value += 1;
+                    *reference.get_mut(key).unwrap() = *value;
+                    assert!(visited != 17, "predicate panic after mutating value");
+                    if *value % 2 == 0 {
+                        true
+                    } else {
+                        reference.remove(key);
+                        false
+                    }
+                });
+            }));
+            assert!(result.is_err());
+            assert_matches(&map, &reference);
+            map.insert(65 * 1024, 65);
+            reference.insert(65 * 1024, 65);
+            assert_matches(&map, &reference);
+            for key in reference.keys().copied().collect::<Vec<_>>() {
+                assert_eq!(map.remove(&key), reference.remove(&key));
+            }
+            assert!(map.is_empty());
+        }
+    }
+
+    #[test]
+    fn retain_rebuilds_links_when_a_removed_member_destructor_panics() {
+        use std::cell::Cell;
+        use std::rc::Rc;
+
+        struct DropKey {
+            id: u64,
+            armed: Rc<Cell<bool>>,
+        }
+
+        impl Hash for DropKey {
+            fn hash<H: Hasher>(&self, hasher: &mut H) {
+                self.id.hash(hasher);
+            }
+        }
+        impl PartialEq for DropKey {
+            fn eq(&self, other: &Self) -> bool {
+                self.id == other.id
+            }
+        }
+        impl Eq for DropKey {}
+        impl Borrow<u64> for DropKey {
+            fn borrow(&self) -> &u64 {
+                &self.id
+            }
+        }
+        impl Drop for DropKey {
+            fn drop(&mut self) {
+                if self.id == 6 * 1024 && self.armed.replace(false) {
+                    panic!("member destructor panic");
+                }
+            }
+        }
+
+        for capacity in [12, 4096] {
+            let armed = Rc::new(Cell::new(true));
+            let mut map: ScanMap<DropKey, u64, BuildHasherDefault<IdentityHasher>> =
+                ScanMap::with_capacity_and_hasher(capacity, Default::default());
+            map.extend((0..12_u64).map(|id| {
+                (
+                    DropKey {
+                        id: id * 1024,
+                        armed: armed.clone(),
+                    },
+                    id,
+                )
+            }));
+            let mut reference: HashMap<_, _> = (0..12_u64).map(|id| (id, id)).collect();
+            let allocated = map.allocated_bytes();
+            let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                map.retain(|key, value| {
+                    let id = key.id / 1024;
+                    *value += 100;
+                    *reference.get_mut(&id).unwrap() = *value;
+                    if id % 2 != 0 {
+                        true
+                    } else {
+                        reference.remove(&id);
+                        false
+                    }
+                });
+            }));
+            assert!(result.is_err());
+            assert_eq!(map.len(), reference.len());
+            assert_eq!(map.allocated_bytes(), allocated);
+            for id in 0..12_u64 {
+                assert_eq!(map.get(&(id * 1024)), reference.get(&id));
+            }
+            let mut seen = HashSet::new();
+            assert_eq!(
+                map.scan(0, usize::MAX, |key, _| {
+                    seen.insert(key.id / 1024);
+                }),
+                0
+            );
+            assert_eq!(seen, reference.keys().copied().collect());
+            for id in seen {
+                assert!(map.remove(&(id * 1024)).is_some());
+            }
+            assert!(map.is_empty());
+        }
     }
 
     #[test]
@@ -688,6 +1003,109 @@ mod tests {
                 assert_eq!(map.get(&key), Some(&key));
             }
         }
+    }
+
+    #[test]
+    fn set_bucket_density_preserves_requested_capacity_and_default_map_layout() {
+        for (capacity, buckets) in [
+            (0, 0),
+            (1, 1),
+            (2, 2),
+            (3, 4),
+            (4, 8),
+            (5, 8),
+            (6, 8),
+            (7, 16),
+            (10_000, 16_384),
+        ] {
+            let mut map = BucketMap::<true>::with_capacity_and_hasher(capacity, Default::default());
+            assert_eq!(map.buckets.len(), buckets);
+            assert_eq!(map.capacity(), capacity);
+            let allocated = map.allocated_bytes();
+            for key in 0..capacity as u64 {
+                map.insert(key, key);
+            }
+            assert_eq!(map.allocated_bytes(), allocated);
+            map.insert(capacity as u64, capacity as u64);
+            for key in 0..=capacity as u64 {
+                assert_eq!(map.get(&key), Some(&key));
+            }
+        }
+        let default = PredictableMap::with_capacity_and_hasher(10_000, Default::default());
+        assert_eq!(default.buckets.len(), 32_768);
+    }
+
+    #[test]
+    fn sparse_clone_shrink_covers_survivors_at_every_original_bucket_boundary() {
+        fn check<const DENSE: bool>() {
+            for members in [16, 64, 256] {
+                let mut source: BucketMap<DENSE> =
+                    (0..members as u64).map(|key| (key, key)).collect();
+                let old_buckets = source.buckets.len();
+                let old_bits = old_buckets.trailing_zeros();
+                let survivors: HashSet<_> =
+                    (0..members as u64).filter(|key| key % 7 == 0).collect();
+                source.retain(|key, _| survivors.contains(key));
+                let shrunk = source.clone_for_write();
+                assert!(shrunk.buckets.len() < old_buckets);
+                for boundary in 0..old_buckets {
+                    // A completed fine-bucket prefix, including empty bucket
+                    // boundaries that a particular COUNT need not expose.
+                    let cursor = (boundary as u64).reverse_bits() >> (64 - old_bits);
+                    let mut seen: HashSet<_> = survivors
+                        .iter()
+                        .copied()
+                        .filter(|key| {
+                            let bucket = key & (old_buckets as u64 - 1);
+                            let rank = bucket.reverse_bits() >> (64 - old_bits);
+                            rank < boundary as u64
+                        })
+                        .collect();
+                    finish_resized_scan(&shrunk, cursor, &mut seen);
+                    assert_eq!(seen, survivors, "{old_buckets} buckets at {boundary}");
+                }
+            }
+        }
+        check::<false>();
+        check::<true>();
+    }
+
+    #[test]
+    fn alternating_growth_and_shrink_preserve_stable_member_coverage() {
+        fn check<const DENSE: bool>() {
+            let mut map = BucketMap::<DENSE>::with_capacity_and_hasher(4096, Default::default());
+            // Removing these earlier dense entries moves stable members too.
+            map.extend((10_000..10_032_u64).map(|key| (key, key)));
+            let expected: HashSet<_> = (0..64_u64).map(|key| key * 31).collect();
+            map.extend(expected.iter().map(|key| (*key, *key)));
+            let sizes = [256, 8192, 512, 4096, 128, 2048];
+            let mut cursor = 0;
+            let mut seen = HashSet::new();
+            for step in 0..=8192 {
+                cursor = map.scan(cursor, 1 + step % 3, |key, _| {
+                    seen.insert(*key);
+                });
+                if cursor == 0 {
+                    assert!(expected.is_subset(&seen));
+                    return;
+                }
+                if step < 32 {
+                    map.remove(&(10_000 + step as u64));
+                }
+                map.insert(1_000_000 + step as u64, 0);
+                if step != 0 {
+                    map.remove(&(999_999 + step as u64));
+                }
+                let mut minimum = map.len().max(1).next_power_of_two();
+                if map.len() > BucketMap::<DENSE>::bucket_capacity(minimum) {
+                    minimum *= 2;
+                }
+                map.rehash(sizes[step % sizes.len()].max(minimum));
+            }
+            panic!("bounded table with alternating resizes must finish");
+        }
+        check::<false>();
+        check::<true>();
     }
 
     #[test]

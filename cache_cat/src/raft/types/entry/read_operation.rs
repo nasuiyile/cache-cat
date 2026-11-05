@@ -31,6 +31,7 @@ use crate::protocol::set::sdiff::SDiffParams;
 use crate::protocol::set::sinter::SInterParams;
 use crate::protocol::set::sismember::SIsMemberParams;
 use crate::protocol::set::smembers::SMembersParams;
+use crate::protocol::set::sscan::SScanParams;
 use crate::protocol::set::srandmember::SRandMemberParams;
 use crate::protocol::set::sunion::SUnionParams;
 use crate::protocol::stream::xread::XReadParams;
@@ -98,4 +99,5 @@ pub enum ReadOperation {
     XRead(XReadParams),
     HScan(HScanParams),
     ZScan(ZScanParams),
+    SScan(SScanParams),
 }

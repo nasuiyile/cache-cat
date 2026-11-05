@@ -6,13 +6,13 @@ use crate::raft::network::redis_server::RedisServer;
 use crate::raft::types::core::mocha::cas::{ComputedWrite, MultiReadComputeCommand};
 use crate::raft::types::core::mocha::core::MyValue;
 use crate::raft::types::core::response_value::Value;
+use crate::raft::types::core::structure::scan_set::ScanSet;
 use crate::raft::types::core::value_object::ValueObject;
 use crate::raft::types::entry::request::{Operation, RedisOperation};
 use async_trait::async_trait;
 use bytes::Bytes;
 use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
-use std::collections::HashSet;
 use std::fmt::Display;
 use std::sync::Arc;
 
@@ -108,7 +108,7 @@ impl MultiReadComputeCommand for SDiffStoreReq {
     ) -> (Vec<ComputedWrite>, Value) {
         let mut entries = read_entries.into_iter();
 
-        let mut diffsection: Option<HashSet<Bytes>> = if let Some(entry) = entries.next() {
+        let mut diffsection: Option<ScanSet<Bytes>> = if let Some(entry) = entries.next() {
             if let Some(snapshot) = entry {
                 let ValueObject::Set(data) = &snapshot.value.data else {
                     return (

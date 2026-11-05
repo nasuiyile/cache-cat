@@ -10,6 +10,7 @@ pub mod smembers;
 pub mod spop;
 pub mod srandmember;
 pub mod srem;
+pub mod sscan;
 pub mod sunion;
 pub mod sunionstore;
 
@@ -35,14 +36,14 @@ mod tests {
     use crate::raft::types::core::mocha::core::MyValue;
     use crate::raft::types::core::mocha::read_command::{MultiReadCommand, ReadCommand};
     use crate::raft::types::core::response_value::Value;
+    use crate::raft::types::core::structure::scan_set::ScanSet;
     use crate::raft::types::core::value_object::ValueObject;
     use bytes::Bytes;
     use parking_lot::Mutex;
-    use std::collections::HashSet;
     use std::sync::Arc;
 
     fn set_entry(members: &[&[u8]], capacity: usize, reverse: bool) -> EntrySnapshot<MyValue> {
-        let mut set = HashSet::with_capacity(capacity);
+        let mut set = ScanSet::with_capacity(capacity);
         for index in 0..members.len() {
             let index = if reverse {
                 members.len() - index - 1

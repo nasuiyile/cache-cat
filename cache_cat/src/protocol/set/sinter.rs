@@ -11,7 +11,6 @@ use crate::raft::types::entry::read_operation::ReadOperation;
 use async_trait::async_trait;
 use bytes::Bytes;
 use serde::{Deserialize, Serialize};
-use std::collections::HashSet;
 use std::fmt::Display;
 
 /// Parameters for SINTER command
@@ -82,8 +81,8 @@ impl MultiReadCommand for SInterParams {
     }
 
     fn execute(&self, values: Vec<Option<EntrySnapshot<MyValue>>>) -> Value {
-        // use `HashSet` for quickly remove
-        let mut results: Option<HashSet<_>> = None;
+        // Source members are unique; filtering needs no temporary hash index.
+        let mut results: Option<Vec<Bytes>> = None;
 
         for value in values {
             let Some(value) = value else {
@@ -102,7 +101,7 @@ impl MultiReadCommand for SInterParams {
 
             match results {
                 // init the result set
-                None => results = Some(data.lock().clone()),
+                None => results = Some(data.lock().iter().cloned().collect()),
 
                 // continue for check the value types
                 // and skip the lock
@@ -139,6 +138,20 @@ impl MultiReadCommand for SInterParams {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::raft::types::core::structure::scan_set::ScanSet;
+    use parking_lot::Mutex;
+    use std::sync::Arc;
+
+    fn set_entry(members: &[&'static [u8]]) -> EntrySnapshot<MyValue> {
+        let members: ScanSet<_> = members
+            .iter()
+            .map(|member| Bytes::from_static(member))
+            .collect();
+        EntrySnapshot {
+            value: MyValue::new(ValueObject::Set(Arc::new(Mutex::new(members)))),
+            expire_at: None,
+        }
+    }
 
     #[test]
     fn wrong_type_is_reported_even_when_first_key_is_missing() {
@@ -156,5 +169,53 @@ mod tests {
             params.execute(vec![None, Some(wrong_type)]).encode(),
             b"-WRONGTYPE Operation against a key holding the wrong kind of value\r\n"
         );
+    }
+
+    #[test]
+    fn repeated_keys_filter_binary_members_without_mutating_sources() {
+        let source = set_entry(&[b"", b"\0", b"\xff", b"a"]);
+        let other = set_entry(&[b"\0", b"\xff", b"other"]);
+        let params = SInterParams {
+            keys: vec!["source".into(), "source".into(), "other".into()],
+        };
+        let values = vec![Some(source.clone()), Some(source.clone()), Some(other)];
+        let expected = Value::Set(vec![
+            Value::BulkString(Some(Bytes::from_static(b"\0"))),
+            Value::BulkString(Some(Bytes::from_static(b"\xff"))),
+        ]);
+        for reply in [
+            super::super::canonical_set_reply(params.execute(values.clone())),
+            params.execute_with_clock(values, 42),
+        ] {
+            for proto in [2, 3] {
+                assert_eq!(reply.encode_proto(proto), expected.encode_proto(proto));
+            }
+        }
+        let ValueObject::Set(original) = &source.value.data else {
+            unreachable!();
+        };
+        assert_eq!(original.lock().len(), 4);
+
+        let wrong_type = EntrySnapshot {
+            value: MyValue::new(ValueObject::Int(1)),
+            expire_at: None,
+        };
+        let params = SInterParams {
+            keys: vec!["source".into(), "disjoint".into(), "wrong".into()],
+        };
+        let values = vec![
+            Some(source),
+            Some(set_entry(&[b"disjoint"])),
+            Some(wrong_type),
+        ];
+        for reply in [
+            params.execute(values.clone()),
+            params.execute_with_clock(values, 42),
+        ] {
+            assert_eq!(
+                reply.encode(),
+                Value::from(ProtocolError::WrongType).encode()
+            );
+        }
     }
 }

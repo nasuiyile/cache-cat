@@ -6,13 +6,13 @@ use crate::raft::network::redis_server::RedisServer;
 use crate::raft::types::core::mocha::cas::{ComputedWrite, MultiReadComputeCommand};
 use crate::raft::types::core::mocha::core::MyValue;
 use crate::raft::types::core::response_value::Value;
+use crate::raft::types::core::structure::scan_set::ScanSet;
 use crate::raft::types::core::value_object::ValueObject;
 use crate::raft::types::entry::request::{Operation, RedisOperation};
 use async_trait::async_trait;
 use bytes::Bytes;
 use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
-use std::collections::HashSet;
 use std::fmt::Display;
 use std::sync::Arc;
 
@@ -106,13 +106,13 @@ impl MultiReadComputeCommand for SInterStoreReq {
         read_entries: Vec<Option<EntrySnapshot<MyValue>>>,
         _write_clock: u64,
     ) -> (Vec<ComputedWrite>, Value) {
-        let mut intersection: Option<HashSet<Bytes>> = None;
+        let mut intersection: Option<ScanSet<Bytes>> = None;
 
         for entry in read_entries {
             let Some(snapshot) = entry else {
                 // Redis: 不存在的 key 视为空 Set。
                 // intersection 必然为空。
-                intersection = Some(HashSet::new());
+                intersection = Some(ScanSet::new());
                 continue;
             };
 

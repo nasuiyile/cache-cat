@@ -16,6 +16,7 @@ use crate::raft::types::core::mocha::core::{MyCache, MyValue, Update, UpdateType
 use crate::raft::types::core::mocha::request_handler::do_request;
 use crate::raft::types::core::response_value::Value;
 use crate::raft::types::core::structure::scan_map::ScanMap as HashMap;
+use crate::raft::types::core::structure::scan_set::ScanSet;
 use crate::raft::types::core::value_object::{HashValue, ValueObject};
 use crate::raft::types::entry::read_operation::ReadOperation;
 use crate::raft::types::entry::request::{Operation, RedisOperation, Request};
@@ -94,9 +95,9 @@ fn replica(reverse: bool, restore_values: bool) -> MyCache {
         first_members.reverse();
         hash_fields.reverse();
     }
-    let mut first = HashSet::with_capacity(capacity);
+    let mut first = ScanSet::with_capacity(capacity);
     first.extend(first_members);
-    let mut second = HashSet::with_capacity(capacity);
+    let mut second = ScanSet::with_capacity(capacity);
     second.extend(members().into_iter().skip(8).take(16));
     second.insert(Bytes::from_static(b"extra\xff"));
     let mut hash = HashMap::with_capacity(capacity);

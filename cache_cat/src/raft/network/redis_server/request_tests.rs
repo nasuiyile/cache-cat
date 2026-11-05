@@ -281,3 +281,71 @@ async fn dynamic_error_keeps_resp2_subscribed_pipeline_replies_aligned() {
     assert_eq!(server.broadcast.client_subscription_count(1).await, 0);
     node.app.cluster.shutdown().await.unwrap();
 }
+
+#[tokio::test]
+async fn sscan_keeps_resp2_and_resp3_pipeline_replies_aligned() {
+    use crate::raft::types::raft_types::Node;
+    use std::collections::BTreeMap;
+
+    let (_dir, node, _) = test_node().await;
+    let node_id = node.app.cluster.node_id();
+    node.app
+        .cluster
+        .initialize(BTreeMap::from([(
+            node_id,
+            Node {
+                node_id,
+                endpoint: node.app.config.raft_advertise_endpoint.clone(),
+            },
+        )]))
+        .await
+        .unwrap();
+    timeout(Duration::from_secs(5), async {
+        while !node.app.cluster.is_leader() {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("single-node test cluster must elect itself");
+    let server = Arc::new(
+        RedisServer::new(node.app.clone(), "127.0.0.1:0".into(), &node.app.config).unwrap(),
+    );
+    for proto in [2_u8, 3] {
+        let (socket, handler) = connect(server.clone(), u64::from(proto)).await;
+        let mut client = Framed::new(socket, RespCodec::new());
+        if proto == 3 {
+            client.send(command(&[b"HELLO", b"3"])).await.unwrap();
+            assert!(matches!(next_reply(&mut client).await, Value::Map(_)));
+        }
+        let mut socket = client.into_inner();
+        let key = if proto == 2 {
+            b"scan:resp2".as_slice()
+        } else {
+            b"scan:resp3".as_slice()
+        };
+        let member = b"a\r\n\0\xff";
+        let mut pipeline = command(&[b"SADD", key, member]).encode_proto(2);
+        pipeline.extend_from_slice(
+            &command(&[b"SSCAN", key, b"0", b"COUNT", b"100"]).encode_proto(2),
+        );
+        pipeline.extend_from_slice(PING);
+        socket.write_all(&pipeline).await.unwrap();
+        expect_bytes(&mut socket, b":1\r\n").await;
+        let expected = Value::Array(Some(vec![
+            Value::BulkString(Some(Bytes::from_static(b"0"))),
+            Value::Array(Some(vec![Value::BulkString(Some(Bytes::from_static(
+                member,
+            )))])),
+        ]));
+        expect_bytes(&mut socket, &expected.encode_proto(proto)).await;
+        expect_bytes(&mut socket, b"+PONG\r\n").await;
+
+        socket.write_all(PING).await.unwrap();
+        expect_bytes(&mut socket, b"+PONG\r\n").await;
+        socket.write_all(b"*1\r\n$4\r\nQUIT\r\n").await.unwrap();
+        expect_bytes(&mut socket, b"+OK\r\n").await;
+        expect_closed(&mut socket).await;
+        timeout(WAIT, handler).await.unwrap().unwrap().unwrap();
+    }
+    node.app.cluster.shutdown().await.unwrap();
+}

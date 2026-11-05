@@ -225,11 +225,11 @@ impl ComputeCommand for SPopReq {
                 };
 
                 /*
-                 * HashSet 的迭代顺序不稳定：
+                 * 集合的迭代顺序不稳定：
                  *
-                 * - 不同进程的 RandomState 不同；
+                 * - 快照恢复和集合重建可能改变成员顺序；
                  * - 不同 Raft 节点的迭代顺序可能不同；
-                 * - 直接按 HashSet 迭代顺序随机选择会导致节点分叉。
+                 * - 直接按集合迭代顺序随机选择会导致节点分叉。
                  *
                  * 因此必须先按字节序排序，建立所有节点一致的成员序列。
                  */
@@ -307,6 +307,7 @@ impl ComputeCommand for SPopReq {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::raft::types::core::structure::scan_set::ScanSet;
     use parking_lot::Mutex;
     use std::collections::HashSet;
     use std::sync::Arc;
@@ -335,7 +336,7 @@ mod tests {
 
     #[test]
     fn shared_rng_preserves_spop_sequence_and_remaining_members() {
-        let set: HashSet<Bytes> = ["h", "g", "f", "e", "d", "c", "b", "a"]
+        let set: ScanSet<Bytes> = ["h", "g", "f", "e", "d", "c", "b", "a"]
             .into_iter()
             .map(|value| Bytes::from_static(value.as_bytes()))
             .collect();
@@ -356,6 +357,6 @@ mod tests {
             .into_iter()
             .map(|value| Bytes::from_static(value.as_bytes()))
             .collect();
-        assert_eq!(*set.lock(), expected);
+        assert_eq!(set.lock().iter().cloned().collect::<HashSet<_>>(), expected);
     }
 }

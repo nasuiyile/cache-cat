@@ -112,6 +112,7 @@ impl fmt::Display for Request {
                 ReadOperation::LRange(req) => write!(f, "LRange: {}", req),
                 ReadOperation::HGet(req) => write!(f, "HGet: {}", req),
                 ReadOperation::SMembers(req) => write!(f, "SMembers: {}", req),
+                ReadOperation::SScan(req) => write!(f, "SScan: {}", req),
                 ReadOperation::HMGet(req) => write!(f, "HMGet: {}", req),
                 ReadOperation::GetBit(req) => write!(f, "GetBit: {}", req),
                 ReadOperation::ZRangeByScore(req) => write!(f, "ZRangeByScore: {}", req),

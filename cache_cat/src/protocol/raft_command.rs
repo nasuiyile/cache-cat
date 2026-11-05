@@ -64,6 +64,7 @@ use crate::protocol::set::smembers::SMembersCommand;
 use crate::protocol::set::spop::SPopCommand;
 use crate::protocol::set::srandmember::SRandMemberCommand;
 use crate::protocol::set::srem::SRemCommand;
+use crate::protocol::set::sscan::SScanCommand;
 use crate::protocol::set::sunion::SUnionCommand;
 use crate::protocol::set::sunionstore::SUnionStoreCommand;
 use crate::protocol::stream::xadd::XAddCommand;
@@ -180,6 +181,7 @@ impl RaftCommandFactory {
         factory.register("RENAME", RenameCommand);
         factory.register("RENAMENX", RenameNxCommand);
         factory.register("SMEMBERS", SMembersCommand);
+        factory.register("SSCAN", SScanCommand);
         factory.register("HMGET", HMGetCommand);
         factory.register("HMSET", HMSetCommand);
         // factory.register("EVAL", EvalCommand); // Prohibiting nesting (not prohibited)

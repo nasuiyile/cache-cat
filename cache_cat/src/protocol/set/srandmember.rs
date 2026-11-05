@@ -183,7 +183,7 @@ impl ReadCommand for SRandMemberParams {
             },
         };
 
-        // Sorting borrowed members removes HashSet layout and seed differences
+        // Sorting borrowed members removes differences in local member order
         // without cloning every member. Only returned members are cloned.
         let mut members: Vec<&Bytes> = guard.iter().collect();
         members.sort_unstable();
@@ -292,6 +292,7 @@ impl Command for SRandMemberCommand {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::raft::types::core::structure::scan_set::ScanSet;
     use parking_lot::Mutex;
     use std::collections::HashSet;
     use std::sync::Arc;
@@ -311,7 +312,7 @@ mod tests {
         if reverse {
             members.reverse();
         }
-        let mut set = HashSet::with_capacity(capacity);
+        let mut set = ScanSet::with_capacity(capacity);
         set.extend(members);
         EntrySnapshot {
             value: MyValue::new(ValueObject::Set(Arc::new(Mutex::new(set)))),
@@ -405,7 +406,7 @@ mod tests {
     #[test]
     fn deterministic_sampling_preserves_missing_wrong_type_and_overflow_replies() {
         let empty = EntrySnapshot {
-            value: MyValue::new(ValueObject::Set(Arc::new(Mutex::new(HashSet::new())))),
+            value: MyValue::new(ValueObject::Set(Arc::new(Mutex::new(ScanSet::new())))),
             expire_at: None,
         };
         let wrong_type = EntrySnapshot {

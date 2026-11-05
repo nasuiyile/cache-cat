@@ -6,6 +6,7 @@ use crate::raft::network::redis_server::RedisServer;
 use crate::raft::types::core::mocha::cas::ComputeCommand;
 use crate::raft::types::core::mocha::core::MyValue;
 use crate::raft::types::core::response_value::Value;
+use crate::raft::types::core::structure::scan_set::ScanSet;
 use crate::raft::types::core::value_object::ValueObject;
 use crate::raft::types::entry::base_operation::BaseOperation;
 use crate::raft::types::entry::base_operation::BaseOperation::SAdd;
@@ -14,7 +15,6 @@ use async_trait::async_trait;
 use bytes::Bytes;
 use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
-use std::collections::HashSet;
 use std::fmt;
 use std::sync::Arc;
 
@@ -134,7 +134,7 @@ impl ComputeCommand for SAddReq {
     }
 
     fn init(self) -> (MochaOperation<MyValue>, Value) {
-        let mut set = HashSet::new();
+        let mut set = ScanSet::new();
         for v in self.elements {
             set.insert(v);
         }
