@@ -26,7 +26,7 @@ mod tests {
     fn create_mocha_without_worker() -> (Mocha<String, String>, Receiver<ExpireCommand<String>>) {
         let (expire_tx, expire_rx) = unbounded();
         let mocha = Mocha {
-            map: Arc::new(papaya::HashMap::new()),
+            map: Arc::new(super::super::map::HashMap::new()),
             logic_clock: Arc::new(AtomicU64::new(0)),
             expire_tx,
         };

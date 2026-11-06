@@ -47,6 +47,7 @@ use crate::protocol::key::expire::ExpireCommand;
 use crate::protocol::key::flushall::FlushAllCommand;
 use crate::protocol::key::flushdb::FlushDBCommand;
 use crate::protocol::key::keys::KeysCommand;
+use crate::protocol::key::scan::ScanCommand;
 use crate::protocol::key::persist::PersistCommand;
 use crate::protocol::key::pexpire::PExpireCommand;
 use crate::protocol::key::pttl::PTtlCommand;
@@ -365,6 +366,7 @@ impl CommandFactory {
         factory.register("FLUSHDB", FlushDBCommand);
         factory.register("FLUSHALL", FlushAllCommand);
         factory.register("KEYS", KeysCommand);
+        factory.register("SCAN", ScanCommand);
         factory.register("UNLINK", UnlinkCommand);
         factory.register("DBSIZE", DbsizeCommand);
         factory.register("PFCOUNT", PfcountCommand);

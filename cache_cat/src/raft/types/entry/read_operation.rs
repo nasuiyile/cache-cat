@@ -20,6 +20,7 @@ use crate::protocol::key::dbsize::DbsizeParams;
 use crate::protocol::key::exists::ExistsParams;
 use crate::protocol::key::keys::KeysParams;
 use crate::protocol::key::pttl::PTtlParams;
+use crate::protocol::key::scan::ScanParams;
 use crate::protocol::key::ttl::TtlParams;
 use crate::protocol::key::type_::TypeParams;
 use crate::protocol::list::lindex::LIndexParams;
@@ -100,4 +101,5 @@ pub enum ReadOperation {
     HScan(HScanParams),
     ZScan(ZScanParams),
     SScan(SScanParams),
+    Scan(ScanParams),
 }

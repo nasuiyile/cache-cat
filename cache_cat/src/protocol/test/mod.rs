@@ -15,3 +15,6 @@ mod hscan_snapshot_tests;
 
 #[cfg(test)]
 mod sscan_snapshot_tests;
+
+#[cfg(test)]
+mod scan_snapshot_tests;

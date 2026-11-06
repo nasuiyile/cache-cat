@@ -2,6 +2,9 @@
 /target
 **/target/
 
+# 本地生成的 Mocha 基准结果；测试所需的 CSV 仍可正常跟踪
+/docs/benchmarks/mocha-*.csv
+
 # 这些是编译文件和构建产物
 #Cargo.lock
 *.o

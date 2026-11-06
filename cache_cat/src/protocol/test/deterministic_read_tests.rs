@@ -527,3 +527,123 @@ fn hscan_cursor_from_ordinary_read_is_deterministic_in_exec_and_lua_after_restor
         }
     }
 }
+
+#[test]
+fn scan_cursor_from_ordinary_read_is_deterministic_in_exec_and_lua() {
+    use crate::protocol::key::scan::ScanCommand;
+    use crate::protocol::raft_command::RaftCommand;
+    use crate::raft::types::core::mocha::request_handler::read_request;
+
+    for proto in [2, 3] {
+        let caches = replicas();
+        for (index, cache) in caches.iter().enumerate() {
+            let order: Vec<_> = if index == 0 {
+                (0..128).collect()
+            } else {
+                (0..128).rev().collect()
+            };
+            for item in order {
+                cache.databases[0].mocha.insert_persistent(
+                    format!("scan:input:{item}").into(),
+                    MyValue::new(ValueObject::Int(item)),
+                );
+            }
+        }
+        let arguments: Vec<_> = [
+            "SCAN",
+            "0",
+            "MATCH",
+            "scan:input:*",
+            "TYPE",
+            "string",
+            "COUNT",
+            "1",
+        ]
+        .into_iter()
+        .map(|value| Value::BulkString(Some(value.into())))
+        .collect();
+        let Operation::Read(read) = ScanCommand.raft_request(&arguments).unwrap() else {
+            panic!("SCAN must be a read");
+        };
+        let Value::Array(Some(page)) = read_request(&caches[0], read, 0, 4_000) else {
+            panic!("SCAN must return an array");
+        };
+        let cursor = page[0].string_bytes_clone().unwrap();
+        assert_ne!(cursor.as_ref(), b"0");
+        let mut continuation = arguments;
+        continuation[1] = Value::BulkString(Some(cursor.clone()));
+        let scan = ScanCommand.raft_request(&continuation).unwrap();
+        let mut script = EvalParams::new(
+            Bytes::from_static(br#"
+                local result = redis.call('SCAN', ARGV[1], 'COUNT', 1, 'MATCH', 'scan:input:*', 'TYPE', 'STRING')
+                redis.call('SET', KEYS[1], result[2][1])
+                redis.call('SET', result[2][1], 'written')
+                return result
+            "#),
+            1,
+            vec!["scan:selected".into()],
+            vec![cursor],
+        );
+        script.proto = proto;
+        let operation = Operation::Redis(RedisOperation::RedisExec(ExecParams {
+            operations: vec![
+                QueuedOperation::new(0, scan.clone()),
+                QueuedOperation::new(0, Operation::Redis(RedisOperation::RedisEval(script))),
+                QueuedOperation::new(0, scan),
+            ],
+        }));
+        let log = bincode2::serialize(&Request::new(4_000, 0, operation)).unwrap();
+        let replies: Vec<_> = caches.iter().map(|cache| apply_log(cache, &log)).collect();
+        for (cache, reply) in caches.iter().zip(&replies) {
+            assert_eq!(reply.encode_proto(proto), replies[0].encode_proto(proto));
+            let Value::Array(Some(results)) = reply else {
+                panic!("expected successful EXEC, got {reply:?}");
+            };
+            assert_eq!(results.len(), 3);
+            for result in results {
+                let Value::Array(Some(page)) = result else {
+                    panic!("expected SCAN reply")
+                };
+                assert_eq!(page[0].string_bytes_clone().unwrap().as_ref(), b"0");
+                let Value::Array(Some(keys)) = &page[1] else {
+                    panic!("expected key array")
+                };
+                let keys: Vec<_> = keys
+                    .iter()
+                    .map(|key| key.string_bytes_clone().unwrap())
+                    .collect();
+                assert_eq!(keys.len(), 128);
+                assert!(keys.is_sorted());
+                assert_eq!(keys[0].as_ref(), b"scan:input:0");
+            }
+            assert_eq!(
+                cache
+                    .execute_read(
+                        GetParams {
+                            key: "scan:selected".into()
+                        },
+                        0,
+                        4_000
+                    )
+                    .string_bytes_clone()
+                    .unwrap()
+                    .as_ref(),
+                b"scan:input:0"
+            );
+            assert_eq!(
+                cache
+                    .execute_read(
+                        GetParams {
+                            key: "scan:input:0".into()
+                        },
+                        0,
+                        4_000
+                    )
+                    .string_bytes_clone()
+                    .unwrap()
+                    .as_ref(),
+                b"written"
+            );
+        }
+    }
+}

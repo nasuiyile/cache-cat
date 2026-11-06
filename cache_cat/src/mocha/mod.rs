@@ -1,9 +1,10 @@
+pub(crate) mod map;
 mod test;
 
+use self::map::{Compute, Equivalent, HashMap, LocalGuard, Operation};
 use crate::utils::glob::GlobMatcher;
 use crate::utils::{OptionalU64, now_ms};
 use crossbeam_channel::{Receiver, Sender, bounded, select, unbounded};
-use papaya::{Compute, Equivalent, HashMap, LocalGuard, Operation};
 use serde::{Deserialize, Serialize};
 use std::borrow::Borrow;
 use std::hash::Hash;
@@ -854,6 +855,35 @@ where
     pub fn clear(&self) {
         let mg = self.map.pin();
         mg.clear();
+    }
+
+    /// Scan physical candidates at fixed clocks, before protocol-level MATCH
+    /// and TYPE filtering. No values are cloned and reads never delete here.
+    pub(crate) fn scan(
+        &self,
+        cursor: u64,
+        count: usize,
+        read_clock: Option<u64>,
+        mut visit: impl FnMut(&K, &V),
+    ) -> u64 {
+        let clock = self.now_logical().max(read_clock.unwrap_or(0));
+        self.map.pin().scan(cursor, count, |key, entry| {
+            if entry.expire_at.get().is_none_or(|at| clock < at) {
+                visit(key, &entry.value);
+            }
+        })
+    }
+
+    /// Full traversal for deterministic replicated reads. Ordinary SCAN uses
+    /// the bounded bucket cursor above and never takes this path.
+    pub(crate) fn visit_entries(&self, read_clock: Option<u64>, mut visit: impl FnMut(&K, &V)) {
+        let clock = self.now_logical().max(read_clock.unwrap_or(0));
+        let map = self.map.pin();
+        for (key, entry) in map.iter() {
+            if entry.expire_at.get().is_none_or(|at| clock < at) {
+                visit(key, &entry.value);
+            }
+        }
     }
 
     /// Filter stored values without cloning keys or payloads. Snapshot replay

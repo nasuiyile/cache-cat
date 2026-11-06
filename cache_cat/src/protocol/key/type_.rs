@@ -44,7 +44,7 @@ impl Display for TypeParams {
 }
 
 /// Convert ValueObject enum to Redis type string
-fn value_object_to_type_string(value_obj: &ValueObject) -> &'static str {
+pub(crate) fn value_object_to_type_string(value_obj: &ValueObject) -> &'static str {
     match value_obj {
         ValueObject::String(_) => "string",
         ValueObject::Int(_) => "string",

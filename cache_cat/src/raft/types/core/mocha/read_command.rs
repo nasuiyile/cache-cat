@@ -1,4 +1,4 @@
-use crate::mocha::EntrySnapshot;
+use crate::mocha::{EntrySnapshot, Mocha};
 use crate::raft::types::core::mocha::core::{MyCache, MyValue};
 use crate::raft::types::core::response_value::Value;
 use bytes::Bytes;
@@ -58,6 +58,28 @@ pub trait MultiReadCommand: Send + 'static {
     ) -> Value {
         self.execute(values)
     }
+
+    /// Database-wide reads override this hook to visit their own candidates.
+    /// Fixed-key commands keep the existing lookup path; static dispatch removes
+    /// this hook and the constant mode branch from ordinary command execution.
+    #[inline]
+    fn execute_on_database(
+        &self,
+        cache: &Mocha<Bytes, MyValue>,
+        read_clock: u64,
+        deterministic: bool,
+    ) -> Value {
+        let keys = self.keys();
+        let mut values = Vec::with_capacity(keys.len());
+        for key in keys {
+            values.push(cache.get_with_read_clock(key, Some(read_clock)));
+        }
+        if deterministic {
+            self.execute_with_clock(values, read_clock)
+        } else {
+            self.execute(values)
+        }
+    }
 }
 
 impl MyCache {
@@ -80,15 +102,6 @@ impl MyCache {
             None => return Value::error("Key not found"),
             Some(v) => &v.mocha,
         };
-        let keys = cmd.keys();
-        let mut vec = Vec::with_capacity(keys.len());
-        for key in keys {
-            vec.push(cache.get_with_read_clock(key, Some(read_clock)));
-        }
-        if DETERMINISTIC {
-            cmd.execute_with_clock(vec, read_clock)
-        } else {
-            cmd.execute(vec)
-        }
+        cmd.execute_on_database(cache, read_clock, DETERMINISTIC)
     }
 }

@@ -6,7 +6,17 @@
 
 ### String
 
-Currently implemented via moka. All key-value operations for the following data structures use moka as the foundation.
+All outer key/value operations use `mocha::map::HashMap`; `mocha::Mocha` wraps it with logical clocks and timing-wheel expiration. The local concurrent table in `cache_cat/src/mocha/map` derives from Papaya 0.2.4. Production no longer depends on the Papaya crate; it remains a dev dependency for comparison benchmarks. Atomic publication, incremental resizing and Seize reclamation are retained, supporting serial Raft writes alongside concurrent reads, background expiration and lazy deletion.
+
+`SCAN cursor [MATCH pattern] [COUNT count] [TYPE type]` implements `MultiReadCommand` through a database traversal hook, without materializing a database-wide input-key list or cloning values. A bit-reversed cursor visits logical home hash buckets, completing each selected bucket's quadratic probe sequence and corresponding buckets in migration successors. Growth, shrinking, same-size rehashing and changes to other keys do not omit keys present throughout an iteration. Migration may produce duplicates. COUNT defaults to 10, counts candidates before expiration/MATCH/TYPE filtering, and limits each page to `10 * COUNT` root logical buckets. Collision groups are never split, so replies may exceed COUNT or be empty with a nonzero cursor. Filtering fixes read/write clocks for each call; TYPE shares the existing TYPE command's names, and unknown type names legally match nothing.
+
+SCAN keeps no server-side sessions, extra key index or per-entry fields and adds no locks to ordinary GET/SET. It recomputes candidate hashes and resolves copied entries through current lookups, so it is slower than ordinary linear iteration; migration may require visiting several tables. In one table, each bucket examines at most `min(capacity, 1 + probe_limit)` slots. Frontier discovery and copied-entry lookups retain the underlying lock-free, not wait-free, progress qualification. Snapshots continue to use the original duplicate-free physical iterator and revision/delta protocol, not SCAN.
+
+Lua/EXEC returns all matching keys sorted by bytes with cursor 0, avoiding replica-local hash layout influencing subsequent writes. This costs O(N + M log M); ordinary reads do not sort the database. Clients must restart at cursor 0 after restart, snapshot installation or leader changes. `cache_cat/examples/mocha_map_bench.rs` compares allocation bytes and common operations; `cache_cat/src/mocha/map/README.md` documents the algorithm and inherited code.
+
+Empty databases, including after FLUSHDB, return cursor zero. For allocated tables, a zero sharded count only triggers verification: SCAN visits physical slots and validates copied entries against current state so transient counter values cannot omit stable keys. This exceptional emptiness check visits allocated slots and is not bounded by COUNT; it adds no counter operations to ordinary reads/writes. See `docs/mocha_lock_optimization.md` for validation and benchmark methodology.
+
+Resizing is incremental only, with a default batch of 64 slots. Copy/promotion waiters use shared address-keyed parking queues; each table retains only an atomic pending count instead of a waiter-registry mutex and nested hash maps. No queue lock is touched when no one waits. A compact `parking_lot::Mutex<()>` still serializes successor allocation to prevent competing helpers allocating duplicate large tables; ordinary lookup and point writes outside migration do not take it.
 
 ### Hash
 

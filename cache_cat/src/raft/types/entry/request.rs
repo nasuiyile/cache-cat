@@ -139,6 +139,7 @@ impl fmt::Display for Request {
                 ReadOperation::SUnion(req) => write!(f, "SUnion: {}", req),
                 ReadOperation::SDiff(req) => write!(f, "SDiff: {}", req),
                 ReadOperation::Keys(req) => write!(f, "Keys: {}", req),
+                ReadOperation::Scan(req) => write!(f, "Scan: {}", req),
                 ReadOperation::ZScore(req) => write!(f, "ZScore: {}", req),
                 ReadOperation::ZScan(req) => write!(f, "ZScan: {}", req),
                 ReadOperation::ZCard(req) => write!(f, "ZCard: {}", req),

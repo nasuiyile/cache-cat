@@ -12,6 +12,7 @@ pub mod pexpire;
 pub mod pttl;
 pub mod rename;
 pub mod renamenx;
+pub mod scan;
 pub mod ttl;
 pub mod type_;
 pub mod unlink;

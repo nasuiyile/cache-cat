@@ -35,6 +35,7 @@ use crate::protocol::key::exists::ExistsCommand;
 use crate::protocol::key::expire::ExpireCommand;
 use crate::protocol::key::flushdb::FlushDBCommand;
 use crate::protocol::key::keys::KeysCommand;
+use crate::protocol::key::scan::ScanCommand;
 use crate::protocol::key::persist::PersistCommand;
 use crate::protocol::key::pexpire::PExpireCommand;
 use crate::protocol::key::pttl::PTtlCommand;
@@ -228,6 +229,7 @@ impl RaftCommandFactory {
         factory.register("SUNIONSTORE", SUnionStoreCommand);
         factory.register("SDIFFSTORE", SDiffStoreCommand);
         factory.register("KEYS", KeysCommand);
+        factory.register("SCAN", ScanCommand);
         factory.register("ZSCORE", ZScoreCommand);
         factory.register("ZSCAN", ZScanCommand);
         factory.register("ZCARD", ZCardCommand);

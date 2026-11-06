@@ -84,6 +84,9 @@ fn read_request_inner<const REPLICATED: bool>(
                 my_cache.keys(param, db_number, Some(read_clock))
             }
         }
+        ReadOperation::Scan(param) => {
+            my_cache.execute_multi_read_with_mode::<_, REPLICATED>(param, db_number, read_clock)
+        }
         ReadOperation::ZScore(param) => my_cache.execute_read(param, db_number, read_clock),
         ReadOperation::ZScan(param) => {
             my_cache.execute_read_with_mode::<_, REPLICATED>(param, db_number, read_clock)
