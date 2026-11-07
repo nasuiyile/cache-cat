@@ -174,6 +174,67 @@ fn apply_log(cache: &MyCache, log: &[u8]) -> Value {
 }
 
 #[test]
+fn getrange_in_exec_and_lua_uses_replicated_clock_after_restore() {
+    use crate::protocol::string::getrange::GetRangeParams;
+
+    for proto in [2, 3] {
+        let caches = replicas();
+        for (clock, expected) in [(4_000, b"alu".as_slice()), (10_000, b"".as_slice())] {
+            let mut eval = EvalParams::new(
+                "local value = redis.call('GETRANGE', KEYS[1], 1, -2); redis.call('SET', KEYS[2], value); return {value, redis.call('GETRANGE', KEYS[3], 0, -1)}".into(),
+                3,
+                vec!["input:\0".into(), "saved:range".into(), "input:expired".into()],
+                Vec::new(),
+            );
+            eval.proto = proto;
+            let operations = vec![
+                QueuedOperation::new(
+                    0,
+                    Operation::Read(ReadOperation::GetRange(GetRangeParams {
+                        key: "input:\0".into(),
+                        start: 1,
+                        end: -2,
+                    })),
+                ),
+                QueuedOperation::new(0, Operation::Redis(RedisOperation::RedisEval(eval))),
+            ];
+            let log = bincode2::serialize(&Request::new(
+                clock,
+                0,
+                Operation::Redis(RedisOperation::RedisExec(ExecParams { operations })),
+            ))
+            .unwrap();
+            let expected_value = Value::BulkString(Some(Bytes::copy_from_slice(expected)));
+            let expected_reply = Value::Array(Some(vec![
+                expected_value.clone(),
+                Value::Array(Some(vec![
+                    expected_value.clone(),
+                    Value::BulkString(Some(Bytes::new())),
+                ])),
+            ]));
+            for cache in &caches {
+                assert_eq!(
+                    apply_log(cache, &log).encode_proto(proto),
+                    expected_reply.encode_proto(proto)
+                );
+                assert_eq!(
+                    cache
+                        .execute_read(
+                            GetParams {
+                                key: "saved:range".into(),
+                            },
+                            0,
+                            clock,
+                        )
+                        .encode_proto(proto),
+                    expected_value.encode_proto(proto)
+                );
+            }
+        }
+    }
+}
+
+#[test]
 fn replicated_hstrlen_reads_match_across_rebuilt_replicas() {
     let caches = replicas();
     let operation = Operation::Read(ReadOperation::HStrLen(HStrLenParams {

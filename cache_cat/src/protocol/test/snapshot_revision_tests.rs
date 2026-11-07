@@ -169,6 +169,82 @@ async fn assert_all_scan_cuts(
 }
 
 #[tokio::test]
+async fn getrange_is_read_only_and_lua_snapshots_its_computed_write() {
+    let cache = MyCache::new(2).unwrap();
+    assert_eq!(
+        apply(
+            &cache,
+            command(&["SET", "source", "abcdef", "PX", "100000"]),
+            1,
+            1000,
+            None,
+        )
+        .encode(),
+        b"+OK\r\n"
+    );
+    let original = entry(&cache, 1, "source");
+    let full_before = dump(&cache).await;
+    let mut queue = Vec::new();
+    let mut revision = 17;
+    assert_eq!(
+        apply(
+            &cache,
+            command(&["GETRANGE", "source", "1", "-2"]),
+            1,
+            2000,
+            Some((&mut queue, &mut revision)),
+        )
+        .encode(),
+        b"$4\r\nbcde\r\n"
+    );
+    assert!(queue.is_empty());
+    assert_eq!(revision, 17);
+    assert_eq!(entry(&cache, 1, "source"), original);
+    assert_eq!(
+        cache.databases[1]
+            .mocha
+            .get_entry(b"source".as_slice())
+            .unwrap()
+            .value
+            .version,
+        0
+    );
+
+    let eval = Operation::Redis(RedisOperation::RedisEval(EvalParams::new(
+        "local value = redis.call('GETRANGE', KEYS[1], 1, -2); redis.call('SET', KEYS[2], value); return value".into(),
+        2,
+        vec!["source".into(), "saved".into()],
+        vec![],
+    )));
+    assert_eq!(
+        apply(&cache, eval, 1, 3000, Some((&mut queue, &mut revision)),).encode(),
+        b"$4\r\nbcde\r\n"
+    );
+    assert_eq!(queue.len(), 1);
+    assert_eq!(revision, 18);
+    assert_eq!(queue[0].db_number, 1);
+    assert_eq!(queue[0].write_clock, 3000);
+    let BaseOperation::Set(write) = &queue[0].request else {
+        panic!("Lua must snapshot the computed SET, not replay GETRANGE");
+    };
+    assert_eq!(write.key.as_ref(), b"saved");
+    assert_eq!(write.value.as_ref(), b"bcde");
+    assert_eq!(entry(&cache, 1, "source"), original);
+
+    for full in [full_before, dump(&cache).await] {
+        let restored = restore(&full, &queue, cache.get_write_clock()).await;
+        assert_eq!(entry(&restored, 1, "source"), original);
+        assert_eq!(
+            entry(&restored, 1, "saved"),
+            Some((None, LogicalValue::String("bcde".into())))
+        );
+        for key in ["source", "saved"] {
+            assert_eq!(entry(&restored, 0, key), None);
+        }
+    }
+}
+
+#[tokio::test]
 async fn delete_and_recreate_does_not_replay_old_increment_on_new_value() {
     let cache = MyCache::new(2).unwrap();
     apply(

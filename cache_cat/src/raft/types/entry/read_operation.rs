@@ -37,6 +37,7 @@ use crate::protocol::set::srandmember::SRandMemberParams;
 use crate::protocol::set::sunion::SUnionParams;
 use crate::protocol::stream::xread::XReadParams;
 use crate::protocol::string::get::GetParams;
+use crate::protocol::string::getrange::GetRangeParams;
 use crate::protocol::string::len::StrLenParams;
 use crate::protocol::string::mget::MgetParams;
 use crate::protocol::string::pfcount::PfcountParams;
@@ -102,4 +103,5 @@ pub enum ReadOperation {
     ZScan(ZScanParams),
     SScan(SScanParams),
     Scan(ScanParams),
+    GetRange(GetRangeParams),
 }

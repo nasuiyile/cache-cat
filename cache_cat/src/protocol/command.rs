@@ -104,6 +104,7 @@ use crate::protocol::string::decr::DecrCommand;
 use crate::protocol::string::decrby::DecrByCommand;
 use crate::protocol::string::fadd::PfAddCommand;
 use crate::protocol::string::get::GetCommand;
+use crate::protocol::string::getrange::GetRangeCommand;
 use crate::protocol::string::getset::GetSetCommand;
 use crate::protocol::string::incr::IncrCommand;
 use crate::protocol::string::incrby::IncrByCommand;
@@ -339,6 +340,7 @@ impl CommandFactory {
         factory.register("INFO", InfoCommand);
         // Register data commands
         factory.register("GET", GetCommand);
+        factory.register("GETRANGE", GetRangeCommand);
         factory.register("SET", SetCommand);
         factory.register("DEL", DelCommand);
         factory.register("INCR", IncrCommand);

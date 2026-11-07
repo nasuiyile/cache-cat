@@ -3,6 +3,7 @@ pub mod decr;
 pub mod decrby;
 pub mod fadd;
 pub mod get;
+pub mod getrange;
 pub mod getset;
 pub mod incr;
 pub mod incrby;

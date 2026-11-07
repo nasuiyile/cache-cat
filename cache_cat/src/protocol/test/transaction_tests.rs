@@ -108,6 +108,122 @@ async fn initialize_single_node(node: &RaftNode) {
     .expect("single-node test cluster must elect itself");
 }
 
+#[tokio::test]
+async fn getrange_dispatches_through_raft_reads_exec_and_lua() {
+    let (_dir, node, server, mut client, mut replies) = test_connection().await;
+    initialize_single_node(&node).await;
+    assert_eq!(
+        round_trip(&server, &mut client, &mut replies, &["SET", "k", "hello"])
+            .await
+            .encode(),
+        b"+OK\r\n"
+    );
+    assert_eq!(
+        round_trip(
+            &server,
+            &mut client,
+            &mut replies,
+            &["gEtRaNgE", "k", "1", "3"],
+        )
+        .await
+        .encode(),
+        b"$3\r\nell\r\n"
+    );
+
+    queue_transaction(
+        &server,
+        &mut client,
+        &mut replies,
+        &[
+            &["GETRANGE", "k", "0", "-1"],
+            &["SET", "k", "world"],
+            &["GETRANGE", "k", "-3", "-1"],
+            &["HSET", "hash", "field", "value"],
+            &["GETRANGE", "hash", "0", "-1"],
+            &["SET", "later", "ok"],
+            &["GETRANGE", "later", "0", "-1"],
+            &["GETRANGE", "missing", "0", "-1"],
+        ],
+    )
+    .await;
+    assert_eq!(
+        round_trip(&server, &mut client, &mut replies, &["EXEC"])
+            .await
+            .encode(),
+        b"*8\r\n$5\r\nhello\r\n+OK\r\n$3\r\nrld\r\n:1\r\n-WRONGTYPE Operation against a key holding the wrong kind of value\r\n+OK\r\n$2\r\nok\r\n$0\r\n\r\n"
+    );
+    assert_eq!(
+        round_trip(
+            &server,
+            &mut client,
+            &mut replies,
+            &[
+                "EVAL",
+                "local value = redis.call('GETRANGE', KEYS[1], 1, -2); redis.call('SET', KEYS[2], value); return value",
+                "2",
+                "k",
+                "saved",
+            ],
+        )
+        .await
+        .encode(),
+        b"$3\r\norl\r\n"
+    );
+    assert_eq!(
+        round_trip(&server, &mut client, &mut replies, &["GET", "saved"])
+            .await
+            .encode(),
+        b"$3\r\norl\r\n"
+    );
+    node.app.cluster.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn getrange_parse_errors_abort_exec_before_raft() {
+    let (_dir, node, server, mut client, mut replies) = test_connection().await;
+    for (parts, expected) in [
+        (
+            vec!["GETRANGE", "k", "0"],
+            b"-ERR wrong number of arguments for 'getrange' command\r\n".as_slice(),
+        ),
+        (
+            vec!["GETRANGE", "k", "+1", "2"],
+            b"-ERR value is not an integer or out of range\r\n".as_slice(),
+        ),
+        (
+            vec!["GETRANGE", "k", "0", "9223372036854775808"],
+            b"-ERR value is not an integer or out of range\r\n".as_slice(),
+        ),
+    ] {
+        queue_transaction(
+            &server,
+            &mut client,
+            &mut replies,
+            &[&["SET", "k", "must-not-be-written"]],
+        )
+        .await;
+        assert_eq!(
+            round_trip(&server, &mut client, &mut replies, &parts)
+                .await
+                .encode(),
+            expected
+        );
+        assert_eq!(
+            round_trip(&server, &mut client, &mut replies, &["EXEC"])
+                .await
+                .encode(),
+            b"-EXECABORT Transaction discarded because of previous errors.\r\n"
+        );
+        assert!(
+            node.app.state_machine.data.kvs.databases[0]
+                .mocha
+                .get_entry(&b"k"[..])
+                .is_none()
+        );
+    }
+    node.app.cluster.shutdown().await.unwrap();
+}
+
 async fn queue_transaction(
     server: &RedisServer,
     client: &mut Client,

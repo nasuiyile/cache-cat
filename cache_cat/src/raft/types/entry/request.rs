@@ -105,6 +105,7 @@ impl fmt::Display for Request {
         match &self.operation {
             Operation::Read(op) => match op {
                 ReadOperation::Get(req) => write!(f, "Get: {}", req),
+                ReadOperation::GetRange(req) => write!(f, "GetRange: {}", req),
                 ReadOperation::MGet(req) => write!(f, "MGet: {}", req),
                 ReadOperation::XRead(req) => write!(f, "XRead: {}", req),
                 ReadOperation::ZRange(req) => write!(f, "ZRange: {}", req),
