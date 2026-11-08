@@ -77,6 +77,7 @@ use crate::protocol::string::decrby::DecrByCommand;
 use crate::protocol::string::fadd::PfAddCommand;
 use crate::protocol::string::get::GetCommand;
 use crate::protocol::string::getrange::GetRangeCommand;
+use crate::protocol::json::{get::JsonGetCommand, set::JsonSetCommand};
 use crate::protocol::string::getset::GetSetCommand;
 use crate::protocol::string::incr::IncrCommand;
 use crate::protocol::string::incrby::IncrByCommand;
@@ -156,6 +157,8 @@ impl RaftCommandFactory {
         // Register connection commands
         factory.register("GET", GetCommand);
         factory.register("GETRANGE", GetRangeCommand);
+        factory.register("JSON.GET", JsonGetCommand);
+        factory.register("JSON.SET", JsonSetCommand);
         factory.register("SET", SetCommand);
         factory.register("DEL", DelCommand);
         factory.register("INCR", IncrCommand);

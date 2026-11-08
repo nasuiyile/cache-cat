@@ -1,4 +1,5 @@
 pub mod hll;
+pub mod json;
 mod indexed_skiplist;
 pub mod scan_map;
 pub mod scan_set;

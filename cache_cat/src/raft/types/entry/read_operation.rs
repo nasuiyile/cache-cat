@@ -17,6 +17,7 @@ use crate::protocol::hash::hscan::HScanParams;
 use crate::protocol::hash::hstrlen::HStrLenParams;
 use crate::protocol::hash::hvals::HValsParams;
 use crate::protocol::key::dbsize::DbsizeParams;
+use crate::protocol::json::get::JsonGetParams;
 use crate::protocol::key::exists::ExistsParams;
 use crate::protocol::key::keys::KeysParams;
 use crate::protocol::key::pttl::PTtlParams;
@@ -104,4 +105,5 @@ pub enum ReadOperation {
     SScan(SScanParams),
     Scan(ScanParams),
     GetRange(GetRangeParams),
+    JsonGet(JsonGetParams),
 }

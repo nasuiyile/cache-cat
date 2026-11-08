@@ -1,5 +1,6 @@
 [workspace]
 members = ["benchmark", "cache_cat", "cache_cat_ping"]
+exclude = ["vendor/ijson"]
 resolver = "3"
 
 [profile.release]

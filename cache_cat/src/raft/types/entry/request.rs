@@ -106,6 +106,7 @@ impl fmt::Display for Request {
             Operation::Read(op) => match op {
                 ReadOperation::Get(req) => write!(f, "Get: {}", req),
                 ReadOperation::GetRange(req) => write!(f, "GetRange: {}", req),
+                ReadOperation::JsonGet(req) => write!(f, "JsonGet: {}", req),
                 ReadOperation::MGet(req) => write!(f, "MGet: {}", req),
                 ReadOperation::XRead(req) => write!(f, "XRead: {}", req),
                 ReadOperation::ZRange(req) => write!(f, "ZRange: {}", req),
@@ -159,6 +160,7 @@ impl fmt::Display for Request {
             Operation::Base(op) => match op {
                 BaseOperation::Empty => write!(f, "None"),
                 BaseOperation::Set(req) => write!(f, "Set: {}", req),
+                BaseOperation::JsonSet(req) => write!(f, "JsonSet: {}", req),
                 BaseOperation::XAdd(req) => write!(f, "XAdd: {}", req),
                 BaseOperation::LPush(req) => write!(f, "LPush: {}", req),
                 BaseOperation::Del(req) => write!(f, "DEL: {}", req),

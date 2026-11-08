@@ -1,5 +1,5 @@
 use super::snapshot_handler::{
-    CacheCatSnapshotMeta, dump_cache_to_path, get_snapshot_file_name, load_cache_from_path,
+    CacheCatSnapshotMeta, VERSION, dump_cache_to_path, get_snapshot_file_name, load_cache_from_path,
 };
 use crate::cfg::config::Config;
 use crate::node::parsed_config::ParsedConfig;
@@ -361,9 +361,13 @@ async fn snapshot_readers_reject_invalid_metadata_consistently() {
     let mut bytes = original.clone();
     bytes[0] = b'?';
     invalid.push(("magic", bytes));
-    let mut bytes = original.clone();
-    bytes[4] = 1;
-    invalid.push(("old version", bytes));
+    // Alpha snapshots need not retain historical format numbers. Always test
+    // versions different from the current format, including its two neighbors.
+    for unsupported_version in [VERSION.wrapping_sub(1), VERSION.wrapping_add(1)] {
+        let mut bytes = original.clone();
+        bytes[4] = unsupported_version;
+        invalid.push(("unsupported version", bytes));
+    }
     for bad_offset in [0, 20, u64::MAX, original.len() as u64 + 1] {
         let mut bytes = original.clone();
         bytes[5..13].copy_from_slice(&bad_offset.to_be_bytes());
@@ -401,7 +405,7 @@ async fn snapshot_readers_reject_invalid_metadata_consistently() {
     let bad_path = path.path().join("invalid.bin");
     for (case, bytes) in invalid {
         fs::write(&bad_path, bytes).await.unwrap();
-        let metadata_error = load_meta_from_path(&bad_path).await.unwrap_err();
+        let metadata_error = load_meta_from_path(&bad_path).await.expect_err(case);
         let cache = Arc::new(MyCache::new(1).unwrap());
         cache.databases[0].mocha.insert_persistent(
             Bytes::from_static(b"existing"),
@@ -409,7 +413,7 @@ async fn snapshot_readers_reject_invalid_metadata_consistently() {
         );
         let load_error = load_cache_from_path(cache.clone(), &bad_path)
             .await
-            .unwrap_err();
+            .expect_err(case);
         assert_eq!(load_error.kind(), metadata_error.kind(), "{case}");
         assert!(
             cache.databases[0]

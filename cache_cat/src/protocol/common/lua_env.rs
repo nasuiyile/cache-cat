@@ -3,6 +3,7 @@ use crate::protocol::raft_command::RaftCommandFactory;
 use crate::raft::types::core::mocha::core::{MyCache, Update};
 use crate::raft::types::core::mocha::request_handler::do_request;
 use crate::raft::types::core::response_value::Value;
+use crate::raft::types::entry::{read_operation::ReadOperation, request::Operation};
 use bytes::Bytes;
 use lru::LruCache;
 use mlua::prelude::LuaError;
@@ -137,10 +138,13 @@ impl LuaEnv {
                     //   the current closure call and will not escape to the outside.
                     let update = unsafe { &mut *update_ptr };
 
-                    let operation = self
+                    let mut operation = self
                         .raft_command
                         .parse_request(&vec)
                         .map_err(LuaError::external)?;
+                    if let Operation::Read(ReadOperation::JsonGet(params)) = &mut operation {
+                        params.resp3 = call_resp.load(Ordering::Relaxed) == 3;
+                    }
                     let value = do_request(cache, operation, update, false);
                     if let Value::Error(e) = value {
                         return Err(LuaError::external(e));
@@ -168,8 +172,13 @@ impl LuaEnv {
                     let update = unsafe { &mut *update_ptr };
 
                     match self.raft_command.parse_request(&vec) {
-                        Ok(operation) => do_request(cache, operation, update, false)
-                            .into_lua_value(&self.lua, pcall_resp.load(Ordering::Relaxed)),
+                        Ok(mut operation) => {
+                            if let Operation::Read(ReadOperation::JsonGet(params)) = &mut operation {
+                                params.resp3 = pcall_resp.load(Ordering::Relaxed) == 3;
+                            }
+                            do_request(cache, operation, update, false)
+                                .into_lua_value(&self.lua, pcall_resp.load(Ordering::Relaxed))
+                        }
                         Err(e) => {
                             let err_table = self.lua.create_table()?;
                             err_table.set("err", e.to_string())?;

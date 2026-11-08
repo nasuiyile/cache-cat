@@ -18,3 +18,6 @@ mod sscan_snapshot_tests;
 
 #[cfg(test)]
 mod scan_snapshot_tests;
+
+#[cfg(test)]
+mod json_tests;

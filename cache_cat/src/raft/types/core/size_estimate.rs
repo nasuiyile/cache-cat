@@ -22,7 +22,7 @@ pub fn estimated_bytes_heap_usage(value: &Bytes) -> usize {
 }
 
 /// Arc 指针已包含在值中，此处统计引用计数、T 和对齐填充。
-fn estimate_arc_allocation<T>() -> usize {
+pub(crate) fn estimate_arc_allocation<T>() -> usize {
     Layout::new::<[AtomicUsize; 2]>()
         .extend(Layout::new::<T>())
         .map_or(usize::MAX, |(layout, _)| layout.pad_to_align().size())

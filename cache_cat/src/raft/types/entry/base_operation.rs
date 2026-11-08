@@ -12,6 +12,7 @@ use crate::protocol::hash::hmset::HMSetReq;
 use crate::protocol::hash::hset::HSetReq;
 use crate::protocol::hash::hsetnx::HSetNxReq;
 use crate::protocol::key::del::DelReq;
+use crate::protocol::json::set::JsonSetReq;
 use crate::protocol::key::expire::ExpireReq;
 use crate::protocol::key::flushall::FlushAllReq;
 use crate::protocol::key::flushdb::FlushDBReq;
@@ -107,6 +108,7 @@ pub enum BaseOperation {
     //stream
     XAdd(XAddReq),
     XGroup(XGroupReq),
+    JsonSet(JsonSetReq),
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]

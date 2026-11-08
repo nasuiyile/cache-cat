@@ -56,6 +56,16 @@ Raft 中执行的读取（Lua/EXEC）返回按成员字节排序的全部匹配�
 
 快照按分数、成员顺序仅序列化一次逻辑 `(member, score)`。恢复时逐条验证该顺序。对于编码声明超过 4096 个成员的集合，通过有界缓冲按顺序直接构建层链接、成员跨度和反向链接，并重建成员哈希索引，预期时间为 O(N)。构建保留普通顺序插入的布局：缓冲达到 65 个成员时，将前 32 个形成节点，其余继续作为尾部；完整节点及尾部沿用原来的预留容量，避免恢复后插入或合并增加重新分配。较小集合及未提供长度的编码保留逐项插入路径。初始预分配受限；恢复拒绝重复成员、NaN 分数及不符合分数、成员顺序的编码，正负零视为相同分数。这替换了之前 alpha 版本的 ZSET 编码。MEMORY USAGE 按哈希数组、跳表 arena 和层数组的实际分配估算内存，共享的成员 payload 只计算一次。`cache_cat/examples/zset_bench.rs` 对照原 BTreeSet + HashMap 实现测量查询及写入性能。 `cache_cat/examples/zset_restore_bench.rs` 测量快照解码和恢复后的读写性能。
 
+### JSON
+
+JSON 使用 `Arc<Mutex<JsonDocument>>`，内部直接存放 Redis 官方 `ijson` fork 的紧凑 `IValue`，不常驻第二份 JSON 文本或 `serde_json::Value`。上游版本和本地适配记录在 `vendor/ijson/UPSTREAM.md`。64 位平台的值句柄为 8 字节；短字符串内联，小对象按连续字段保存，同质数值数组使用紧凑元素。长字符串共享池在 JSON 内部同步，普通 Redis 类型不访问该池。
+
+`JSON.GET key [INDENT indent] [NEWLINE newline] [SPACE space] [path ...]` 使用 `ReadCommand`。省略路径时采用 legacy 根路径 `.`；legacy 路径返回首个匹配值，`$` 路径返回匹配数组。多个路径返回以原路径为键的对象；混合 legacy 和 `$` 路径时，各项均为数组。格式化直接序列化借用的节点，不复制整份文档。`NOESCAPE` 为兼容选项，不关闭转义；RESP3 支持 `FORMAT STRING|EXPAND|EXPAND1`。
+
+`JSON.SET key path json [NX|XX]` 使用 `ComputeCommand`，日志保存输入字节和选项，状态机直接解析为紧凑树。只允许在根路径创建新 key；局部更新可创建已有对象的最后一级字段，不自动补齐中间容器。已有 key 的 TTL 在根替换和局部更新后均保留。支持 `FORMAT JSON|STRING|BSON` 和显式的 `FPHA` 数值数组选项，默认不启用有损浮点精度。命令均可用于 EXEC 和 Lua。`TYPE`/`SCAN TYPE` 使用 Redis 的 `ReJSON-RL` 类型名称。
+
+快照编码采用显式类型标签，直接通过 serde/bincode 流式编码树及数值数组，不依赖 `IValue` 的 `deserialize_any`。恢复校验深度、类型和数值，并保留对象字段顺序及数值数组精度。快照 `Start` 期间沿用现有 `snapshot_clone` 隔离：对象和数组会深克隆，长字符串共享；本实现不宣称分块 COW，也不保证大文档频繁更新时的低峰值。`MEMORY USAGE` 统计可达分配，跨 key 共享字符串和全局共享池使其与实际 RSS 存在差异。
+
 ### 其他
 
 已知Redis还支持bitmap，hyperloglog，Geospatial，Streams，Bitfield等。暂未有计划支持。

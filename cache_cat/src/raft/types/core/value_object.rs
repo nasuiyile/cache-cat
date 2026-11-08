@@ -4,6 +4,7 @@ use crate::raft::types::core::size_estimate::{
     estimate_zset_usage, estimated_bytes_heap_usage,
 };
 use crate::raft::types::core::structure::scan_set::ScanSet;
+use crate::raft::types::core::structure::json::JsonDocument;
 use crate::raft::types::core::structure::sorted_set::SortedSet;
 use crate::raft::types::core::structure::stream::RedisStream;
 use crate::raft::types::core::structure::scan_map::ScanMap as HashMap;
@@ -44,6 +45,8 @@ pub enum ValueObject {
     Bloom(Arc<Mutex<BloomObject>>),
     #[serde(with = "mutex_stream_serde")]
     Stream(Arc<RwLock<RedisStream>>),
+    #[serde(with = "mutex_json_serde")]
+    Json(Arc<Mutex<JsonDocument>>),
 }
 
 impl ValueObject {
@@ -59,6 +62,7 @@ impl ValueObject {
             Self::Set(value) => Self::Set(Arc::new(Mutex::new(value.lock().clone()))),
             Self::Bloom(value) => Self::Bloom(Arc::new(Mutex::new(value.lock().clone()))),
             Self::Stream(value) => Self::Stream(Arc::new(RwLock::new(value.read().clone()))),
+            Self::Json(value) => Self::Json(Arc::new(Mutex::new(value.lock().clone()))),
         }
     }
 
@@ -77,6 +81,10 @@ impl ValueObject {
             ValueObject::Bloom(value) => estimate_bloom_usage(value),
             ValueObject::Stream(value) => {
                 value.write().memory_usage_with_samples(samples).total_bytes
+            }
+            ValueObject::Json(value) => {
+                crate::raft::types::core::size_estimate::estimate_arc_allocation::<Mutex<JsonDocument>>()
+                    .saturating_add(value.lock().estimated_heap_usage())
             }
         }
     }
@@ -158,3 +166,5 @@ impl_mutex_serde!(mutex_hashset_serde, ScanSet<Bytes>);
 impl_mutex_serde!(mutex_bloom_serde, BloomObject);
 
 impl_rwlock_serde!(mutex_stream_serde, RedisStream);
+
+impl_mutex_serde!(mutex_json_serde, JsonDocument);

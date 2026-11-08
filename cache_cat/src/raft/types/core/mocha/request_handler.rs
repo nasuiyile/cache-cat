@@ -24,6 +24,7 @@ fn read_request_inner<const REPLICATED: bool>(
         ReadOperation::Exists(param) => my_cache.execute_multi_read(param, db_number, read_clock),
         ReadOperation::Get(param) => my_cache.execute_read(param, db_number, read_clock),
         ReadOperation::GetRange(param) => my_cache.execute_read(param, db_number, read_clock),
+        ReadOperation::JsonGet(param) => my_cache.execute_read(param, db_number, read_clock),
         ReadOperation::LRange(param) => my_cache.execute_read(param, db_number, read_clock),
         ReadOperation::MGet(param) => my_cache.execute_multi_read(param, db_number, read_clock),
         ReadOperation::XRead(param) => my_cache.execute_multi_read(param, db_number, read_clock),
@@ -136,6 +137,7 @@ fn base_request_inner(
             Value::ok()
         }
         BaseOperation::Set(param) => my_cache.set(param, update),
+        BaseOperation::JsonSet(param) => my_cache.execute_compute(param, update),
         BaseOperation::XAdd(mut param) => {
             // Resolve automatic IDs before both initialization and mutation so
             // every Raft replica uses the replicated write clock.

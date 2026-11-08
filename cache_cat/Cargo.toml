@@ -48,6 +48,11 @@ tokio-rustls = "0.26"
 rustls-pemfile = "2.2.0"
 rand = "0.8.5"
 serde_json = "1.0.149"
+ryu = "1.0"
+ijson = { path = "../vendor/ijson" }
+regex = "1"
+half = "2"
+bson = "2.11"
 blart = "0.5.0"
 [dev-dependencies]
 papaya = "0.2.4"
