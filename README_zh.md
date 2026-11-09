@@ -78,8 +78,6 @@ YCSB 吞吐量基准测试结果：
 答：准确的说Raft是将操作日志写入磁盘，Raft并不限定状态机的数据是存放在哪里的，在cacahe-cat中这部分数据是完全存放在内存中的（hashmap和其他数据结构）。如果要进行类比的化，可以将需要持久化的数据比作Redis的AOF日志。作为参考，Zookeeper的整个Znode树以及consul的键值对都是存储在内存中的。ETCD则是会将数据持久化到磁盘。
 对于缓存而言，同步和刷盘操作会带来写操作的延迟提升，相比于相同实现的纯缓存库这是必然的。但对于读取操作无需进行任何额外的磁盘操作。我们认为缓存更关注的是读取延迟而不是写入延迟，并且我们认为这样做是值得的：用略高的写入延迟带来的是完全不会丢弃数据。
 
-This project includes code derived from https://github.com/lichuang/coredb ,  https://github.com/lichuang/rockraft .
-
 licensed under the Apache License 2.0.
 
 

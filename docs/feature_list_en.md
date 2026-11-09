@@ -1,13 +1,14 @@
 # Feature List
 
-## Features to be Supported in the Future
+## Features That May Be Supported in the Future
 
 - Support for io_uring
-- Visual interface (displaying the current running status of cache-cat)
 - Compressed snapshots (when string length exceeds a threshold, e.g., 20 bytes, compress individual strings during snapshot writing)
 - Support for importing Redis snapshot files
 - MTLS
-## Unsupported Features
+- Read/write separation (implemented through custom Redis commands)
+
+## Features That Will Not Be Supported
 
 **Eviction policies**: In any scenario that requires algorithms such as LRU or LFU, you should use Redis or Valkey directly instead of Cache-cat.
 

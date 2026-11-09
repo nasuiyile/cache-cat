@@ -92,9 +92,4 @@ We believe that cache systems care more about read latency than write latency, a
 
 ---
 
-This project includes code derived from:
 
-- https://github.com/lichuang/coredb
-- https://github.com/lichuang/rockraft
-
-Licensed under the Apache License 2.0.
