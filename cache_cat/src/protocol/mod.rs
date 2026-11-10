@@ -13,12 +13,17 @@ pub mod zset;
 pub mod bf;
 pub mod bitmap;
 pub mod common;
+mod modules;
 pub mod pub_sub;
 mod raft_command;
 pub mod sentinel;
 pub mod server;
 pub mod stream;
 mod test;
+
+/// Redis compatibility baseline advertised to clients, independent of the
+/// Cache-cat package version. Only a subset of Redis commands is implemented.
+pub(crate) const REDIS_COMPAT_VERSION: &str = "6.2.0";
 
 /// Special value indicating no expiration (0 means never expire)
 pub const NO_EXPIRATION: u64 = 0;

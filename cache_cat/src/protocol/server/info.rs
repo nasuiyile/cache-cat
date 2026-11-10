@@ -6,7 +6,9 @@
 //! the marker's position in the transaction instead of when MULTI queues it.
 
 use crate::error::{CacheCatError, ProtocolError};
+use crate::protocol::REDIS_COMPAT_VERSION;
 use crate::protocol::command::{Client, Command};
+use crate::protocol::modules;
 use crate::protocol::server::memory::stats::MemoryStats;
 use crate::raft::network::redis_server::RedisServer;
 use crate::raft::types::core::mocha::core::MyCache;
@@ -190,7 +192,7 @@ impl InfoParams {
         if want(InfoSection::Server) {
             let uptime = server.started_at.elapsed().as_secs();
             let mut body = String::new();
-            line(&mut body, "redis_version", env!("CARGO_PKG_VERSION"));
+            line(&mut body, "redis_version", REDIS_COMPAT_VERSION);
             line(&mut body, "redis_mode", "standalone");
             line(&mut body, "os", std::env::consts::OS);
             line(&mut body, "arch_bits", usize::BITS);
@@ -268,9 +270,9 @@ impl InfoParams {
         }
 
         if want(InfoSection::Modules) {
-            let mut body = String::new();
-            line(&mut body, "module_count", 0);
-            context.sections.push((InfoSection::Modules, body));
+            context
+                .sections
+                .push((InfoSection::Modules, modules::info_body()));
         }
 
         if want(InfoSection::Cluster) {

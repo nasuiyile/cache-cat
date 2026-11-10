@@ -1,6 +1,8 @@
 use crate::error::{CacheCatError, ProtocolError};
+use crate::protocol::REDIS_COMPAT_VERSION;
 use crate::protocol::command::{Client, Command};
 use crate::protocol::connection::client::parse_client_name;
+use crate::protocol::modules;
 use crate::raft::network::redis_server::RedisServer;
 use crate::raft::types::core::response_value::Value;
 use async_trait::async_trait;
@@ -187,17 +189,12 @@ impl Command for HelloCommand {
         let bulk = |s: &'static [u8]| Value::BulkString(Some(Bytes::from_static(s)));
         let map_pairs = vec![
             (bulk(b"server"), bulk(b"redis")),
-            (
-                bulk(b"version"),
-                Value::BulkString(Some(Bytes::from_static(
-                    env!("CARGO_PKG_VERSION").as_bytes(),
-                ))),
-            ),
+            (bulk(b"version"), bulk(REDIS_COMPAT_VERSION.as_bytes())),
             (bulk(b"proto"), Value::Integer(current_proto as i64)),
             (bulk(b"id"), Value::Integer(client.id as i64)),
             (bulk(b"mode"), bulk(b"standalone")),
             (bulk(b"role"), bulk(b"master")),
-            (bulk(b"modules"), Value::Array(Some(Vec::new()))),
+            (bulk(b"modules"), modules::hello_modules()),
         ];
 
         Ok(Value::Map(map_pairs))
@@ -252,6 +249,100 @@ mod tests {
             HelloParam::parse(&[bulk(b"HELLO")]).unwrap().proto_version,
             None
         );
+    }
+
+    #[tokio::test]
+    async fn info_and_hello_advertise_builtin_modules() {
+        use crate::protocol::server::info::{InfoCommand, InfoParams};
+
+        let dir = tempfile::tempdir().unwrap();
+        let mut config = Config::default();
+        config.raft.log_path = dir.path().to_str().unwrap().to_owned();
+        config.raft.address = "127.0.0.1:0".into();
+        config.redis.databases = 1;
+        let config = ParsedConfig::from(&config).unwrap();
+        let (shutdown_tx, _) = broadcast::channel(1);
+        let node = RaftNode::create(config, shutdown_tx).await.unwrap();
+        let server =
+            RedisServer::new(node.app.clone(), "127.0.0.1:0".into(), &node.app.config).unwrap();
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let _socket = TcpStream::connect(listener.local_addr().unwrap())
+            .await
+            .unwrap();
+        let (connection, _) = listener.accept().await.unwrap();
+        let mut client = Client::new(1, connection, true);
+
+        let expected_info = concat!(
+            "# Modules\r\n",
+            "module:name=bf,ver=80000,api=1,filters=0,usedby=[],using=[],options=[]\r\n",
+            "module:name=ReJSON,ver=80000,api=1,filters=0,usedby=[],using=[],options=[]\r\n",
+        );
+        for args in [
+            vec![bulk(b"INFO"), bulk(b"MoDuLeS"), bulk(b"modules")],
+            vec![bulk(b"INFO")],
+            vec![bulk(b"INFO"), bulk(b"all")],
+        ] {
+            let value = InfoCommand
+                .execute(&mut client, &args, &server)
+                .await
+                .unwrap();
+            let Value::VerbatimString { data, .. } = value else {
+                panic!("INFO must return text");
+            };
+            let text = std::str::from_utf8(&data).unwrap();
+            assert_eq!(text.matches(expected_info).count(), 1);
+            if args.len() == 3 {
+                assert_eq!(text, expected_info);
+            }
+
+            // EXEC transports this context through Raft before rendering it.
+            let mut params = InfoParams::parse(&args).unwrap();
+            params.context = Some(InfoParams::collect_context(&params.sections, &server).await);
+            let encoded = bincode2::serialize(&params).unwrap();
+            let params: InfoParams = bincode2::deserialize(&encoded).unwrap();
+            let value = params.render_from_cache(&server.app.state_machine.data.kvs);
+            assert!(
+                value
+                    .encode()
+                    .windows(expected_info.len())
+                    .any(|s| s == expected_info.as_bytes())
+            );
+        }
+
+        for (version, proto, module_header) in [
+            (Some(b"2".as_slice()), 2, "*8\r\n"),
+            (Some(b"3".as_slice()), 3, "%4\r\n"),
+            (None, 3, "%4\r\n"),
+        ] {
+            let mut args = vec![bulk(b"HELLO")];
+            if let Some(version) = version {
+                args.push(bulk(version));
+            }
+            let value = HelloCommand
+                .execute(&mut client, &args, &server)
+                .await
+                .unwrap();
+            assert_eq!(client.framed.codec().proto_version(), proto);
+            let Value::Map(pairs) = &value else {
+                panic!("HELLO must return a map");
+            };
+            assert_eq!(pairs.len(), 7);
+            let modules = &pairs
+                .iter()
+                .find(|(key, _)| key.encode() == bulk(b"modules").encode())
+                .unwrap()
+                .1;
+            let expected_modules = format!(
+                "*2\r\n{module_header}$4\r\nname\r\n$2\r\nbf\r\n$3\r\nver\r\n:80000\r\n$4\r\npath\r\n$0\r\n\r\n$4\r\nargs\r\n*0\r\n\
+                 {module_header}$4\r\nname\r\n$6\r\nReJSON\r\n$3\r\nver\r\n:80000\r\n$4\r\npath\r\n$0\r\n\r\n$4\r\nargs\r\n*0\r\n"
+            );
+            assert_eq!(modules.encode_proto(proto), expected_modules.as_bytes());
+            assert_eq!(
+                value.encode_proto(proto)[0],
+                if proto == 2 { b'*' } else { b'%' }
+            );
+        }
+        node.app.cluster.shutdown().await.unwrap();
     }
 
     #[tokio::test]
