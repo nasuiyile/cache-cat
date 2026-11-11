@@ -54,6 +54,7 @@ use crate::protocol::list::lset::LSetCommand;
 use crate::protocol::list::ltrim::LTrimCommand;
 use crate::protocol::list::rpop::RPopCommand;
 use crate::protocol::list::rpush::RPushCommand;
+use crate::protocol::server::module::ModuleCommand;
 use crate::protocol::set::sadd::SAddCommand;
 use crate::protocol::set::scard::SCardCommand;
 use crate::protocol::set::sdiff::SDiffCommand;
@@ -154,6 +155,8 @@ impl RaftCommandFactory {
     /// Initialize the command factory with all supported commands
     pub fn init_lua() -> Self {
         let mut factory = Self::new();
+        // MODULE is known to Redis but is not allowed inside scripts.
+        factory.register("MODULE", ModuleCommand);
         // Register connection commands
         factory.register("GET", GetCommand);
         factory.register("GETRANGE", GetRangeCommand);

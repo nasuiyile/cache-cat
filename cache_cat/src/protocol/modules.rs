@@ -1,4 +1,4 @@
-//! Metadata for built-in Redis-compatible modules, shared by INFO and HELLO.
+//! Metadata for built-in Redis-compatible modules, shared by INFO, HELLO and MODULE LIST.
 
 use crate::raft::types::core::response_value::Value;
 use bytes::Bytes;
@@ -35,7 +35,7 @@ pub(super) fn info_body() -> String {
     body
 }
 
-pub(super) fn hello_modules() -> Value {
+pub(super) fn list() -> Value {
     let bulk = |value: &'static str| Value::BulkString(Some(Bytes::from_static(value.as_bytes())));
     Value::Array(Some(
         BUILTIN_MODULES

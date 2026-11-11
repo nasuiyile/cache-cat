@@ -79,6 +79,7 @@ use crate::protocol::sentinel::core::SentinelCommand;
 use crate::protocol::server::bgsave::BgsaveCommand;
 use crate::protocol::server::info::InfoCommand;
 use crate::protocol::server::memory::core::MemoryCommand;
+use crate::protocol::server::module::ModuleCommand;
 use crate::protocol::server::save::SaveCommand;
 use crate::protocol::server::shutdown::ShutdownCommand;
 use crate::protocol::server::time::TimeCommand;
@@ -339,6 +340,7 @@ impl CommandFactory {
         factory.register("HELLO", HelloCommand);
         factory.register("MEMORY", MemoryCommand::new());
         factory.register("INFO", InfoCommand);
+        factory.register("MODULE", ModuleCommand);
         // Register data commands
         factory.register("GET", GetCommand);
         factory.register("GETRANGE", GetRangeCommand);

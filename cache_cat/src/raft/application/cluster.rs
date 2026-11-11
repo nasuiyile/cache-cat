@@ -2,7 +2,6 @@ use crate::error::{CacheCatError, Error, ProtocolError, StorageError};
 use crate::raft::types::endpoint::Endpoint;
 use crate::raft::types::entry::request::Request;
 use crate::raft::types::raft_types::{ChangeMembers, Node, NodeId, Raft, Snapshot, TypeConfig};
-use openraft::ReadPolicy::LeaseRead;
 use openraft::alias::{JoinErrorOf, VoteOf};
 use openraft::async_runtime::WatchReceiver;
 use openraft::base::BoxStream;
@@ -12,11 +11,12 @@ use openraft::raft::{
     AppendEntriesRequest, AppendEntriesResponse, ClientWriteResponse, SnapshotResponse,
     VoteRequest, VoteResponse, WriteResult,
 };
-use openraft::{Instant, ReadPolicy, WatchChangeHandle};
+use openraft::ReadPolicy::LeaseRead;
+use openraft::{Instant, ReadPolicy};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet, HashMap};
-use std::sync::Arc;
 use std::sync::atomic::AtomicU16;
+use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::RwLock;
 use tracing::{error, info};
@@ -44,7 +44,6 @@ impl NodeState {
 
 pub struct Cluster {
     current_endpoint: Endpoint,
-    watch_change_handle: WatchChangeHandle<TypeConfig>,
     last_master: Arc<AtomicU16>,
     node_state: Arc<RwLock<NodeState>>,
     raft: Raft,
@@ -56,23 +55,13 @@ impl Cluster {
     }
     pub fn new(raft: Raft, current_endpoint: Endpoint) -> Self {
         let election_timeout_max = raft.config().election_timeout_max;
-
         let last_master = Arc::new(AtomicU16::new(*raft.node_id()));
-        let last = last_master.clone();
-        let watch_change_handle = raft.on_cluster_leader_change(move |_old, new| {
-            let last = last.clone();
-            async move {
-                // Assuming that LeaderId has a node_id field and is of type u16
-                last.store(new.0.node_id, std::sync::atomic::Ordering::Relaxed);
-            }
-        });
         Self {
             node_state: Arc::new(RwLock::new(NodeState::new(
                 HashMap::new(),
                 election_timeout_max,
             ))),
             current_endpoint,
-            watch_change_handle,
             last_master,
             raft,
         }

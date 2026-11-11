@@ -194,7 +194,7 @@ impl Command for HelloCommand {
             (bulk(b"id"), Value::Integer(client.id as i64)),
             (bulk(b"mode"), bulk(b"standalone")),
             (bulk(b"role"), bulk(b"master")),
-            (bulk(b"modules"), modules::hello_modules()),
+            (bulk(b"modules"), modules::list()),
         ];
 
         Ok(Value::Map(map_pairs))

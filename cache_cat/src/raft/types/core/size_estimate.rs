@@ -28,33 +28,6 @@ pub(crate) fn estimate_arc_allocation<T>() -> usize {
         .map_or(usize::MAX, |(layout, _)| layout.pad_to_align().size())
 }
 
-/// 按 SwissTable 的装载率推算桶数，加上控制字节和 16 字节控制组。
-/// std 不公开实际布局；删除产生的墓碑可能使 capacity 低于分配的可用槽数。
-pub(crate) fn estimate_hash_table_usage<T>(capacity: usize) -> usize {
-    if capacity == 0 {
-        return 0;
-    }
-    let buckets = if capacity < 4 {
-        4
-    } else if capacity < 8 {
-        8
-    } else {
-        let Some(buckets) = capacity
-            .checked_mul(8)
-            .and_then(|n| n.checked_add(6))
-            .and_then(|n| (n / 7).checked_next_power_of_two())
-        else {
-            return usize::MAX;
-        };
-        buckets
-    };
-    let data = buckets.saturating_mul(size_of::<T>());
-    let padding = (16 - data % 16) % 16;
-    data.saturating_add(padding)
-        .saturating_add(buckets)
-        .saturating_add(16)
-}
-
 /// SAMPLES 0 遍历全部元素；其他值按采样平均值推算总 payload。
 pub(crate) fn sampled_total<I>(values: I, total_elements: usize, samples: usize) -> usize
 where
@@ -213,16 +186,7 @@ mod tests {
         }
     }
 
-    #[test]
-    fn allocation_estimates_handle_alignment_and_overflow() {
-        #[repr(align(64))]
-        struct Aligned;
 
-        assert_eq!(estimate_arc_allocation::<Aligned>(), 64);
-        assert_eq!(estimate_hash_table_usage::<Bytes>(0), 0);
-        assert_eq!(estimate_hash_table_usage::<Bytes>(usize::MAX), usize::MAX);
-        assert!(estimate_hash_table_usage::<Bytes>(14) > estimate_hash_table_usage::<Bytes>(7));
-    }
 
     #[test]
     fn sampling_supports_full_scans_limits_and_saturation() {

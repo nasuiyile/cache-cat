@@ -224,27 +224,6 @@ where
         meta.snapshot_revision,
     )))
 }
-pub async fn dump_operation_queue_to_writer<W>(
-    writer: &mut W,
-    queue: Arc<Mutex<Vec<AtomicRequest>>>,
-) -> Result<(), io::Error>
-where
-    W: AsyncWrite + Unpin + Send,
-{
-    let queue = {
-        let mut guard = queue.lock().await;
-        std::mem::take(&mut *guard)
-    };
-    for request in queue.iter() {
-        let request_bytes = bincode2::serialize(&request)
-            .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
-        writer.write_u64(request_bytes.len() as u64).await?;
-        writer.write_all(&request_bytes).await?;
-    }
-    writer.write_u64(0).await?;
-    Ok(())
-}
-
 async fn write_operation_queue_to_writer<W>(
     writer: &mut W,
     queue: &[AtomicRequest],

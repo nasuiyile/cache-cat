@@ -248,6 +248,186 @@ async fn queue_transaction(
 }
 
 #[tokio::test]
+async fn module_list_matches_hello_in_resp2_and_resp3() {
+    fn field<'a>(reply: &'a Value, name: &str) -> &'a Value {
+        match reply {
+            Value::Map(entries) => entries
+                .iter()
+                .find(|(key, _)| key.as_str_lossy().as_deref() == Some(name))
+                .map(|(_, value)| value),
+            Value::Array(Some(entries)) => entries
+                .chunks_exact(2)
+                .find(|pair| pair[0].as_str_lossy().as_deref() == Some(name))
+                .map(|pair| &pair[1]),
+            _ => None,
+        }
+        .unwrap_or_else(|| panic!("missing {name} in {reply:?}"))
+    }
+
+    // Module metadata is local and remains available without a Raft leader.
+    let (_dir, node, server, mut client, mut replies) = test_connection().await;
+    client.authenticated = false;
+    assert_eq!(
+        round_trip(&server, &mut client, &mut replies, &["MODULE", "LIST"])
+            .await
+            .encode(),
+        b"-NOAUTH Authentication required.\r\n"
+    );
+    client.authenticated = true;
+    for (proto, version) in [(2, "2"), (3, "3")] {
+        let hello = round_trip(&server, &mut client, &mut replies, &["HELLO", version]).await;
+        let reply = round_trip(&server, &mut client, &mut replies, &["mOdUlE", "lIsT"]).await;
+        assert_eq!(
+            reply.encode_proto(proto),
+            field(&hello, "modules").encode_proto(proto)
+        );
+        let Value::Array(Some(modules)) = reply else {
+            panic!("MODULE LIST must return an array");
+        };
+        assert_eq!(modules.len(), 2);
+        for (module, name) in modules.iter().zip(["bf", "ReJSON"]) {
+            if proto == 2 {
+                assert!(matches!(module, Value::Array(Some(fields)) if fields.len() == 8));
+            } else {
+                assert!(matches!(module, Value::Map(fields) if fields.len() == 4));
+            }
+            assert_eq!(field(module, "name").as_str_lossy().as_deref(), Some(name));
+            assert!(matches!(field(module, "ver"), Value::Integer(80000)));
+            assert_eq!(field(module, "path").encode(), b"$0\r\n\r\n");
+            assert_eq!(field(module, "args").encode(), b"*0\r\n");
+        }
+    }
+    node.app.cluster.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn module_list_is_queued_in_exec_and_rejected_in_lua() {
+    let (_dir, node, server, mut client, mut replies) = test_connection().await;
+    initialize_single_node(&node).await;
+    round_trip(&server, &mut client, &mut replies, &["HELLO", "3"]).await;
+    let expected = round_trip(&server, &mut client, &mut replies, &["MODULE", "LIST"]).await;
+    queue_transaction(
+        &server,
+        &mut client,
+        &mut replies,
+        &[&["ECHO", "before"], &["MODULE", "LIST"], &["ECHO", "after"]],
+    )
+    .await;
+    let Value::Array(Some(values)) =
+        round_trip(&server, &mut client, &mut replies, &["EXEC"]).await
+    else {
+        panic!("EXEC must return an array");
+    };
+    assert_eq!(values.len(), 3);
+    assert_eq!(values[0].encode(), b"$6\r\nbefore\r\n");
+    assert_eq!(values[1].encode_proto(3), expected.encode_proto(3));
+    assert_eq!(values[2].encode(), b"$5\r\nafter\r\n");
+    let Value::Array(Some(errors)) = round_trip(
+        &server,
+        &mut client,
+        &mut replies,
+        &[
+            "EVAL",
+            "return {redis.pcall('MODULE'), redis.pcall('MODULE', 'LIST'), redis.pcall('MODULE', 'LIST', 'extra'), redis.pcall('MODULE', 'unknown')}",
+            "0",
+        ],
+    )
+    .await
+    else {
+        panic!("redis.pcall errors must remain individual Lua results");
+    };
+    assert_eq!(errors.len(), 4);
+    assert_eq!(
+        errors[0].encode(),
+        b"-ERR Wrong number of args calling Redis command From Lua script\r\n"
+    );
+    for error in &errors[1..] {
+        assert_eq!(
+            error.encode(),
+            b"-ERR This Redis command is not allowed from scripts\r\n"
+        );
+    }
+    node.app.cluster.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn module_without_subcommand_aborts_exec_without_applying_writes() {
+    let (_dir, node, server, mut client, mut replies) = test_connection().await;
+    queue_transaction(
+        &server,
+        &mut client,
+        &mut replies,
+        &[&["SET", "module-aborted", "value"]],
+    )
+    .await;
+    assert_eq!(
+        round_trip(&server, &mut client, &mut replies, &["MODULE"])
+            .await
+            .encode(),
+        b"-ERR wrong number of arguments for 'module' command\r\n"
+    );
+    assert!(client.transaction_failed);
+    assert_eq!(
+        client.transaction_queue.as_ref().unwrap().operations.len(),
+        1
+    );
+    assert_eq!(
+        round_trip(&server, &mut client, &mut replies, &["EXEC"])
+            .await
+            .encode(),
+        b"-EXECABORT Transaction discarded because of previous errors.\r\n"
+    );
+    assert!(
+        node.app.state_machine.data.kvs.databases[0]
+            .mocha
+            .get_entry(b"module-aborted".as_slice())
+            .is_none()
+    );
+    node.app.cluster.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn module_subcommand_errors_in_exec_do_not_discard_other_commands() {
+    let (_dir, node, server, mut client, mut replies) = test_connection().await;
+    initialize_single_node(&node).await;
+    queue_transaction(
+        &server,
+        &mut client,
+        &mut replies,
+        &[
+            &["SET", "before-module-error", "before"],
+            &["MODULE", "LIST", "extra"],
+            &["MODULE", "unknown"],
+            &["SET", "after-module-error", "after"],
+        ],
+    )
+    .await;
+    assert!(!client.transaction_failed);
+    let Value::Array(Some(values)) =
+        round_trip(&server, &mut client, &mut replies, &["EXEC"]).await
+    else {
+        panic!("MODULE subcommand errors must be individual EXEC replies");
+    };
+    assert_eq!(values.len(), 4);
+    assert_eq!(values[0].encode(), b"+OK\r\n");
+    assert!(matches!(&values[1], Value::Error(error) if error.contains("'LIST'")));
+    assert!(matches!(&values[2], Value::Error(error) if error.contains("'unknown'")));
+    assert_eq!(values[3].encode(), b"+OK\r\n");
+    for (key, expected) in [
+        ("before-module-error", b"$6\r\nbefore\r\n".as_slice()),
+        ("after-module-error", b"$5\r\nafter\r\n".as_slice()),
+    ] {
+        assert_eq!(
+            round_trip(&server, &mut client, &mut replies, &["GET", key])
+                .await
+                .encode(),
+            expected
+        );
+    }
+    node.app.cluster.shutdown().await.unwrap();
+}
+
+#[tokio::test]
 async fn select_in_exec_preserves_command_order_and_final_client_database() {
     let (_dir, node, server, mut client, mut replies) = test_connection().await;
     initialize_single_node(&node).await;
