@@ -121,6 +121,8 @@ Therefore, for this kind of command, the snapshot logic treats it as multiple co
 
 Commands that read several keys and write one key record the computed destination write, rather than rereading source keys during recovery. Multi-key writes record their per-key effects in execution order.
 
+Set values retain their dense member sequence in both full data and computed destination writes. Restoration inserts members in that sequence while rebuilding local hash indexes. CAS replay must preserve the same sequence as live application: subsequent SPOP commands sample by dense index using the recorded write clock. Snapshot cloning and local bucket resizing must not reorder members, and Set filtering must not choose a different resulting order based on local capacity.
+
 `FLUSHDB` and `FLUSHALL` need a revision cutoff. During recovery they remove only values with revisions less than the flush revision. Values written after that flush may already be present in the full snapshot and must survive its replay. This traversal occurs only during snapshot recovery; ordinary flushes still clear the database directly.
 
 ## Local Revisions and Raft

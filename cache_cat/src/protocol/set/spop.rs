@@ -115,8 +115,8 @@ pub struct SPopReq {
 
     /// None 表示没有传 count，响应必须是 BulkString。
     ///
-    /// Some(count) 表示传了 count，响应必须是 Array，
-    /// 即使 count 为 1，也仍然返回数组。
+    /// Some(count) 返回集合响应（RESP2 Array，RESP3 Set），
+    /// 即使 count 为 1，也仍然返回集合响应。
     pub count: Option<u64>,
 }
 
@@ -224,41 +224,19 @@ impl ComputeCommand for SPopReq {
                     }
                 };
 
-                /*
-                 * 集合的迭代顺序不稳定：
-                 *
-                 * - 快照恢复和集合重建可能改变成员顺序；
-                 * - 不同 Raft 节点的迭代顺序可能不同；
-                 * - 直接按集合迭代顺序随机选择会导致节点分叉。
-                 *
-                 * 因此必须先按字节序排序，建立所有节点一致的成员序列。
-                 */
-                let mut candidates: Vec<Bytes> = set_guard.iter().cloned().collect();
-
-                candidates.sort_unstable_by(|left, right| left.as_ref().cmp(right.as_ref()));
-
                 let mut rng = DeterministicRng::for_key(&self.key, write_clock);
-
                 let mut popped = Vec::with_capacity(pop_count);
 
-                /*
-                 * 部分 Fisher-Yates 洗牌。
-                 *
-                 * 每轮从尚未选择的范围中随机挑一个成员，
-                 * swap_remove 后不会重复选择，因此符合 SPOP：
-                 * 每个成员最多返回一次。
-                 */
+                // ScanSet preserves dense member order across replicated writes,
+                // snapshot clones and restoration. Hash buckets may differ by
+                // node, but the same clock selects the same dense index. Sampling
+                // and swap-removing in place takes expected O(pop_count), without
+                // collecting or sorting the entire set, and never repeats a member.
                 for _ in 0..pop_count {
-                    let index = rng.next_index(candidates.len());
-                    let member = candidates.swap_remove(index);
-
-                    let removed = set_guard.remove(&member);
-
-                    /*
-                     * member 来自 set_guard 的快照，正常情况下一定能删除。
-                     */
-                    debug_assert!(removed);
-
+                    let index = rng.next_index(set_guard.len());
+                    let member = set_guard
+                        .swap_remove_index(index)
+                        .expect("sampled index is within the locked set");
                     popped.push(member);
                 }
 
@@ -309,7 +287,6 @@ mod tests {
     use super::*;
     use crate::raft::types::core::structure::scan_set::ScanSet;
     use parking_lot::Mutex;
-    use std::collections::HashSet;
     use std::sync::Arc;
 
     #[test]
@@ -335,7 +312,7 @@ mod tests {
     }
 
     #[test]
-    fn shared_rng_preserves_spop_sequence_and_remaining_members() {
+    fn samples_dense_member_order_and_preserves_ttl() {
         let set: ScanSet<Bytes> = ["h", "g", "f", "e", "d", "c", "b", "a"]
             .into_iter()
             .map(|value| Bytes::from_static(value.as_bytes()))
@@ -351,12 +328,84 @@ mod tests {
         }
         .mutate(entry, 12_345);
 
-        assert_eq!(result.encode(), b"*3\r\n$1\r\nd\r\n$1\r\nh\r\n$1\r\nb\r\n");
-        assert!(matches!(operation, MochaOperation::Insert { .. }));
-        let expected: HashSet<Bytes> = ["a", "c", "e", "f", "g"]
+        assert_eq!(result.encode(), b"*3\r\n$1\r\ne\r\n$1\r\na\r\n$1\r\ng\r\n");
+        assert_eq!(
+            result.encode_proto(3),
+            b"~3\r\n$1\r\ne\r\n$1\r\na\r\n$1\r\ng\r\n"
+        );
+        assert!(matches!(
+            operation,
+            MochaOperation::Insert {
+                expire: crate::mocha::ExpirePolicy::Absolute(100_000),
+                ..
+            }
+        ));
+        let expected: Vec<Bytes> = ["h", "c", "f", "b", "d"]
             .into_iter()
             .map(|value| Bytes::from_static(value.as_bytes()))
             .collect();
-        assert_eq!(set.lock().iter().cloned().collect::<HashSet<_>>(), expected);
+        assert_eq!(set.lock().iter().cloned().collect::<Vec<_>>(), expected);
+    }
+
+    #[test]
+    fn count_forms_preserve_reply_types_and_delete_empty_sets() {
+        for count in [None, Some(0), Some(1), Some(i64::MAX as u64)] {
+            let set = Arc::new(Mutex::new(ScanSet::from([Bytes::from_static(b"member")])));
+            let entry = EntrySnapshot {
+                value: MyValue::new(ValueObject::Set(set.clone())),
+                expire_at: None,
+            };
+            let request = SPopReq {
+                key: Bytes::from_static(b"bag"),
+                count,
+            };
+            let (operation, response) = request.clone().mutate(entry, 123);
+            if count == Some(0) {
+                assert!(matches!(operation, MochaOperation::Abort));
+                assert_eq!(set.lock().len(), 1);
+                assert_eq!(response.encode_proto(2), b"*0\r\n");
+                assert_eq!(response.encode_proto(3), b"~0\r\n");
+            } else {
+                assert!(matches!(operation, MochaOperation::Remove));
+                assert!(set.lock().is_empty());
+                if count.is_none() {
+                    assert_eq!(response.encode_proto(2), b"$6\r\nmember\r\n");
+                    assert_eq!(response.encode_proto(3), b"$6\r\nmember\r\n");
+                } else {
+                    assert_eq!(response.encode_proto(2), b"*1\r\n$6\r\nmember\r\n");
+                    assert_eq!(response.encode_proto(3), b"~1\r\n$6\r\nmember\r\n");
+                }
+            }
+
+            let (operation, missing) = request.init();
+            assert!(matches!(operation, MochaOperation::Abort));
+            if count.is_none() {
+                assert_eq!(missing.encode_proto(2), b"$-1\r\n");
+                assert_eq!(missing.encode_proto(3), b"_\r\n");
+            } else {
+                assert_eq!(missing.encode_proto(2), b"*0\r\n");
+                assert_eq!(missing.encode_proto(3), b"~0\r\n");
+            }
+        }
+    }
+
+    #[test]
+    fn zero_count_still_checks_the_value_type() {
+        let (operation, response) = SPopReq {
+            key: Bytes::from_static(b"bag"),
+            count: Some(0),
+        }
+        .mutate(
+            EntrySnapshot {
+                value: MyValue::new(ValueObject::Int(1)),
+                expire_at: None,
+            },
+            123,
+        );
+        assert!(matches!(operation, MochaOperation::Abort));
+        assert_eq!(
+            response.encode(),
+            Value::from(ProtocolError::WrongType).encode()
+        );
     }
 }

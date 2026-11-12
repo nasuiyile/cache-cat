@@ -204,7 +204,23 @@ impl<K, V, S, const DENSE_BUCKETS: bool> ScanMap<K, V, S, DENSE_BUCKETS> {
     /// Dense maps compact entries and rebuild links once after removals;
     /// sparse maps repair only affected chains. Both paths remain valid if
     /// the predicate or a removed entry's destructor unwinds.
-    pub fn retain<F>(&mut self, mut keep: F)
+    pub fn retain<F>(&mut self, keep: F)
+    where
+        F: FnMut(&K, &mut V) -> bool,
+    {
+        self.retain_inner::<false, F>(keep);
+    }
+
+    /// Retain with the same swap-removal order for every hash seed and capacity.
+    /// Sets persist this dense order so replicated index sampling is stable.
+    pub(super) fn retain_swap_remove<F>(&mut self, keep: F)
+    where
+        F: FnMut(&K, &mut V) -> bool,
+    {
+        self.retain_inner::<true, F>(keep);
+    }
+
+    fn retain_inner<const SWAP_REMOVE: bool, F>(&mut self, mut keep: F)
     where
         F: FnMut(&K, &mut V) -> bool,
     {
@@ -225,8 +241,8 @@ impl<K, V, S, const DENSE_BUCKETS: bool> ScanMap<K, V, S, DENSE_BUCKETS> {
                 if !self.changed {
                     return;
                 }
-                // Vec::retain_mut first restores a compact, valid vector when
-                // unwinding. This guard then restores its cached-hash index.
+                // Both vector removal paths leave dense entries valid before
+                // dropping members. Rebuild their index even during unwinding.
                 self.map.buckets.fill(EMPTY_BUCKET);
                 let mask = self.map.buckets.len() - 1;
                 for (index, entry) in self.map.entries.iter_mut().enumerate() {
@@ -243,12 +259,27 @@ impl<K, V, S, const DENSE_BUCKETS: bool> ScanMap<K, V, S, DENSE_BUCKETS> {
             changed: false,
         };
         let RebuildOnDrop { map, changed } = &mut guard;
-        map.entries.retain_mut(|entry| {
-            let retain = keep(&entry.key, &mut entry.value);
-            // Mark before Vec drops the entry: its destructor may panic.
-            *changed |= !retain;
-            retain
-        });
+        if SWAP_REMOVE {
+            let mut index = 0;
+            while index < map.entries.len() {
+                let entry = &mut map.entries[index];
+                if keep(&entry.key, &mut entry.value) {
+                    index += 1;
+                } else {
+                    // Match the sparse path: inspect the moved tail next.
+                    // Mark before dropping the removed key/value can panic.
+                    *changed = true;
+                    map.entries.swap_remove(index);
+                }
+            }
+        } else {
+            map.entries.retain_mut(|entry| {
+                let retain = keep(&entry.key, &mut entry.value);
+                // Mark before Vec drops the entry: its destructor may panic.
+                *changed |= !retain;
+                retain
+            });
+        }
     }
 
     fn retain_by_removal<F>(&mut self, mut keep: F)
@@ -274,6 +305,21 @@ impl<K, V, S, const DENSE_BUCKETS: bool> ScanMap<K, V, S, DENSE_BUCKETS> {
             self.remove_linked_entry(index, bucket, previous);
             // swap_remove moved an unvisited entry into this index.
         }
+    }
+
+    /// Remove a dense entry, moving the last entry into its index.
+    /// Uses its cached hash and takes expected O(1), without hashing the key.
+    /// Indices are invalidated by removals; out-of-range indices change nothing.
+    pub(crate) fn swap_remove_index(&mut self, index: usize) -> Option<(K, V)> {
+        let hash = self.entries.get(index)?.hash;
+        let bucket = hash as usize & (self.buckets.len() - 1);
+        let mut previous = EMPTY;
+        let mut current = self.buckets[bucket].head;
+        while current != index {
+            previous = current;
+            current = self.entries[current].next;
+        }
+        Some(self.remove_linked_entry(index, bucket, previous))
     }
 
     #[inline]
@@ -778,21 +824,69 @@ mod tests {
     }
 
     #[test]
+    fn indexed_removal_preserves_dense_order_and_repairs_collision_chains() {
+        let mut expected: Vec<_> = (0..128_u64)
+            .map(|key| (((key % 4) << 58) | (key * 1024) | (key % 3), key))
+            .collect();
+        let mut map: PredictableMap = expected.iter().copied().collect();
+        let mut reference: HashMap<_, _> = expected.iter().copied().collect();
+        let allocated = map.allocated_bytes();
+        let mut step = 0;
+        while !expected.is_empty() {
+            assert_eq!(map.swap_remove_index(expected.len()), None);
+            assert_eq!(map.swap_remove_index(usize::MAX), None);
+            let index = match step % 3 {
+                0 => 0,
+                1 => expected.len() - 1,
+                _ => expected.len() / 2,
+            };
+            let removed = expected.swap_remove(index);
+            assert_eq!(map.swap_remove_index(index), Some(removed));
+            reference.remove(&removed.0);
+            assert_eq!(map.allocated_bytes(), allocated);
+            assert_eq!(
+                map.iter()
+                    .map(|(&key, &value)| (key, value))
+                    .collect::<Vec<_>>(),
+                expected
+            );
+            assert_matches(&map, &reference);
+            let mut scanned = HashSet::new();
+            assert_eq!(
+                map.scan(0, usize::MAX, |key, _| {
+                    assert!(scanned.insert(*key));
+                }),
+                0
+            );
+            assert_eq!(scanned, reference.keys().copied().collect());
+            step += 1;
+        }
+        assert_eq!(map.swap_remove_index(0), None);
+        map.insert(7, 9);
+        assert_eq!(map.swap_remove_index(0), Some((7, 9)));
+    }
+
+    #[test]
     fn retain_visits_each_entry_once_and_repairs_collisions_without_allocating() {
-        for capacity in [64, 4096] {
+        for (capacity, swap_remove) in [(64, false), (4096, false), (64, true), (4096, true)] {
             let mut map = PredictableMap::with_capacity_and_hasher(capacity, Default::default());
             map.extend((0..64_u64).map(|key| (((key % 4) << 58) | (key * 1024), key)));
             let mut reference: HashMap<_, _> = map.iter().map(|(&k, &v)| (k, v)).collect();
             let allocated = map.allocated_bytes();
             let mut visited = HashSet::new();
-            map.retain(|key, value| {
+            let keep = |key: &u64, value: &mut u64| {
                 assert!(
                     visited.insert(*key),
                     "moved entries are visited exactly once"
                 );
                 *value += 1;
                 *value % 3 != 0
-            });
+            };
+            if swap_remove {
+                map.retain_swap_remove(keep);
+            } else {
+                map.retain(keep);
+            }
             reference.retain(|_, value| {
                 *value += 1;
                 *value % 3 != 0
@@ -800,7 +894,11 @@ mod tests {
             assert_eq!(visited.len(), 64);
             assert_eq!(map.allocated_bytes(), allocated);
             assert_matches(&map, &reference);
-            map.retain(|_, _| false);
+            if swap_remove {
+                map.retain_swap_remove(|_, _| false);
+            } else {
+                map.retain(|_, _| false);
+            }
             assert_matches(&map, &HashMap::new());
             assert_eq!(map.allocated_bytes(), allocated);
             map.insert(1024, 42);
@@ -810,13 +908,13 @@ mod tests {
 
     #[test]
     fn retain_keeps_bucket_links_valid_when_predicate_panics() {
-        for capacity in [64, 4096] {
+        for (capacity, swap_remove) in [(64, false), (4096, false), (64, true), (4096, true)] {
             let mut map = PredictableMap::with_capacity_and_hasher(capacity, Default::default());
             map.extend((0..64_u64).map(|key| (key * 1024, key)));
             let mut reference: HashMap<_, _> = map.iter().map(|(&k, &v)| (k, v)).collect();
             let mut visited = 0;
             let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                map.retain(|key, value| {
+                let keep = |key: &u64, value: &mut u64| {
                     visited += 1;
                     *value += 1;
                     *reference.get_mut(key).unwrap() = *value;
@@ -827,7 +925,12 @@ mod tests {
                         reference.remove(key);
                         false
                     }
-                });
+                };
+                if swap_remove {
+                    map.retain_swap_remove(keep);
+                } else {
+                    map.retain(keep);
+                }
             }));
             assert!(result.is_err());
             assert_matches(&map, &reference);
@@ -875,7 +978,7 @@ mod tests {
             }
         }
 
-        for capacity in [12, 4096] {
+        for (capacity, swap_remove) in [(12, false), (4096, false), (12, true), (4096, true)] {
             let armed = Rc::new(Cell::new(true));
             let mut map: ScanMap<DropKey, u64, BuildHasherDefault<IdentityHasher>> =
                 ScanMap::with_capacity_and_hasher(capacity, Default::default());
@@ -891,7 +994,7 @@ mod tests {
             let mut reference: HashMap<_, _> = (0..12_u64).map(|id| (id, id)).collect();
             let allocated = map.allocated_bytes();
             let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                map.retain(|key, value| {
+                let keep = |key: &DropKey, value: &mut u64| {
                     let id = key.id / 1024;
                     *value += 100;
                     *reference.get_mut(&id).unwrap() = *value;
@@ -901,7 +1004,12 @@ mod tests {
                         reference.remove(&id);
                         false
                     }
-                });
+                };
+                if swap_remove {
+                    map.retain_swap_remove(keep);
+                } else {
+                    map.retain(keep);
+                }
             }));
             assert!(result.is_err());
             assert_eq!(map.len(), reference.len());

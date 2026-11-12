@@ -11,8 +11,10 @@ use std::hash::{BuildHasher, Hash};
 use std::iter::FusedIterator;
 use std::marker::PhantomData;
 
-/// Snapshot clones preserve member hashes. Sparse clones may shrink buckets,
-/// allowing repeated scan results while preserving coverage of stable members.
+/// Dense member order is part of replicated Set state: insertion appends and
+/// removal swaps in the last member. Clone and serde preserve that order while
+/// local hash seeds and bucket capacities may differ. Sparse clones can shrink
+/// buckets, allowing repeated scan results without skipping stable members.
 pub struct ScanSet<K, S = RandomState>(ScanMap<K, (), S, true>);
 
 impl<K: Clone, S: Clone> Clone for ScanSet<K, S> {
@@ -75,7 +77,13 @@ impl<K, S> ScanSet<K, S> {
     where
         F: FnMut(&K) -> bool,
     {
-        self.0.retain(|member, ()| keep(member));
+        self.0.retain_swap_remove(|member, ()| keep(member));
+    }
+
+    /// Remove a member by its dense index with expected O(1) bucket repair.
+    /// Moves the last member into the removed index, just like member removal.
+    pub(crate) fn swap_remove_index(&mut self, index: usize) -> Option<K> {
+        self.0.swap_remove_index(index).map(|(member, ())| member)
     }
 
     pub fn iter(&self) -> Iter<'_, K> {
@@ -215,8 +223,8 @@ impl<K, S> IntoIterator for ScanSet<K, S> {
     }
 }
 
-// Persist members only, using the same sequence representation as HashSet.
-// Restoring rebuilds the local hash seed and scan layout.
+// The member sequence preserves dense index order without extra metadata.
+// Restoring inserts in that order while rebuilding local hashes and buckets.
 impl<K: Serialize, S> Serialize for ScanSet<K, S> {
     fn serialize<T: Serializer>(&self, serializer: T) -> Result<T::Ok, T::Error> {
         let mut sequence = serializer.serialize_seq(Some(self.len()))?;
@@ -295,6 +303,98 @@ mod tests {
         set.clear();
         assert_eq!(set.capacity(), capacity);
         assert_eq!(set.scan(42, 1, |_| panic!("empty set")), 0);
+    }
+
+    #[test]
+    fn retain_order_is_independent_of_hash_seed_and_bucket_capacity() {
+        for capacity in [4, 4096] {
+            let mut set = ScanSet::with_capacity(capacity);
+            set.extend(['a', 'b', 'c', 'd']);
+            set.retain(|member| *member != 'a');
+            assert_eq!(set.into_iter().collect::<Vec<_>>(), ['d', 'b', 'c']);
+        }
+
+        let mut replicas: Vec<_> = [0, 64, 4096]
+            .into_iter()
+            .enumerate()
+            .map(|(replica, capacity)| {
+                let seed = replica as u64;
+                let mut set = ScanSet::with_capacity_and_hasher(
+                    capacity,
+                    RandomState::with_seeds(seed, seed + 1, seed + 2, seed + 3),
+                );
+                set.extend(0..64_u64);
+                set
+            })
+            .collect();
+        let mut members: HashSet<_> = (0..64_u64).collect();
+        for divisor in [2, 3, 5, 7] {
+            members.retain(|member| member % divisor != 0);
+            let mut expected_order = None;
+            let mut expected_visits = None;
+            for set in &mut replicas {
+                let allocated = set.allocated_bytes();
+                let mut visits = Vec::new();
+                set.retain(|member| {
+                    visits.push(*member);
+                    member % divisor != 0
+                });
+                assert_eq!(
+                    visits.iter().copied().collect::<HashSet<_>>().len(),
+                    visits.len()
+                );
+                assert_eq!(set.allocated_bytes(), allocated);
+                assert_eq!(set.iter().copied().collect::<HashSet<_>>(), members);
+                let order = set.iter().copied().collect::<Vec<_>>();
+                if let Some(expected) = &expected_order {
+                    assert_eq!(&order, expected);
+                    assert_eq!(&visits, expected_visits.as_ref().unwrap());
+                } else {
+                    expected_order = Some(order);
+                    expected_visits = Some(visits);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn clone_and_serde_preserve_dense_order_for_later_indexed_removals() {
+        let mut original = ScanSet::with_capacity(4096);
+        original.extend(0..128_u64);
+        for member in (0..96).step_by(2) {
+            assert!(original.remove(&member));
+        }
+        let mut cloned = original.clone();
+        assert!(cloned.allocated_bytes() < original.allocated_bytes());
+        let encoded = bincode2::serialize(&original).unwrap();
+        let mut restored: ScanSet<u64> = bincode2::deserialize(&encoded).unwrap();
+        let order = original.iter().copied().collect::<Vec<_>>();
+        assert_eq!(cloned.iter().copied().collect::<Vec<_>>(), order);
+        assert_eq!(restored.iter().copied().collect::<Vec<_>>(), order);
+
+        for set in [&mut original, &mut cloned, &mut restored] {
+            assert!(!set.insert(127));
+            assert!(set.insert(200));
+            assert!(!set.remove(&999));
+            set.retain(|member| member % 3 != 0);
+        }
+        let mut step = 0;
+        while !original.is_empty() {
+            let order = original.iter().copied().collect::<Vec<_>>();
+            assert_eq!(cloned.iter().copied().collect::<Vec<_>>(), order);
+            assert_eq!(restored.iter().copied().collect::<Vec<_>>(), order);
+            let index = (step * 17 + 3) % original.len();
+            let removed = original.swap_remove_index(index);
+            assert_eq!(cloned.swap_remove_index(index), removed);
+            assert_eq!(restored.swap_remove_index(index), removed);
+            step += 1;
+        }
+        for set in [&mut original, &mut cloned, &mut restored] {
+            assert_eq!(set.swap_remove_index(0), None);
+            assert!(set.is_empty());
+            assert!(set.insert(300));
+            assert_eq!(set.swap_remove_index(0), Some(300));
+        }
     }
 
     #[test]
