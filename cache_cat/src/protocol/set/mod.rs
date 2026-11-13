@@ -77,10 +77,9 @@ mod tests {
     }
 
     #[test]
-    fn clocked_set_reads_are_identical_across_hash_table_layouts() {
+    fn clocked_set_enumeration_uses_dense_order_and_algebra_keeps_canonical_order() {
         let first: &[&[u8]] = &[b"\xff", b"a", b"a\0", b"\x80", b"\0", b""];
         let second: &[&[u8]] = &[b"a", b"\x80", b"extra"];
-        let expected_members = set_reply(&[b"", b"\0", b"a", b"a\0", b"\x80", b"\xff"]);
         let expected_multi = [
             set_reply(&[b"a", b"\x80"]),
             set_reply(&[b"", b"\0", b"a", b"a\0", b"extra", b"\x80", b"\xff"]),
@@ -91,15 +90,31 @@ mod tests {
         };
         let commands = multi_commands();
         for (capacity, reverse) in [(0, false), (32, true), (1024, false)] {
+            // Different insertion histories may have different member order.
+            // Each history is preserved even when decoded with a new hash seed.
+            let expected_order = if reverse {
+                first.iter().copied().rev().collect::<Vec<_>>()
+            } else {
+                first.to_vec()
+            };
+            let expected_members = set_reply(&expected_order);
             let first = set_entry(first, capacity, reverse);
             let second = set_entry(second, capacity + 16, !reverse);
             for clock in [0, 123_456] {
-                let reply = members.execute_with_clock(Some(first.clone()), clock);
-                for proto in [2, 3] {
-                    assert_eq!(
-                        reply.encode_proto(proto),
-                        expected_members.encode_proto(proto)
-                    );
+                let restored =
+                    bincode2::deserialize(&bincode2::serialize(&first).unwrap()).unwrap();
+                for value in [first.clone(), restored] {
+                    for reply in [
+                        members.execute(Some(value.clone())),
+                        members.execute_with_clock(Some(value), clock),
+                    ] {
+                        for proto in [2, 3] {
+                            assert_eq!(
+                                reply.encode_proto(proto),
+                                expected_members.encode_proto(proto)
+                            );
+                        }
+                    }
                 }
                 for (command, expected) in commands.iter().zip(&expected_multi) {
                     let reply = command

@@ -101,6 +101,16 @@ impl<K, V, S, const DENSE_BUCKETS: bool> ScanMap<K, V, S, DENSE_BUCKETS> {
         self.entries.is_empty()
     }
 
+    /// Read a dense entry in O(1), independently of the local hash buckets.
+    /// Insertions append, updates keep their index and removals swap in the tail.
+    /// Clone, rehash and serde preserve this sequence. Replicated callers must
+    /// also preserve it when filtering (the generic retain order is unspecified).
+    #[inline]
+    pub(crate) fn get_index(&self, index: usize) -> Option<(&K, &V)> {
+        self.entries
+            .get(index)
+            .map(|entry| (&entry.key, &entry.value))
+    }
     /// Number of entries that fit without reallocating either backing array.
     pub fn capacity(&self) -> usize {
         Self::bucket_capacity(self.buckets.len()).min(self.entries.capacity())

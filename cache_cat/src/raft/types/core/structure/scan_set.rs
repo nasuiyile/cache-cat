@@ -52,6 +52,11 @@ impl<K, S> ScanSet<K, S> {
         self.0.is_empty()
     }
 
+    /// Read a member by its replicated dense index without changing its order.
+    #[inline]
+    pub(crate) fn get_index(&self, index: usize) -> Option<&K> {
+        self.0.get_index(index).map(|(member, ())| member)
+    }
     pub fn capacity(&self) -> usize {
         self.0.capacity()
     }

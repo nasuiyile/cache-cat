@@ -8,17 +8,17 @@ use crate::mocha::EntrySnapshot;
 use crate::protocol::command::{Client, Command};
 use crate::protocol::option_eq;
 use crate::protocol::raft_command::{RaftCommand, ReadRaftCommand};
-use crate::protocol::set::random::DeterministicRng;
+use crate::protocol::set::random::{DeterministicRng, sample_unique_indices};
 use crate::raft::network::redis_server::RedisServer;
 use crate::raft::types::core::mocha::core::MyValue;
 use crate::raft::types::core::mocha::read_command::ReadCommand;
 use crate::raft::types::core::response_value::Value;
+use crate::raft::types::core::structure::scan_map::ScanMap;
 use crate::raft::types::core::value_object::{HashValue, ValueObject};
 use crate::raft::types::entry::read_operation::ReadOperation;
 use async_trait::async_trait;
 use bytes::Bytes;
 use rand::Rng;
-use rand::seq::IteratorRandom;
 use serde::{Deserialize, Serialize};
 use std::fmt::{Display, Formatter};
 
@@ -60,9 +60,8 @@ impl ReadCommand for HRandFieldParams {
             return self.empty_result();
         }
 
-        let entries: Vec<(&Bytes, &HashValue)> = guard.iter().collect();
         let mut rng = rand::thread_rng();
-        self.sample(entries, &mut rng)
+        self.sample(&guard, |bound| rng.gen_range(0..bound))
     }
 
     fn execute_with_clock(&self, value: Option<EntrySnapshot<MyValue>>, read_clock: u64) -> Value {
@@ -77,13 +76,10 @@ impl ReadCommand for HRandFieldParams {
             return self.empty_result();
         }
 
-        // HashMap iteration order and hash seeds can differ between replicas.
-        // Sorting the borrowed entries makes the logical-clock seeded sample
-        // independent of those local details while avoiding value cloning.
-        let mut entries: Vec<(&Bytes, &HashValue)> = guard.iter().collect();
-        entries.sort_unstable_by(|(left, _), (right, _)| left.cmp(right));
+        // Replicas preserve dense field order through writes and snapshots.
+        // Local hash seeds and bucket capacities cannot change index sampling.
         let mut rng = DeterministicRng::for_key(&self.key, read_clock);
-        self.sample_deterministic(entries, &mut rng)
+        self.sample(&guard, |bound| rng.next_index(bound))
     }
 }
 
@@ -95,57 +91,20 @@ impl HRandFieldParams {
         }
     }
 
-    fn sample<R: Rng + ?Sized>(&self, entries: Vec<(&Bytes, &HashValue)>, rng: &mut R) -> Value {
-        match self.count {
-            None => entries
-                .iter()
-                .choose(rng)
-                .map(|(field, _)| Value::BulkString(Some((*field).clone())))
-                .unwrap_or(Value::BulkString(None)),
-            Some(0) => Value::Array(Some(Vec::new())),
-            Some(count) if count > 0 => {
-                let take_count = (count as u64).min(entries.len() as u64) as usize;
-                let selected = entries.iter().choose_multiple(rng, take_count);
-                self.array_from_entries(selected)
-            }
-            Some(count) => {
-                let requested = match count
-                    .checked_abs()
-                    .and_then(|count| usize::try_from(count).ok())
-                {
-                    Some(count) => count,
-                    None => return Self::count_out_of_range(),
-                };
-                let mut result = Vec::new();
-                let response_len = match self.response_len(requested) {
-                    Some(length) => length,
-                    None => return Self::count_too_large(),
-                };
-                if result.try_reserve(response_len).is_err() {
-                    return Self::count_too_large();
-                }
-                for _ in 0..requested {
-                    let index = rng.gen_range(0..entries.len());
-                    self.push_entry(&mut result, entries[index]);
-                }
-                Value::Array(Some(result))
-            }
-        }
-    }
-
-    fn sample_deterministic(
-        &self,
-        mut entries: Vec<(&Bytes, &HashValue)>,
-        rng: &mut DeterministicRng,
-    ) -> Value {
+    fn sample<F>(&self, hash: &ScanMap<Bytes, HashValue>, mut next_index: F) -> Value
+    where
+        F: FnMut(usize) -> usize,
+    {
         match self.count {
             None => {
-                let index = rng.next_index(entries.len());
-                Value::BulkString(Some(entries[index].0.clone()))
+                let (field, _) = hash
+                    .get_index(next_index(hash.len()))
+                    .expect("sampled field index is valid");
+                Value::BulkString(Some(field.clone()))
             }
             Some(0) => Value::Array(Some(Vec::new())),
             Some(count) if count > 0 => {
-                let take_count = (count as u64).min(entries.len() as u64) as usize;
+                let take_count = (count as u64).min(hash.len() as u64) as usize;
                 let mut result = Vec::new();
                 let response_len = match self.response_len(take_count) {
                     Some(length) => length,
@@ -154,10 +113,15 @@ impl HRandFieldParams {
                 if result.try_reserve(response_len).is_err() {
                     return Self::count_too_large();
                 }
-                for _ in 0..take_count {
-                    let index = rng.next_index(entries.len());
-                    let entry = entries.swap_remove(index);
-                    self.push_entry(&mut result, entry);
+                if sample_unique_indices(hash.len(), take_count, &mut next_index, |index| {
+                    self.push_entry(
+                        &mut result,
+                        hash.get_index(index).expect("sampled field index is valid"),
+                    );
+                })
+                .is_err()
+                {
+                    return Self::count_too_large();
                 }
                 Value::Array(Some(result))
             }
@@ -178,31 +142,15 @@ impl HRandFieldParams {
                     return Self::count_too_large();
                 }
                 for _ in 0..requested {
-                    let index = rng.next_index(entries.len());
-                    self.push_entry(&mut result, entries[index]);
+                    let index = next_index(hash.len());
+                    self.push_entry(
+                        &mut result,
+                        hash.get_index(index).expect("sampled field index is valid"),
+                    );
                 }
                 Value::Array(Some(result))
             }
         }
-    }
-
-    fn array_from_entries<'a, I>(&self, entries: I) -> Value
-    where
-        I: IntoIterator<Item = &'a (&'a Bytes, &'a HashValue)>,
-    {
-        let selected: Vec<_> = entries.into_iter().copied().collect();
-        let mut result = Vec::new();
-        let response_len = match self.response_len(selected.len()) {
-            Some(length) => length,
-            None => return Self::count_too_large(),
-        };
-        if result.try_reserve(response_len).is_err() {
-            return Self::count_too_large();
-        }
-        for entry in selected {
-            self.push_entry(&mut result, entry);
-        }
-        Value::Array(Some(result))
     }
 
     fn push_entry(&self, result: &mut Vec<Value>, (field, value): (&Bytes, &HashValue)) {
@@ -314,7 +262,7 @@ mod tests {
     use std::collections::HashSet;
     use std::sync::Arc;
 
-    fn snapshot(reverse: bool, capacity: usize) -> EntrySnapshot<MyValue> {
+    fn snapshot(seed: u64, capacity: usize) -> EntrySnapshot<MyValue> {
         let fields = [
             (
                 Bytes::from_static(b""),
@@ -326,13 +274,12 @@ mod tests {
                 HashValue::Str(Bytes::from_static(b"v\0\xff")),
             ),
         ];
-        let mut hash = HashMap::with_capacity(capacity);
-        let indexes = if reverse {
-            vec![2, 1, 0]
-        } else {
-            vec![0, 1, 2]
-        };
-        for index in indexes {
+        let mut hash = HashMap::with_capacity_and_hasher(
+            capacity,
+            ahash::RandomState::with_seeds(seed, 2, 3, 4),
+        );
+        // Keep the replicated dense sequence identical and deliberately unsorted.
+        for index in [2, 0, 1] {
             let (field, value) = &fields[index];
             hash.insert(field.clone(), value.clone());
         }
@@ -357,28 +304,46 @@ mod tests {
         values
     }
 
+    fn encoded_hash(entry: &EntrySnapshot<MyValue>) -> Vec<u8> {
+        let ValueObject::Hash(hash) = &entry.value.data else {
+            panic!("expected hash");
+        };
+        bincode2::serialize(&*hash.lock()).unwrap()
+    }
+
     #[test]
-    fn deterministic_sampling_ignores_hash_layout_and_preserves_values() {
-        let left = snapshot(false, 0);
-        let right = snapshot(true, 128);
+    fn deterministic_sampling_preserves_dense_order_across_hash_layouts_and_restore() {
+        let left = snapshot(10, 0);
+        let right = snapshot(20, 128);
+        let before = encoded_hash(&left);
+        let restored: HashMap<Bytes, HashValue> = bincode2::deserialize(&before).unwrap();
+        let restored = EntrySnapshot {
+            value: MyValue::new(ValueObject::Hash(Arc::new(Mutex::new(restored)))),
+            expire_at: left.expire_at,
+        };
         for (count, with_values) in [
             (None, false),
             (Some(0), false),
+            (Some(1), false),
+            (Some(1), true),
             (Some(2), false),
+            (Some(2), true),
             (Some(100), true),
             (Some(-20), false),
             (Some(-20), true),
         ] {
             let command = params(count, with_values);
-            assert_eq!(
-                command
-                    .execute_with_clock(Some(left.clone()), 12_345)
-                    .encode(),
-                command
-                    .execute_with_clock(Some(right.clone()), 12_345)
-                    .encode(),
-                "different response for count {count:?}, with_values {with_values}"
-            );
+            for replica in [&right, &restored] {
+                assert_eq!(
+                    command
+                        .execute_with_clock(Some(left.clone()), 12_345)
+                        .encode(),
+                    command
+                        .execute_with_clock(Some((*replica).clone()), 12_345)
+                        .encode(),
+                    "different response for count {count:?}, with_values {with_values}"
+                );
+            }
         }
 
         let result = array(params(Some(2), true).execute_with_clock(Some(left.clone()), 42));
@@ -400,13 +365,53 @@ mod tests {
             };
             assert_eq!(fields.get(field), Some(value));
         }
+        assert_eq!(encoded_hash(&left), before);
+        assert_eq!(encoded_hash(&right), before);
+        assert_eq!(encoded_hash(&restored), before);
         assert_eq!(left.expire_at, Some(100_000));
         assert_eq!(left.value.version, 0);
     }
 
     #[test]
+    fn indexed_sampling_uses_dense_fields_and_never_modifies_the_hash() {
+        let entry = snapshot(10, 128);
+        let before = encoded_hash(&entry);
+        let ValueObject::Hash(hash) = &entry.value.data else {
+            panic!("expected hash");
+        };
+        {
+            let guard = hash.lock();
+            assert_eq!(
+                params(None, false).sample(&guard, |_| 0).encode(),
+                b"$7\r\nbinary\0\r\n"
+            );
+            let mut index = 0;
+            let repeated = params(Some(-3), true).sample(&guard, |bound| {
+                let selected = index % bound;
+                index += 1;
+                selected
+            });
+            let expected = b"*6\r\n$7\r\nbinary\0\r\n$3\r\nv\0\xff\r\n$0\r\n\r\n$4\r\nzero\r\n$1\r\na\r\n$2\r\n-4\r\n";
+            assert_eq!(repeated.encode(), expected);
+            let all = params(Some(i64::MAX), true).sample(&guard, |_| {
+                panic!("returning all fields needs no random draw")
+            });
+            assert_eq!(all.encode(), expected);
+        }
+        for command in [
+            params(None, false),
+            params(Some(2), true),
+            params(Some(-20), true),
+        ] {
+            command.execute(Some(entry.clone()));
+            command.execute_with_clock(Some(entry.clone()), 42);
+        }
+        assert_eq!(encoded_hash(&entry), before);
+    }
+
+    #[test]
     fn count_sign_and_missing_semantics_match_redis() {
-        let entry = snapshot(false, 0);
+        let entry = snapshot(10, 0);
         let fields = [
             Bytes::from_static(b""),
             Bytes::from_static(b"a"),
@@ -415,41 +420,68 @@ mod tests {
         .into_iter()
         .collect::<HashSet<_>>();
 
-        let single = params(None, false).execute_with_clock(Some(entry.clone()), 42);
-        let Value::BulkString(Some(field)) = single else {
-            panic!("HRANDFIELD without count must return one field")
-        };
-        assert!(fields.contains(&field));
+        for deterministic in [false, true] {
+            let execute = |command: HRandFieldParams, value| {
+                if deterministic {
+                    command.execute_with_clock(value, 42)
+                } else {
+                    command.execute(value)
+                }
+            };
+            let single = execute(params(None, false), Some(entry.clone()));
+            let Value::BulkString(Some(field)) = single else {
+                panic!("HRANDFIELD without count must return one field")
+            };
+            assert!(fields.contains(&field));
 
-        assert!(
-            array(params(Some(0), false).execute_with_clock(Some(entry.clone()), 42)).is_empty()
-        );
-        let unique = array(params(Some(2), false).execute_with_clock(Some(entry.clone()), 42));
-        assert_eq!(unique.len(), 2);
-        assert_eq!(
-            unique
-                .iter()
-                .map(Value::encode)
-                .collect::<HashSet<_>>()
-                .len(),
-            2
-        );
+            assert!(array(execute(params(Some(0), false), Some(entry.clone()))).is_empty());
+            let unique = array(execute(params(Some(2), false), Some(entry.clone())));
+            assert_eq!(unique.len(), 2);
+            assert_eq!(
+                unique
+                    .iter()
+                    .map(Value::encode)
+                    .collect::<HashSet<_>>()
+                    .len(),
+                2
+            );
 
-        let repeated = array(params(Some(-20), false).execute_with_clock(Some(entry.clone()), 42));
-        assert_eq!(repeated.len(), 20);
-        assert!(repeated.iter().all(|field| match field {
-            Value::BulkString(Some(field)) => fields.contains(field),
-            _ => false,
-        }));
+            let repeated = array(execute(params(Some(-20), false), Some(entry.clone())));
+            assert_eq!(repeated.len(), 20);
+            assert!(repeated.iter().all(|field| match field {
+                Value::BulkString(Some(field)) => fields.contains(field),
+                _ => false,
+            }));
+            assert_eq!(execute(params(None, false), None).encode(), b"$-1\r\n");
+            assert_eq!(execute(params(Some(2), true), None).encode(), b"*0\r\n");
 
-        assert_eq!(
-            params(None, false).execute_with_clock(None, 42).encode(),
-            b"$-1\r\n"
-        );
-        assert_eq!(
-            params(Some(2), true).execute_with_clock(None, 42).encode(),
-            b"*0\r\n"
-        );
+            let empty = EntrySnapshot {
+                value: MyValue::new(ValueObject::Hash(Arc::new(Mutex::new(HashMap::new())))),
+                expire_at: None,
+            };
+            assert_eq!(
+                execute(params(None, false), Some(empty.clone())).encode(),
+                b"$-1\r\n"
+            );
+            assert!(array(execute(params(Some(-20), true), Some(empty))).is_empty());
+        }
+    }
+
+    #[cfg(target_pointer_width = "64")]
+    #[test]
+    fn huge_negative_counts_return_the_existing_allocation_error() {
+        let entry = snapshot(10, 0);
+        for with_values in [false, true] {
+            let command = params(Some(-i64::MAX), with_values);
+            assert_eq!(
+                command.execute(Some(entry.clone())).encode(),
+                b"-ERR count is too large\r\n"
+            );
+            assert_eq!(
+                command.execute_with_clock(Some(entry.clone()), 42).encode(),
+                b"-ERR count is too large\r\n"
+            );
+        }
     }
 
     #[test]
@@ -458,10 +490,13 @@ mod tests {
             value: MyValue::new(ValueObject::String(Bytes::from_static(b"value"))),
             expire_at: None,
         };
+        let command = params(Some(0), false);
         assert_eq!(
-            params(Some(0), false)
-                .execute_with_clock(Some(wrong_type), 42)
-                .encode(),
+            command.execute(Some(wrong_type.clone())).encode(),
+            b"-WRONGTYPE Operation against a key holding the wrong kind of value\r\n"
+        );
+        assert_eq!(
+            command.execute_with_clock(Some(wrong_type), 42).encode(),
             b"-WRONGTYPE Operation against a key holding the wrong kind of value\r\n"
         );
 

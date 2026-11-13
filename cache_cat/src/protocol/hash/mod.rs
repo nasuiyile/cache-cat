@@ -27,6 +27,7 @@ mod tests {
     use crate::raft::types::core::response_value::Value;
     use crate::raft::types::core::structure::scan_map::ScanMap as HashMap;
     use crate::raft::types::core::value_object::{HashValue, ValueObject};
+    use ahash::RandomState;
     use bytes::Bytes;
     use parking_lot::Mutex;
     use std::sync::Arc;
@@ -34,16 +35,13 @@ mod tests {
     fn hash_entry(
         fields: &[(Bytes, HashValue)],
         capacity: usize,
-        reverse: bool,
+        seed: u64,
     ) -> EntrySnapshot<MyValue> {
-        let mut map = HashMap::with_capacity(capacity);
-        for index in 0..fields.len() {
-            let index = if reverse {
-                fields.len() - index - 1
-            } else {
-                index
-            };
-            let (field, value) = &fields[index];
+        let mut map = HashMap::with_capacity_and_hasher(
+            capacity,
+            RandomState::with_seeds(seed, seed + 1, seed + 2, seed + 3),
+        );
+        for (field, value) in fields {
             map.insert(field.clone(), value.clone());
         }
         EntrySnapshot {
@@ -61,19 +59,20 @@ mod tests {
     }
 
     #[test]
-    fn clocked_hash_reads_are_identical_across_hash_table_layouts() {
-        // Values deliberately have a different order from their fields and include duplicates.
+    fn dense_hash_reads_preserve_order_across_layouts_clone_and_restore() {
+        // Every replica has the same insertion history, deliberately unlike
+        // byte order. Duplicate values must retain their field positions.
         let ordered_fields = vec![
+            (Bytes::from_static(b"z"), HashValue::Str("duplicate".into())),
+            (Bytes::from_static(b"a\0"), HashValue::Str("middle".into())),
             (Bytes::from_static(b""), HashValue::Str("last".into())),
+            (Bytes::from_static(b"\xff"), HashValue::Str("first".into())),
             (Bytes::from_static(b"\0"), HashValue::Int(-4)),
             (Bytes::from_static(b"a"), HashValue::Str("duplicate".into())),
-            (Bytes::from_static(b"a\0"), HashValue::Str("middle".into())),
-            (Bytes::from_static(b"z"), HashValue::Str("duplicate".into())),
             (
                 Bytes::from_static(b"\x80"),
                 HashValue::Str(Bytes::from_static(b"\xfe")),
             ),
-            (Bytes::from_static(b"\xff"), HashValue::Str("first".into())),
         ];
         let expected = [
             Value::Map(
@@ -90,26 +89,56 @@ mod tests {
             Value::Array(Some(
                 ordered_fields
                     .iter()
-                    .map(|(field, _)| Value::BulkString(Some(field.clone())))
-                    .collect(),
-            )),
-            Value::Array(Some(
-                ordered_fields
-                    .iter()
                     .map(|(_, value)| Value::BulkString(Some(value.to_bytes())))
                     .collect(),
             )),
         ];
-        let commands = enumeration_commands();
-        for (capacity, reverse) in [(0, false), (32, true), (1024, false)] {
-            let hash = hash_entry(&ordered_fields, capacity, reverse);
-            for clock in [0, 123_456] {
+        let commands: [Box<dyn ReadCommand>; 2] = [
+            Box::new(hgetall::HGetAllParams { key: "hash".into() }),
+            Box::new(hvals::HValsParams { key: "hash".into() }),
+        ];
+        for (capacity, seed) in [(0, 1), (32, 11), (1024, 21)] {
+            let hash = hash_entry(&ordered_fields, capacity, seed);
+            let cloned = EntrySnapshot {
+                value: MyValue::new(hash.value.data.snapshot_clone()),
+                expire_at: hash.expire_at,
+            };
+            let restored: EntrySnapshot<MyValue> =
+                bincode2::deserialize(&bincode2::serialize(&hash).unwrap()).unwrap();
+            for snapshot in [hash, cloned, restored] {
                 for (command, expected) in commands.iter().zip(&expected) {
-                    let reply = command.execute_with_clock(Some(hash.clone()), clock);
-                    for proto in [2, 3] {
-                        assert_eq!(reply.encode_proto(proto), expected.encode_proto(proto));
+                    let ordinary = command.execute(Some(snapshot.clone()));
+                    for clock in [0, 123_456] {
+                        let clocked = command.execute_with_clock(Some(snapshot.clone()), clock);
+                        for proto in [2, 3] {
+                            assert_eq!(ordinary.encode_proto(proto), expected.encode_proto(proto));
+                            assert_eq!(clocked.encode_proto(proto), expected.encode_proto(proto));
+                        }
                     }
                 }
+            }
+        }
+    }
+
+    #[test]
+    fn clocked_hkeys_retains_its_byte_sorted_reply() {
+        let fields = [
+            (Bytes::from_static(b"z"), HashValue::Int(1)),
+            (Bytes::from_static(b"\xff"), HashValue::Int(2)),
+            (Bytes::from_static(b""), HashValue::Int(3)),
+            (Bytes::from_static(b"a\0"), HashValue::Int(4)),
+        ];
+        let expected = Value::Array(Some(
+            [b"".as_slice(), b"a\0", b"z", b"\xff"]
+                .into_iter()
+                .map(|field| Value::BulkString(Some(Bytes::copy_from_slice(field))))
+                .collect(),
+        ));
+        let command = hkeys::HKeysParams { key: "hash".into() };
+        for (capacity, seed) in [(0, 1), (32, 11), (1024, 21)] {
+            let reply = command.execute_with_clock(Some(hash_entry(&fields, capacity, seed)), 123);
+            for proto in [2, 3] {
+                assert_eq!(reply.encode_proto(proto), expected.encode_proto(proto));
             }
         }
     }
@@ -120,7 +149,7 @@ mod tests {
             value: MyValue::new(ValueObject::String("value".into())),
             expire_at: None,
         };
-        let empty_hash = hash_entry(&[], 0, false);
+        let empty_hash = hash_entry(&[], 0, 1);
         let expected_empty = [
             Value::Map(vec![]),
             Value::Array(Some(vec![])),
@@ -202,7 +231,7 @@ mod tests {
                 ("integer".into(), HashValue::Int(-12345)),
             ],
             0,
-            false,
+            1,
         );
 
         assert_eq!(

@@ -1,4 +1,4 @@
-use super::random::DeterministicRng;
+use super::random::{DeterministicRng, sample_unique_indices};
 use crate::error::{CacheCatError, ProtocolError};
 use crate::mocha::EntrySnapshot;
 use crate::protocol::command::{Client, Command};
@@ -12,7 +12,6 @@ use crate::raft::types::entry::read_operation::ReadOperation;
 use async_trait::async_trait;
 use bytes::Bytes;
 use rand::Rng;
-use rand::seq::IteratorRandom;
 use serde::{Deserialize, Serialize};
 use std::fmt::Display;
 
@@ -55,106 +54,20 @@ impl ReadCommand for SRandMemberParams {
     }
 
     fn execute(&self, value: Option<EntrySnapshot<MyValue>>) -> Value {
-        match value {
-            None => self.empty_result(),
-
-            Some(snapshot) => match snapshot.value.data {
-                ValueObject::Set(set) => {
-                    let guard = set.lock();
-
-                    if guard.is_empty() {
-                        return self.empty_result();
-                    }
-
-                    match self.count {
-                        // SRANDMEMBER key
-                        //
-                        // 不带 count 时返回单个 BulkString；
-                        // 集合为空时返回 Nil BulkString。
-                        None => {
-                            let mut rng = rand::thread_rng();
-
-                            match guard.iter().choose(&mut rng) {
-                                Some(member) => Value::BulkString(Some(member.clone())),
-                                None => Value::BulkString(None),
-                            }
-                        }
-
-                        // SRANDMEMBER key 0
-                        Some(0) => Value::Array(Some(Vec::new())),
-
-                        // SRANDMEMBER key positive-count
-                        //
-                        // 返回不重复的随机元素。
-                        // 如果 count 大于集合大小，只返回集合中的全部元素。
-                        Some(count) if count > 0 => {
-                            let requested = match usize::try_from(count) {
-                                Ok(count) => count,
-                                Err(_) => {
-                                    return Value::Array(Some(Vec::new()));
-                                }
-                            };
-
-                            let take_count = requested.min(guard.len());
-                            let mut rng = rand::thread_rng();
-
-                            let members = guard
-                                .iter()
-                                .choose_multiple(&mut rng, take_count)
-                                .into_iter()
-                                .map(|member| Value::BulkString(Some(member.clone())))
-                                .collect();
-
-                            Value::Array(Some(members))
-                        }
-
-                        // SRANDMEMBER key negative-count
-                        //
-                        // 允许返回重复元素，并且必须返回 abs(count) 个元素。
-                        Some(count) => {
-                            let requested = match count
-                                .checked_abs()
-                                .and_then(|count| usize::try_from(count).ok())
-                            {
-                                Some(count) => count,
-
-                                // i64::MIN 无法使用有符号 i64 表示其绝对值。
-                                // 正常情况下也不应允许客户端要求如此巨大的响应。
-                                None => {
-                                    return ProtocolError::response(
-                                        "ERR value is out of range, must be positive",
-                                    )
-                                    .into();
-                                }
-                            };
-
-                            let members: Vec<&Bytes> = guard.iter().collect();
-                            let mut rng = rand::thread_rng();
-
-                            let mut result = Vec::new();
-
-                            // 避免一次 reserve 巨大内存时直接 panic。
-                            if result.try_reserve(requested).is_err() {
-                                return ProtocolError::response("ERR count is too large").into();
-                            }
-
-                            for _ in 0..requested {
-                                let index = rng.gen_range(0..members.len());
-
-                                result.push(Value::BulkString(Some(members[index].clone())));
-                            }
-
-                            Value::Array(Some(result))
-                        }
-                    }
-                }
-
-                _ => ProtocolError::WrongType.into(),
-            },
-        }
+        let mut rng = rand::thread_rng();
+        self.sample(value, |bound| rng.gen_range(0..bound))
     }
 
     fn execute_with_clock(&self, value: Option<EntrySnapshot<MyValue>>, read_clock: u64) -> Value {
+        let mut rng = DeterministicRng::for_key(&self.key, read_clock);
+        self.sample(value, |bound| rng.next_index(bound))
+    }
+}
+impl SRandMemberParams {
+    fn sample<F>(&self, value: Option<EntrySnapshot<MyValue>>, mut next_index: F) -> Value
+    where
+        F: FnMut(usize) -> usize,
+    {
         let Some(snapshot) = value else {
             return self.empty_result();
         };
@@ -168,10 +81,17 @@ impl ReadCommand for SRandMemberParams {
         if guard.is_empty() {
             return self.empty_result();
         }
-        let requested = match self.count {
-            None => 1,
-            Some(count) if count > 0 => (count as u64).min(guard.len() as u64) as usize,
-            Some(count) => match count
+        // Read-only sampling must not swap the replicated member array itself.
+        let Some(count) = self.count else {
+            let member = guard
+                .get_index(next_index(guard.len()))
+                .expect("sampled index is within the locked set");
+            return Value::BulkString(Some(member.clone()));
+        };
+        let requested = if count > 0 {
+            (count as u64).min(guard.len() as u64) as usize
+        } else {
+            match count
                 .checked_abs()
                 .and_then(|count| usize::try_from(count).ok())
             {
@@ -180,38 +100,30 @@ impl ReadCommand for SRandMemberParams {
                     return ProtocolError::response("ERR value is out of range, must be positive")
                         .into();
                 }
-            },
+            }
         };
-
-        // Sorting borrowed members removes differences in local member order
-        // without cloning every member. Only returned members are cloned.
-        let mut members: Vec<&Bytes> = guard.iter().collect();
-        members.sort_unstable();
-        let mut rng = DeterministicRng::for_key(&self.key, read_clock);
-        if self.count.is_none() {
-            return Value::BulkString(Some(members[rng.next_index(members.len())].clone()));
-        }
-
         let mut result = Vec::new();
         if result.try_reserve(requested).is_err() {
             return ProtocolError::response("ERR count is too large").into();
         }
-        let allow_duplicates = self.count.is_some_and(|count| count < 0);
-        for _ in 0..requested {
-            let index = rng.next_index(members.len());
-            let member = if allow_duplicates {
-                members[index]
-            } else {
-                // Partial Fisher-Yates: a positive count cannot repeat a member.
-                members.swap_remove(index)
-            };
+        let mut append_member = |index| {
+            let member = guard
+                .get_index(index)
+                .expect("sampled index is within the locked set");
             result.push(Value::BulkString(Some(member.clone())));
+        };
+        if count > 0 {
+            if sample_unique_indices(guard.len(), requested, next_index, append_member).is_err() {
+                return ProtocolError::response("ERR count is too large").into();
+            }
+        } else {
+            for _ in 0..requested {
+                append_member(next_index(guard.len()));
+            }
         }
         Value::Array(Some(result))
     }
-}
 
-impl SRandMemberParams {
     /// key 不存在或集合为空时：
     ///
     /// 不带 count：
@@ -297,8 +209,8 @@ mod tests {
     use std::collections::HashSet;
     use std::sync::Arc;
 
-    fn snapshot(reverse: bool, capacity: usize) -> EntrySnapshot<MyValue> {
-        let mut members: Vec<Bytes> = [
+    fn snapshot(restore: bool, capacity: usize) -> EntrySnapshot<MyValue> {
+        let members: Vec<Bytes> = [
             b"".as_slice(),
             b"z".as_slice(),
             b"10".as_slice(),
@@ -309,11 +221,15 @@ mod tests {
         .into_iter()
         .map(Bytes::copy_from_slice)
         .collect();
-        if reverse {
-            members.reverse();
-        }
-        let mut set = ScanSet::with_capacity(capacity);
+        let seed = capacity as u64;
+        let mut set = ScanSet::with_capacity_and_hasher(
+            capacity,
+            ahash::RandomState::with_seeds(seed, seed + 1, seed + 2, seed + 3),
+        );
         set.extend(members);
+        if restore {
+            set = bincode2::deserialize(&bincode2::serialize(&set).unwrap()).unwrap();
+        }
         EntrySnapshot {
             value: MyValue::new(ValueObject::Set(Arc::new(Mutex::new(set)))),
             expire_at: Some(100_000),
@@ -347,7 +263,7 @@ mod tests {
         let ValueObject::Set(set) = &left.value.data else {
             unreachable!();
         };
-        let original = set.lock().clone();
+        let original = set.lock().iter().cloned().collect::<Vec<_>>();
 
         for count in [None, Some(0), Some(1), Some(4), Some(100), Some(-20)] {
             let command = params(count);
@@ -361,7 +277,7 @@ mod tests {
                 "different response for count {count:?}"
             );
         }
-        assert_eq!(*set.lock(), original);
+        assert_eq!(set.lock().iter().cloned().collect::<Vec<_>>(), original);
         assert_eq!(left.expire_at, Some(100_000));
         assert_eq!(left.value.version, 0);
     }

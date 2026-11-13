@@ -123,6 +123,8 @@ Commands that read several keys and write one key record the computed destinatio
 
 Set values retain their dense member sequence in both full data and computed destination writes. Restoration inserts members in that sequence while rebuilding local hash indexes. CAS replay must preserve the same sequence as live application: subsequent SPOP commands sample by dense index using the recorded write clock. Snapshot cloning and local bucket resizing must not reorder members, and Set filtering must not choose a different resulting order based on local capacity.
 
+Hash values likewise serialize field/value pairs in dense order and insert them in that order on restoration. Updates of existing fields retain their positions and deletions swap in the last field. After full loading and CAS replay, SRANDMEMBER/HRANDFIELD use those replicated sequences for read-only sampling, and SMEMBERS/HGETALL/HVALS enumerate them directly. Snapshot tests must compare sequences and subsequent Lua/EXEC writes derived from these reads, not merely equal sets of members or field/value pairs. Local hash seeds, buckets and allocation capacities are still rebuilt independently.
+
 `FLUSHDB` and `FLUSHALL` need a revision cutoff. During recovery they remove only values with revisions less than the flush revision. Values written after that flush may already be present in the full snapshot and must survive its replay. This traversal occurs only during snapshot recovery; ordinary flushes still clear the database directly.
 
 ## Local Revisions and Raft
