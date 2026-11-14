@@ -225,20 +225,23 @@ impl ComputeCommand for SPopReq {
                 };
 
                 let mut rng = DeterministicRng::for_key(&self.key, write_clock);
-                let mut popped = Vec::with_capacity(pop_count);
 
                 // ScanSet preserves dense member order across replicated writes,
                 // snapshot clones and restoration. Hash buckets may differ by
                 // node, but the same clock selects the same dense index. Sampling
                 // and swap-removing in place takes expected O(pop_count), without
                 // collecting or sorting the entire set, and never repeats a member.
-                for _ in 0..pop_count {
-                    let index = rng.next_index(set_guard.len());
-                    let member = set_guard
-                        .swap_remove_index(index)
-                        .expect("sampled index is within the locked set");
-                    popped.push(member);
-                }
+                let popped = set_guard.with_removals(|set| {
+                    let mut popped = Vec::with_capacity(pop_count);
+                    for _ in 0..pop_count {
+                        let index = rng.next_index(set.len());
+                        let member = set
+                            .swap_remove_index(index)
+                            .expect("sampled index is within the locked set");
+                        popped.push(member);
+                    }
+                    popped
+                });
 
                 let set_is_empty = set_guard.is_empty();
 

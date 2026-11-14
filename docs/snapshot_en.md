@@ -125,6 +125,8 @@ Set values retain their dense member sequence in both full data and computed des
 
 Hash values likewise serialize field/value pairs in dense order and insert them in that order on restoration. Updates of existing fields retain their positions and deletions swap in the last field. After full loading and CAS replay, SRANDMEMBER/HRANDFIELD use those replicated sequences for read-only sampling, and SMEMBERS/HGETALL/HVALS enumerate them directly. Snapshot tests must compare sequences and subsequent Lua/EXEC writes derived from these reads, not merely equal sets of members or field/value pairs. Local hash seeds, buckets and allocation capacities are still rebuilt independently.
 
+Sparse shrinking at deletion-batch boundaries uses local capacities and can therefore trigger on one node but not another, including during snapshot CAS replay. It changes only allocation sizes and bucket links, preserving the dense sequence and hash seed. No shrink decision or capacity enters a replicated request or snapshot, and replay must continue to produce the same sequence and subsequent sampled replies.
+
 `FLUSHDB` and `FLUSHALL` need a revision cutoff. During recovery they remove only values with revisions less than the flush revision. Values written after that flush may already be present in the full snapshot and must survive its replay. This traversal occurs only during snapshot recovery; ordinary flushes still clear the database directly.
 
 ## Local Revisions and Raft

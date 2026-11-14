@@ -422,14 +422,17 @@ impl SortedSet {
     ///
     /// M = members 数量
     pub fn zrem(&mut self, members: &[Bytes]) -> i64 {
-        let mut removed = 0i64;
-        for member in members {
-            if let Some(score) = self.hash.remove(member) {
-                self.tree.remove(&(OrderedFloat(score), member.clone()));
-                removed += 1;
+        let tree = &mut self.tree;
+        self.hash.with_removals(|hash| {
+            let mut removed = 0i64;
+            for member in members {
+                if let Some(score) = hash.remove(member) {
+                    tree.remove(&(OrderedFloat(score), member.clone()));
+                    removed += 1;
+                }
             }
-        }
-        removed
+            removed
+        })
     }
 
     /// ZINCRBY
@@ -493,16 +496,19 @@ impl SortedSet {
             Some(0) => return Vec::new(),
             Some(count) => count,
         };
-        let mut values = Vec::with_capacity(count.min(self.tree.len()));
-        for _ in 0..count {
-            let (score, member) = match self.tree.pop_first() {
-                Some(value) => value,
-                None => break,
-            };
-            self.hash.remove(&member);
-            values.push((member, score.0));
-        }
-        values
+        let tree = &mut self.tree;
+        self.hash.with_removals(|hash| {
+            let mut values = Vec::with_capacity(count.min(tree.len()));
+            for _ in 0..count {
+                let (score, member) = match tree.pop_first() {
+                    Some(value) => value,
+                    None => break,
+                };
+                hash.remove(&member);
+                values.push((member, score.0));
+            }
+            values
+        })
     }
 
     /// 估算树、哈希表和成员 payload；不包含 SortedSet 的内联大小。

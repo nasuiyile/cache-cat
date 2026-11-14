@@ -65,6 +65,23 @@ impl<K, S> ScanSet<K, S> {
         self.0.reserve(additional);
     }
 
+    /// Apply a batch of removals, reclaiming sparse storage once on completion.
+    /// The closure's result and the remaining members' dense order are preserved.
+    /// No-op batches and empty results keep their allocations.
+    pub(crate) fn with_removals<R>(&mut self, mutate: impl FnOnce(&mut Self) -> R) -> R {
+        let before = self.len();
+        let result = mutate(self);
+        if self.len() < before && !self.is_empty() {
+            self.shrink_if_sparse();
+        }
+        result
+    }
+
+    /// Reclaim sparse storage once after a deletion batch, preserving member order.
+    fn shrink_if_sparse(&mut self) -> bool {
+        self.0.shrink_if_sparse()
+    }
+
     pub fn hasher(&self) -> &S {
         self.0.hasher()
     }
@@ -400,6 +417,64 @@ mod tests {
             assert!(set.insert(300));
             assert_eq!(set.swap_remove_index(0), Some(300));
         }
+    }
+
+    #[test]
+    fn sparse_shrink_and_unchanged_capacity_keep_identical_member_indices() {
+        let mut source = ScanSet::with_capacity(32_768);
+        source.extend((0..256_u64).map(|member| member * 37));
+        for member in 0..64 {
+            assert!(source.remove(&(member * 37)));
+        }
+        let encoded = bincode2::serialize(&source).unwrap();
+        let mut replica: ScanSet<u64> = bincode2::deserialize(&encoded).unwrap();
+        let order = source.iter().copied().collect::<Vec<_>>();
+        let before_bytes = source.allocated_bytes();
+        assert!(source.shrink_if_sparse());
+        assert!(source.allocated_bytes() < before_bytes / 4);
+        assert_eq!(source.iter().copied().collect::<Vec<_>>(), order);
+        assert!(!replica.shrink_if_sparse());
+        for step in 0..64 {
+            let index = (step * 17 + 3) % source.len();
+            assert_eq!(
+                source.swap_remove_index(index),
+                replica.swap_remove_index(index)
+            );
+            assert_eq!(
+                source.iter().copied().collect::<Vec<_>>(),
+                replica.iter().copied().collect::<Vec<_>>()
+            );
+        }
+    }
+
+    #[test]
+    fn removal_batch_preserves_result_and_defers_reclamation_until_completion() {
+        let mut set = ScanSet::with_capacity(32_768);
+        set.extend(0..128_u64);
+        let allocated = set.allocated_bytes();
+        assert!(!set.with_removals(|set| set.remove(&999)));
+        assert_eq!(set.allocated_bytes(), allocated);
+        let remaining = set.with_removals(|set| {
+            for member in 0..120 {
+                assert!(set.remove(&member));
+                assert_eq!(set.allocated_bytes(), allocated);
+            }
+            set.iter().copied().collect::<Vec<_>>()
+        });
+        assert_eq!(set.iter().copied().collect::<Vec<_>>(), remaining);
+        assert!(set.allocated_bytes() < allocated / 4);
+
+        let mut set = ScanSet::with_capacity(32_768);
+        set.extend(0..128_u64);
+        let allocated = set.allocated_bytes();
+        assert_eq!(
+            set.with_removals(|set| {
+                set.retain(|_| false);
+                set.len()
+            }),
+            0
+        );
+        assert_eq!(set.allocated_bytes(), allocated);
     }
 
     #[test]

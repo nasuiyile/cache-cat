@@ -106,43 +106,46 @@ impl MultiReadComputeCommand for SInterStoreReq {
         read_entries: Vec<Option<EntrySnapshot<MyValue>>>,
         _write_clock: u64,
     ) -> (Vec<ComputedWrite>, Value) {
-        let mut intersection: Option<ScanSet<Bytes>> = None;
-
-        for entry in read_entries {
-            let Some(snapshot) = entry else {
-                // Redis: 不存在的 key 视为空 Set。
-                // intersection 必然为空。
-                intersection = Some(ScanSet::new());
-                continue;
-            };
-
-            let ValueObject::Set(set) = &snapshot.value.data else {
-                return (
-                    Vec::new(),
-                    CacheCatError::from(ProtocolError::WrongType).into(),
-                );
-            };
-
-            let set = set.lock();
-
-            match intersection.as_mut() {
-                // 第一组作为初始结果。
-                None => intersection = Some(set.iter().cloned().collect()),
-
-                // 已经为空，后面不用再计算交集。
-                // 不 break，继续遍历剩余 entries 做 WRONGTYPE 检查。
-                Some(result) if result.is_empty() => continue,
-
-                // retain 比 repeated intersection().collect() 少一些临时分配。
-                Some(result) => result.retain(|member| set.contains(member)),
+        let mut entries = read_entries.into_iter();
+        let mut intersection: ScanSet<Bytes> = match entries.next().flatten() {
+            None => ScanSet::new(),
+            Some(snapshot) => {
+                let ValueObject::Set(set) = &snapshot.value.data else {
+                    return (
+                        Vec::new(),
+                        CacheCatError::from(ProtocolError::WrongType).into(),
+                    );
+                };
+                set.lock().iter().cloned().collect()
             }
+        };
+        let filtered = intersection.with_removals(|result| {
+            for entry in entries {
+                let Some(snapshot) = entry else {
+                    // Missing input makes the intersection empty. Continue
+                    // validating later inputs for WRONGTYPE, even when empty.
+                    if !result.is_empty() {
+                        *result = ScanSet::new();
+                    }
+                    continue;
+                };
+                let ValueObject::Set(set) = &snapshot.value.data else {
+                    return Err(ProtocolError::WrongType);
+                };
+                if !result.is_empty() {
+                    let set = set.lock();
+                    result.retain(|member| set.contains(member));
+                }
+            }
+            Ok(())
+        });
+        if let Err(error) = filtered {
+            return (Vec::new(), CacheCatError::from(error).into());
         }
 
-        if let Some(result) = intersection
-            && !result.is_empty()
-        {
-            let cardinality = result.len() as i64;
-            let value = MyValue::new(ValueObject::Set(Arc::new(Mutex::new(result))));
+        if !intersection.is_empty() {
+            let cardinality = intersection.len() as i64;
+            let value = MyValue::new(ValueObject::Set(Arc::new(Mutex::new(intersection))));
 
             (
                 vec![ComputedWrite {

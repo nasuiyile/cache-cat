@@ -20,6 +20,9 @@ mod sscan_snapshot_tests;
 mod spop_order_tests;
 
 #[cfg(test)]
+mod shrink_tests;
+
+#[cfg(test)]
 mod scan_snapshot_tests;
 
 #[cfg(test)]

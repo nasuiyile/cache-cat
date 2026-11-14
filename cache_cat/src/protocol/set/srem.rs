@@ -123,12 +123,15 @@ impl ComputeCommand for SRemReq {
         match &entry.value.data {
             ValueObject::Set(set) => {
                 let mut set = set.lock();
-                let mut deleted_count = 0;
-                for member in &self.members {
-                    if set.remove(member) {
-                        deleted_count += 1;
+                let deleted_count = set.with_removals(|set| {
+                    let mut deleted_count = 0;
+                    for member in &self.members {
+                        if set.remove(member) {
+                            deleted_count += 1;
+                        }
                     }
-                }
+                    deleted_count
+                });
                 let is_empty = set.is_empty();
                 drop(set);
 

@@ -108,7 +108,7 @@ impl MultiReadComputeCommand for SDiffStoreReq {
     ) -> (Vec<ComputedWrite>, Value) {
         let mut entries = read_entries.into_iter();
 
-        let mut diffsection: Option<ScanSet<Bytes>> = if let Some(entry) = entries.next() {
+        let mut difference: ScanSet<Bytes> = if let Some(entry) = entries.next() {
             if let Some(snapshot) = entry {
                 let ValueObject::Set(data) = &snapshot.value.data else {
                     return (
@@ -117,9 +117,9 @@ impl MultiReadComputeCommand for SDiffStoreReq {
                     );
                 };
 
-                Some(data.lock().iter().cloned().collect())
+                data.lock().iter().cloned().collect()
             } else {
-                None
+                ScanSet::new()
             }
         } else {
             return (
@@ -131,31 +131,28 @@ impl MultiReadComputeCommand for SDiffStoreReq {
             );
         };
 
-        for entry in entries {
-            let Some(snapshot) = entry else {
-                continue;
-            };
-
-            let ValueObject::Set(data) = &snapshot.value.data else {
-                return (
-                    Vec::new(),
-                    CacheCatError::from(ProtocolError::WrongType).into(),
-                );
-            };
-
-            if let Some(ref mut result) = diffsection
-                && !result.is_empty()
-            {
-                let data = data.lock();
-                result.retain(|v| !data.contains(v));
+        let filtered = difference.with_removals(|result| {
+            for entry in entries {
+                let Some(snapshot) = entry else {
+                    continue;
+                };
+                let ValueObject::Set(data) = &snapshot.value.data else {
+                    return Err(ProtocolError::WrongType);
+                };
+                if !result.is_empty() {
+                    let data = data.lock();
+                    result.retain(|v| !data.contains(v));
+                }
             }
+            Ok(())
+        });
+        if let Err(error) = filtered {
+            return (Vec::new(), CacheCatError::from(error).into());
         }
 
-        if let Some(result) = diffsection
-            && !result.is_empty()
-        {
-            let cardinality = result.len() as i64;
-            let value = MyValue::new(ValueObject::Set(Arc::new(Mutex::new(result))));
+        if !difference.is_empty() {
+            let cardinality = difference.len() as i64;
+            let value = MyValue::new(ValueObject::Set(Arc::new(Mutex::new(difference))));
 
             (
                 vec![ComputedWrite {

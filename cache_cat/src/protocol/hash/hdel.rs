@@ -126,12 +126,15 @@ impl ComputeCommand for HDelReq {
         match &entry.value.data {
             ValueObject::Hash(hash) => {
                 let mut map = hash.lock();
-                let mut deleted_count = 0;
-                for field in &self.fields {
-                    if map.remove(field).is_some() {
-                        deleted_count += 1;
+                let deleted_count = map.with_removals(|map| {
+                    let mut deleted_count = 0;
+                    for field in &self.fields {
+                        if map.remove(field).is_some() {
+                            deleted_count += 1;
+                        }
                     }
-                }
+                    deleted_count
+                });
                 let empty = map.is_empty();
                 drop(map);
                 if deleted_count == 0 {

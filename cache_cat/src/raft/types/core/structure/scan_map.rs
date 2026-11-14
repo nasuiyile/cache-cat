@@ -2,8 +2,9 @@
 //!
 //! Entries live in one dense allocation. Bucket chains contain indices rather
 //! than separately allocated nodes, so ordinary iteration is O(len), including
-//! after many deletions. Growth rebuilds all chains synchronously; deletion does
-//! not shrink the bucket array. There is no per-client iterator or scan state.
+//! after many deletions. Growth rebuilds all chains synchronously. Callers may
+//! shrink sparse storage once after a deletion batch, preserving dense order.
+//! There is no per-client iterator or scan state.
 
 use ahash::RandomState;
 use serde::de::{MapAccess, Visitor};
@@ -18,6 +19,7 @@ use std::ops::Index;
 
 const EMPTY: usize = usize::MAX;
 const MIN_BUCKETS: usize = 1;
+const MIN_SHRINK_BYTES: usize = 64 * 1024;
 
 #[derive(Clone, Copy)]
 struct Bucket {
@@ -163,6 +165,78 @@ impl<K, V, S, const DENSE_BUCKETS: bool> ScanMap<K, V, S, DENSE_BUCKETS> {
                 .expect("hash table capacity overflow");
             self.entries.reserve_exact(capacity - self.len());
         }
+    }
+
+    /// Apply a batch of removals, reclaiming sparse storage once on completion.
+    /// No-op batches and empty results keep their allocations. Individual
+    /// removals do not check capacity, so bulk commands cannot repeatedly shrink.
+    pub(crate) fn with_removals<R>(&mut self, mutate: impl FnOnce(&mut Self) -> R) -> R {
+        let before = self.len();
+        let result = mutate(self);
+        if self.len() < before && !self.is_empty() {
+            self.shrink_if_sparse();
+        }
+        result
+    }
+
+    /// Reclaim sparse buffers once at the end of a deletion batch.
+    /// Each buffer must be below 10% utilization and save at least 64 KiB.
+    /// Retain roughly twice the live member capacity, rounded up, so the next
+    /// insertion need not grow again. Hash seeds and dense indices stay intact.
+    /// The exceptional shrinking path takes O(len) and may move the entry array.
+    pub(super) fn shrink_if_sparse(&mut self) -> bool {
+        let len = self.len();
+        let Some(used) = len.checked_mul(10) else {
+            // Neither buffer can have ten times this many live entries.
+            return false;
+        };
+        let entries_capacity = self.entries.capacity();
+        let bucket_count = self.buckets.len();
+        let sparse_entries = used < entries_capacity;
+        let sparse_buckets = used < Self::bucket_capacity(bucket_count);
+        if !sparse_entries && !sparse_buckets {
+            return false;
+        }
+
+        // A sparse buffer has capacity > 10 * len, making both doubling and
+        // rounding up safe within the size of its already allocated storage.
+        let desired = len * 2;
+        let entries_target = if len == 0 {
+            0
+        } else {
+            desired.next_power_of_two()
+        };
+        let buckets_target = if len == 0 {
+            0
+        } else if desired > Self::bucket_capacity(entries_target) {
+            entries_target * 2
+        } else {
+            entries_target
+        };
+        let shrink_entries = sparse_entries
+            && entries_capacity
+                .saturating_sub(entries_target)
+                .saturating_mul(size_of::<Entry<K, V>>())
+                >= MIN_SHRINK_BYTES;
+        let shrink_buckets = sparse_buckets
+            && self
+                .buckets
+                .capacity()
+                .saturating_sub(buckets_target)
+                .saturating_mul(size_of::<Bucket>())
+                >= MIN_SHRINK_BYTES;
+        if shrink_entries {
+            self.entries.shrink_to(entries_target);
+        }
+        if shrink_buckets {
+            if buckets_target == 0 {
+                self.buckets = Vec::new();
+            } else {
+                // Rebuild only bucket links, using the existing cached hashes.
+                self.rehash(buckets_target);
+            }
+        }
+        self.entries.capacity() < entries_capacity || self.buckets.len() < bucket_count
     }
 
     /// Clone for Set snapshot writes without discarding useful entry capacity.
@@ -874,6 +948,208 @@ mod tests {
         assert_eq!(map.swap_remove_index(0), None);
         map.insert(7, 9);
         assert_eq!(map.swap_remove_index(0), Some((7, 9)));
+    }
+
+    #[test]
+    fn sparse_shrink_uses_strict_ten_percent_and_checks_buffers_independently() {
+        fn check<const DENSE: bool>() {
+            // Exactly 10% full entries do not qualify. Keep the bucket array
+            // adequately occupied so it cannot hide an entries-only decision.
+            let mut map = BucketMap::<DENSE>::with_capacity_and_hasher(20_000, Default::default());
+            map.extend((0..2_000).map(|key| (key, key)));
+            map.rehash(4096);
+            assert_eq!(map.entries.capacity(), 20_000);
+            assert!(!map.shrink_if_sparse());
+            assert_eq!(map.remove(&0), Some(0));
+            let order = map.iter().map(|(&key, _)| key).collect::<Vec<_>>();
+            assert!(map.shrink_if_sparse());
+            assert_eq!(map.entries.capacity(), 4096);
+            assert_eq!(map.buckets.len(), 4096);
+            assert_eq!(map.iter().map(|(&key, _)| key).collect::<Vec<_>>(), order);
+
+            // The public capacity is now limited by entries. Large bucket
+            // storage must still be reclaimed independently of that minimum.
+            let mut map = BucketMap::<DENSE>::with_capacity_and_hasher(32_768, Default::default());
+            map.extend((0..64).map(|key| (key, key)));
+            map.entries.shrink_to_fit();
+            let entries_capacity = map.entries.capacity();
+            assert!(map.shrink_if_sparse());
+            assert_eq!(map.entries.capacity(), entries_capacity);
+            assert_eq!(map.buckets.len(), 256);
+            assert!(!map.shrink_if_sparse());
+            for key in 0..64 {
+                assert_eq!(map.get(&key), Some(&key));
+            }
+
+            let mut map = BucketMap::<DENSE>::with_capacity_and_hasher(32_768, Default::default());
+            let buckets = map.buckets.len();
+            let boundary = BucketMap::<DENSE>::bucket_capacity(buckets).div_ceil(10);
+            map.extend((0..boundary as u64).map(|key| (key, key)));
+            map.entries.shrink_to_fit();
+            let entries_capacity = map.entries.capacity();
+            assert!(!map.shrink_if_sparse());
+            map.remove(&0);
+            assert!(map.shrink_if_sparse());
+            assert_eq!(map.entries.capacity(), entries_capacity);
+            assert!(map.buckets.len() < buckets);
+        }
+        check::<false>();
+        check::<true>();
+    }
+
+    #[test]
+    fn removal_batch_shrinks_only_after_completion_and_preserves_its_result() {
+        fn check<const DENSE: bool>() {
+            let mut map = BucketMap::<DENSE>::with_capacity_and_hasher(32_768, Default::default());
+            map.extend((0..1024).map(|key| (key, key)));
+            let allocated = map.allocated_bytes();
+            assert_eq!(
+                map.with_removals(|map| {
+                    assert_eq!(map.remove(&9999), None);
+                    "unchanged"
+                }),
+                "unchanged"
+            );
+            assert_eq!(map.allocated_bytes(), allocated);
+            let (removed, expected_order) = map.with_removals(|map| {
+                let mut removed = 0;
+                for key in 0..1000 {
+                    assert_eq!(map.remove(&key), Some(key));
+                    removed += 1;
+                    assert_eq!(map.allocated_bytes(), allocated);
+                }
+                (removed, map.keys().copied().collect::<Vec<_>>())
+            });
+            assert_eq!(removed, 1000);
+            assert_eq!(map.keys().copied().collect::<Vec<_>>(), expected_order);
+            assert!(map.allocated_bytes() < allocated / 4);
+
+            let mut map = BucketMap::<DENSE>::with_capacity_and_hasher(32_768, Default::default());
+            map.extend((0..64).map(|key| (key, key)));
+            let allocated = map.allocated_bytes();
+            let count = map.with_removals(|map| {
+                for key in 0..64 {
+                    map.remove(&key);
+                    assert_eq!(map.allocated_bytes(), allocated);
+                }
+                map.len()
+            });
+            assert_eq!(count, 0);
+            assert_eq!(map.allocated_bytes(), allocated);
+        }
+        check::<false>();
+        check::<true>();
+    }
+
+    #[test]
+    fn sparse_shrink_skips_small_savings_and_releases_empty_large_buffers() {
+        fn check_small<const DENSE: bool>() {
+            let mut small = BucketMap::<DENSE>::with_capacity_and_hasher(1024, Default::default());
+            small.insert(1, 1);
+            let allocated = small.allocated_bytes();
+            assert!(!small.shrink_if_sparse());
+            assert_eq!(small.allocated_bytes(), allocated);
+        }
+        check_small::<false>();
+        check_small::<true>();
+        let mut map = PredictableMap::with_capacity_and_hasher(8192, Default::default());
+        assert!(map.shrink_if_sparse());
+        assert_eq!(map.entries.capacity(), 0);
+        assert_eq!(map.buckets.capacity(), 0);
+        assert_eq!(map.scan(42, 1, |_, _| panic!("empty map")), 0);
+        assert!(!map.shrink_if_sparse());
+        map.insert(7, 9);
+        assert_eq!(map.get(&7), Some(&9));
+        assert_eq!(map.remove(&7), Some(9));
+    }
+
+    #[test]
+    fn sparse_shrink_preserves_order_cached_hashes_and_insertion_headroom() {
+        use std::cell::Cell;
+        use std::rc::Rc;
+
+        #[derive(PartialEq, Eq)]
+        struct HashProbe(u64, Rc<Cell<bool>>);
+        impl Hash for HashProbe {
+            fn hash<H: Hasher>(&self, state: &mut H) {
+                assert!(!self.1.get(), "shrinking must reuse cached hashes");
+                self.0.hash(state);
+            }
+        }
+
+        fn check<const DENSE: bool>() {
+            let forbidden = Rc::new(Cell::new(false));
+            let mut map: ScanMap<HashProbe, u64, BuildHasherDefault<IdentityHasher>, DENSE> =
+                ScanMap::with_capacity_and_hasher(32_768, Default::default());
+            for key in 0..256 {
+                map.insert(HashProbe(key * 37, forbidden.clone()), key);
+            }
+            // Non-tail deletions move entries before their order is captured.
+            for key in 0..32 {
+                map.remove(&HashProbe(key * 37, forbidden.clone()));
+            }
+            let expected = map
+                .entries
+                .iter()
+                .map(|entry| (entry.key.0, entry.value, entry.hash))
+                .collect::<Vec<_>>();
+            let bytes = map.allocated_bytes();
+            forbidden.set(true);
+            assert!(map.shrink_if_sparse());
+            assert_eq!(
+                map.entries
+                    .iter()
+                    .map(|entry| (entry.key.0, entry.value, entry.hash))
+                    .collect::<Vec<_>>(),
+                expected
+            );
+            assert!(map.allocated_bytes() < bytes / 4);
+            assert!(map.entries.capacity() >= 2 * map.len());
+            assert!(ScanMap::<HashProbe, u64, BuildHasherDefault<IdentityHasher>, DENSE>::bucket_capacity(map.buckets.len()) >= 2 * map.len());
+            assert!(!map.shrink_if_sparse());
+            forbidden.set(false);
+            let capacities = (map.entries.capacity(), map.buckets.len());
+            map.insert(HashProbe(99_999, forbidden.clone()), 123);
+            assert_eq!((map.entries.capacity(), map.buckets.len()), capacities);
+            for &(key, value, _) in &expected {
+                assert_eq!(map.get(&HashProbe(key, forbidden.clone())), Some(&value));
+            }
+            assert_eq!(map.remove(&HashProbe(99_999, forbidden)), Some(123));
+        }
+        check::<false>();
+        check::<true>();
+    }
+
+    #[test]
+    fn sparse_shrink_preserves_scan_coverage_across_multi_level_contraction() {
+        fn check<const DENSE: bool>() {
+            let mut map = BucketMap::<DENSE>::with_capacity_and_hasher(65_536, Default::default());
+            map.extend((0..2048).map(|key| (key * 37, key)));
+            for key in 0..1792 {
+                map.remove(&(key * 37));
+            }
+            let old_buckets = map.buckets.len();
+            let old_bits = old_buckets.trailing_zeros();
+            let survivors = map.keys().copied().collect::<HashSet<_>>();
+            assert!(map.shrink_if_sparse());
+            assert!(map.buckets.len() <= old_buckets / 16);
+            for boundary in (0..old_buckets).step_by(old_buckets / 64) {
+                let cursor = (boundary as u64).reverse_bits() >> (64 - old_bits);
+                let mut seen = survivors
+                    .iter()
+                    .copied()
+                    .filter(|key| {
+                        let bucket = key & (old_buckets as u64 - 1);
+                        let rank = bucket.reverse_bits() >> (64 - old_bits);
+                        rank < boundary as u64
+                    })
+                    .collect::<HashSet<_>>();
+                finish_resized_scan(&map, cursor, &mut seen);
+                assert_eq!(seen, survivors, "scan prefix boundary {boundary}");
+            }
+        }
+        check::<false>();
+        check::<true>();
     }
 
     #[test]
