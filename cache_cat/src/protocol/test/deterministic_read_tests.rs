@@ -634,8 +634,9 @@ fn assert_saved_results(cache: &MyCache, prefix: &str, reply: &Value) {
                 ],
                 _ => unreachable!(),
             };
-            // These commands still retain their canonical sorted Lua/EXEC path.
-            if matches!(*label, "fields" | "intersection" | "union" | "difference") {
+            // Set algebra retains its canonical sorted Lua/EXEC path. HKEYS
+            // now follows the replicated dense field sequence like HGETALL.
+            if matches!(*label, "intersection" | "union" | "difference") {
                 expected.sort_unstable();
             }
             assert_eq!(values, expected, "content of {label}");

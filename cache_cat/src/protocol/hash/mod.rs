@@ -121,7 +121,7 @@ mod tests {
     }
 
     #[test]
-    fn clocked_hkeys_retains_its_byte_sorted_reply() {
+    fn clocked_hkeys_preserves_dense_field_order() {
         let fields = [
             (Bytes::from_static(b"z"), HashValue::Int(1)),
             (Bytes::from_static(b"\xff"), HashValue::Int(2)),
@@ -129,7 +129,7 @@ mod tests {
             (Bytes::from_static(b"a\0"), HashValue::Int(4)),
         ];
         let expected = Value::Array(Some(
-            [b"".as_slice(), b"a\0", b"z", b"\xff"]
+            [b"z".as_slice(), b"\xff", b"", b"a\0"]
                 .into_iter()
                 .map(|field| Value::BulkString(Some(Bytes::copy_from_slice(field))))
                 .collect(),

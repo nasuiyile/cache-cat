@@ -196,7 +196,7 @@ return {field, ARGV[1]}
 
 A standalone read can use only the read logical clock; it cannot use the write logical clock. A Lua script is treated as a write command and therefore carries a write logical clock. While executing a Lua script, all read logical clocks are converted to the write logical clock so every node produces the same result.
 
-Random reads inside Lua/EXEC use the replicated logical clock with the key as the seed for a fixed RNG. Set and Hash writes preserve their dense member/field sequences across replicas, clones and snapshot restoration. SRANDMEMBER and HRANDFIELD sample these arrays through read-only indices; SMEMBERS, HGETALL and HVALS enumerate them directly. These commands need no sorting and do not change the stored sequences while reading. Reads whose order still depends on local bucket layout, such as HSCAN/SSCAN, retain their sorted deterministic execution path. Ordinary random reads use thread-local randomness.
+Random reads inside Lua/EXEC use the replicated logical clock with the key as the seed for a fixed RNG. Set and Hash writes preserve their dense member/field sequences across replicas, clones and snapshot restoration. SRANDMEMBER and HRANDFIELD sample these arrays through read-only indices; SMEMBERS, HGETALL, HKEYS and HVALS enumerate them directly. These commands need no sorting and do not change the stored sequences while reading. Reads whose order still depends on local bucket layout, such as HSCAN/SSCAN, retain their sorted deterministic execution path. Ordinary random reads use thread-local randomness.
 
 The overall framework is:
 
