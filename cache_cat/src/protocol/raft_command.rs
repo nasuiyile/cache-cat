@@ -14,6 +14,7 @@ use crate::protocol::bitmap::bitop::BitOpCommand;
 use crate::protocol::bitmap::bitpos::BitPosCommand;
 use crate::protocol::bitmap::getbit::GetBitCommand;
 use crate::protocol::bitmap::setbit::SetBitCommand;
+use crate::protocol::hash::hdel::HDelCommand;
 use crate::protocol::hash::hexists::HExistsCommand;
 use crate::protocol::hash::hget::HGetCommand;
 use crate::protocol::hash::hgetall::HGetAllCommand;
@@ -78,7 +79,7 @@ use crate::protocol::string::decrby::DecrByCommand;
 use crate::protocol::string::fadd::PfAddCommand;
 use crate::protocol::string::get::GetCommand;
 use crate::protocol::string::getrange::GetRangeCommand;
-use crate::protocol::json::{get::JsonGetCommand, set::JsonSetCommand};
+use crate::protocol::json::{del::JsonDelCommand, get::JsonGetCommand, set::JsonSetCommand};
 use crate::protocol::string::getset::GetSetCommand;
 use crate::protocol::string::incr::IncrCommand;
 use crate::protocol::string::incrby::IncrByCommand;
@@ -162,6 +163,7 @@ impl RaftCommandFactory {
         factory.register("GETRANGE", GetRangeCommand);
         factory.register("JSON.GET", JsonGetCommand);
         factory.register("JSON.SET", JsonSetCommand);
+        factory.register("JSON.DEL", JsonDelCommand);
         factory.register("SET", SetCommand);
         factory.register("DEL", DelCommand);
         factory.register("INCR", IncrCommand);
@@ -193,6 +195,7 @@ impl RaftCommandFactory {
         factory.register("SSCAN", SScanCommand);
         factory.register("HMGET", HMGetCommand);
         factory.register("HMSET", HMSetCommand);
+        factory.register("HDEL", HDelCommand);
         // factory.register("EVAL", EvalCommand); // Prohibiting nesting (not prohibited)
         factory.register("SREM", SRemCommand);
         factory.register("SETBIT", SetBitCommand);
@@ -338,5 +341,48 @@ mod tests {
         };
         assert_eq!(request.key.as_ref(), b"hash");
         assert_eq!(request.fields, vec![("field".into(), "value".into())]);
+    }
+
+    #[test]
+    fn lua_factory_dispatches_hdel_and_json_del_to_their_compute_operations() {
+        let factory = RaftCommandFactory::init_lua();
+        let parse = |args: &[&'static str]| {
+            let args = args
+                .iter()
+                .map(|value| Value::BulkString(Some((*value).into())))
+                .collect::<Vec<_>>();
+            factory.parse_request(&args)
+        };
+        let Ok(Operation::Base(BaseOperation::HDel(request))) = parse(&["hdel", "hash", "a", "b"])
+        else {
+            panic!("expected HDEL compute operation");
+        };
+        assert_eq!(request.key.as_ref(), b"hash");
+        assert_eq!(
+            request.fields,
+            vec![
+                bytes::Bytes::from_static(b"a"),
+                bytes::Bytes::from_static(b"b")
+            ]
+        );
+        assert!(matches!(
+            parse(&["HDEL", "hash"]),
+            Err(ProtocolError::WrongArgCount("hdel"))
+        ));
+        // Redis defaults JSON.DEL to the root and ignores arguments after the path.
+        for (args, path) in [
+            (vec!["JSON.DEL", "doc"], "$"),
+            (vec!["json.del", "doc", "$.a", "ignored"], "$.a"),
+        ] {
+            let Ok(Operation::Base(BaseOperation::JsonDel(request))) = parse(&args) else {
+                panic!("expected JSON.DEL compute operation");
+            };
+            assert_eq!(request.key.as_ref(), b"doc");
+            assert_eq!(request.path, path);
+        }
+        assert!(matches!(
+            parse(&["JSON.DEL"]),
+            Err(ProtocolError::WrongArgCount("json.del"))
+        ));
     }
 }

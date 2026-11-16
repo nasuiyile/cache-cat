@@ -5,7 +5,7 @@
 
 use ijson::{IArray, IValue};
 use serde::{Deserialize, Serialize, Serializer};
-use std::{collections::HashSet, fmt};
+use std::{cmp::Ordering, collections::HashSet, fmt};
 
 mod eval;
 mod parser;
@@ -122,6 +122,16 @@ enum Part {
     Index(usize),
 }
 
+impl Part {
+    /// RedisJSON orders array slots and numeric-looking object keys alike.
+    fn number(&self) -> Option<usize> {
+        match self {
+            Self::Field(field) => field.parse().ok(),
+            Self::Index(index) => Some(*index),
+        }
+    }
+}
+
 impl JsonPath {
     pub fn parse(source: &str) -> Result<Self, PathError> {
         parser::parse(source)
@@ -152,17 +162,34 @@ impl JsonPath {
         eval::evaluate(&self.expression, root, root)
     }
 
+    /// Mutations address document nodes; a projection only computes values.
+    fn segments(&self) -> Result<&[Segment], PathError> {
+        match &self.expression {
+            Expr::Path { segments, .. } => Ok(segments.as_slice()),
+            _ => Err(PathError(
+                "path must identify document nodes, not a projection".into(),
+            )),
+        }
+    }
+
+    /// Remove every matched node, returning how many were removed. The root
+    /// has no parent to be removed from: callers delete the key instead.
+    pub fn delete(&self, root: &mut IValue) -> Result<usize, PathError> {
+        let mut locations = matched_locations(root, self.segments()?);
+        if locations.len() > 1 {
+            retain_outermost(&mut locations);
+            locations.sort_by(|left, right| deletion_order(left, right));
+        }
+        Ok(locations.iter().filter(|path| remove(root, path)).count())
+    }
+
     pub fn set(
         &self,
         root: &mut IValue,
         replacement: &IValue,
         mode: SetMode,
     ) -> Result<SetOutcome, PathError> {
-        let Expr::Path { segments, .. } = &self.expression else {
-            return Err(PathError(
-                "path must identify document nodes, not a projection".into(),
-            ));
-        };
+        let segments = self.segments()?;
         if segments.is_empty() {
             if mode == SetMode::Nx {
                 return Err(PathError("path must end with an object key".into()));
@@ -182,16 +209,7 @@ impl JsonPath {
             return Err(PathError("wrong static path".into()));
         }
 
-        let mut locations = Vec::new();
-        walk(
-            Node::Borrowed(root),
-            segments,
-            root,
-            &mut Vec::new(),
-            &mut |_, path| {
-                locations.push(path.to_vec());
-            },
-        );
+        let mut locations = matched_locations(root, segments);
         if !locations.is_empty() {
             if mode == SetMode::Nx {
                 return Ok(SetOutcome {
@@ -200,9 +218,7 @@ impl JsonPath {
                 });
             }
             // A matched ancestor supersedes all descendant replacements.
-            let mut seen = HashSet::with_capacity(locations.len());
-            locations.retain(|path| seen.insert(path.clone()));
-            locations.retain(|path| !(0..path.len()).any(|len| seen.contains(&path[..len])));
+            retain_outermost(&mut locations);
             let height = subtree_depth(replacement);
             let mut changed = false;
             let mut complete = true;
@@ -237,16 +253,7 @@ impl JsonPath {
             return Err(PathError("wrong static path".into()));
         }
         let (last, prefix) = segments.split_last().expect("non-root path");
-        let mut parents = Vec::new();
-        walk(
-            Node::Borrowed(root),
-            prefix,
-            root,
-            &mut Vec::new(),
-            &mut |_, path| {
-                parents.push(path.to_vec());
-            },
-        );
+        let parents = matched_locations(root, prefix);
         let Some(parent_path) = parents.first() else {
             return Ok(SetOutcome {
                 changed: false,
@@ -347,6 +354,64 @@ fn replace(root: &mut IValue, path: &[Part], replacement: &IValue) -> Result<boo
                 .map_err(|e| PathError(e.to_string()))
         }
     }
+}
+
+fn remove(root: &mut IValue, path: &[Part]) -> bool {
+    let Some((last, parent)) = path.split_last() else {
+        return false;
+    };
+    let Some(parent) = get_mut(root, parent) else {
+        return false;
+    };
+    let removed = match last {
+        Part::Field(key) => parent
+            .as_object_mut()
+            .and_then(|object| object.remove(key.as_str())),
+        Part::Index(index) => parent.as_array_mut().and_then(|array| array.remove(*index)),
+    };
+    removed.is_some()
+}
+
+/// Every location matched by `segments`, in selection order.
+fn matched_locations(root: &IValue, segments: &[Segment]) -> Vec<Vec<Part>> {
+    let mut locations = Vec::new();
+    walk(
+        Node::Borrowed(root),
+        segments,
+        root,
+        &mut Vec::new(),
+        &mut |_, path| locations.push(path.to_vec()),
+    );
+    locations
+}
+
+/// Drop duplicates and every location inside another matched location.
+fn retain_outermost(locations: &mut Vec<Vec<Part>>) {
+    let mut seen = HashSet::with_capacity(locations.len());
+    locations.retain(|path| seen.insert(path.clone()));
+    locations.retain(|path| !(0..path.len()).any(|len| seen.contains(&path[..len])));
+}
+
+/// RedisJSON's deletion order. Higher array indices go first, so a removal
+/// never shifts a pending one. Sibling fields keep Redis's key order because
+/// ijson moves the last field into a removed slot: the order of removals
+/// decides the order of the surviving fields.
+fn deletion_order(left: &[Part], right: &[Part]) -> Ordering {
+    for (left, right) in left.iter().zip(right) {
+        let order = match (left.number(), right.number()) {
+            (Some(left), Some(right)) => right.cmp(&left),
+            (Some(_), None) => Ordering::Greater,
+            (None, Some(_)) => Ordering::Less,
+            (None, None) => match (left, right) {
+                (Part::Field(left), Part::Field(right)) => left.cmp(right),
+                _ => Ordering::Equal,
+            },
+        };
+        if order != Ordering::Equal {
+            return order;
+        }
+    }
+    right.len().cmp(&left.len())
 }
 
 fn array_node(array: &IArray, index: usize) -> Option<Node<'_>> {

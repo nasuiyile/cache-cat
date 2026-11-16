@@ -1,7 +1,6 @@
 //! Command-boundary shrinking must preserve replicated order and live cursors.
 
-use crate::protocol::hash::hdel::HDelCommand;
-use crate::protocol::raft_command::{RaftCommand, RaftCommandFactory};
+use crate::protocol::raft_command::RaftCommandFactory;
 use crate::protocol::zset::zadd::ZAddReq;
 use crate::raft::types::core::mocha::core::{MyCache, MyValue, Update, UpdateType};
 use crate::raft::types::core::mocha::request_handler::{do_request, read_request};
@@ -34,13 +33,7 @@ fn request(args: Vec<Bytes>) -> Operation {
         .into_iter()
         .map(|arg| Value::BulkString(Some(arg)))
         .collect::<Vec<_>>();
-    // HDEL's normal command parser is available even though the existing Lua
-    // factory does not register it. Exercise that ordinary entry point here.
-    if args[0].string_bytes_clone().unwrap().as_ref() == b"HDEL" {
-        HDelCommand.raft_request(&args).unwrap()
-    } else {
-        RaftCommandFactory::init_lua().parse_request(&args).unwrap()
-    }
+    RaftCommandFactory::init_lua().parse_request(&args).unwrap()
 }
 
 fn apply(cache: &MyCache, operation: Operation) -> Value {

@@ -314,3 +314,69 @@ fn nesting_and_projection_writes_are_rejected() {
     );
     assert_eq!(select(&doc, "$.a"), json!([1]));
 }
+
+fn delete(doc: &mut IValue, path: &str) -> usize {
+    JsonPath::parse(path).unwrap().delete(doc).unwrap()
+}
+
+#[test]
+fn delete_removes_each_outermost_match_once() {
+    // Union order and duplicate selectors must not shift a pending removal,
+    // in a packed numeric array as well as a heterogeneous one.
+    let mut doc = document(r#"{"n":[0,1,2,3,4],"m":["a","b","c"]}"#);
+    assert_eq!(delete(&mut doc, "$.n[0,3,0]"), 2);
+    assert_eq!(delete(&mut doc, "$.m[0:2]"), 2);
+    assert_eq!(delete(&mut doc, "$.n[9]"), 0);
+    assert_eq!(delete(&mut doc, "$.missing"), 0);
+    assert_eq!(
+        serde_json::to_value(&doc).unwrap(),
+        json!({"n":[1,2,4],"m":["c"]})
+    );
+
+    // A matched ancestor takes its matched descendants with it.
+    let mut doc = document(r#"{"a":{"a":1,"b":2},"c":{"a":3}}"#);
+    assert_eq!(delete(&mut doc, "$..a"), 2);
+    assert_eq!(serde_json::to_value(&doc).unwrap(), json!({"c":{}}));
+
+    // A legacy path deletes every match, not only the first.
+    let mut doc = document(r#"{"a":[{"x":1,"y":2},{"x":3}]}"#);
+    assert_eq!(delete(&mut doc, ".a[*].x"), 2);
+    assert_eq!(
+        serde_json::to_value(&doc).unwrap(),
+        json!({"a":[{"y":2},{}]})
+    );
+}
+
+#[test]
+fn delete_orders_sibling_fields_like_redis() {
+    // ijson moves the last field into a removed slot.
+    let mut doc = document(r#"{"a":1,"b":2,"c":3,"d":4}"#);
+    assert_eq!(delete(&mut doc, "$.a"), 1);
+    assert_eq!(
+        serde_json::to_string(&doc).unwrap(),
+        r#"{"d":4,"b":2,"c":3}"#
+    );
+    // Redis removes `a` before `b` whatever the selector order, and numeric
+    // keys after the others from the highest down.
+    let mut doc = document(r#"{"a":1,"b":2,"c":3,"d":4}"#);
+    assert_eq!(delete(&mut doc, "$['b','a']"), 2);
+    assert_eq!(serde_json::to_string(&doc).unwrap(), r#"{"d":4,"c":3}"#);
+    let mut doc = document(r#"{"1":1,"2":2,"x":3,"y":4,"z":5}"#);
+    assert_eq!(delete(&mut doc, "$['1','2']"), 2);
+    assert_eq!(
+        serde_json::to_string(&doc).unwrap(),
+        r#"{"y":4,"z":5,"x":3}"#
+    );
+}
+
+#[test]
+fn delete_rejects_projections_without_changing_the_document() {
+    let mut doc = document(r#"{"a":1}"#);
+    assert!(
+        JsonPath::parse("$.a + 1")
+            .unwrap()
+            .delete(&mut doc)
+            .is_err()
+    );
+    assert_eq!(select(&doc, "$.a"), json!([1]));
+}

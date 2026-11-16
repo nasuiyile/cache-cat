@@ -138,6 +138,7 @@ fn base_request_inner(
         }
         BaseOperation::Set(param) => my_cache.set(param, update),
         BaseOperation::JsonSet(param) => my_cache.execute_compute(param, update),
+        BaseOperation::JsonDel(param) => my_cache.execute_compute(param, update),
         BaseOperation::XAdd(mut param) => {
             // Resolve automatic IDs before both initialization and mutation so
             // every Raft replica uses the replicated write clock.

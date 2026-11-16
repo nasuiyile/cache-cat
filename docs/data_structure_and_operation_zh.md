@@ -76,6 +76,10 @@ JSON 使用 `Arc<Mutex<JsonDocument>>`，内部直接存放 Redis 官方 `ijson`
 
 `JSON.SET key path json [NX|XX]` 使用 `ComputeCommand`，日志保存输入字节和选项，状态机直接解析为紧凑树。只允许在根路径创建新 key；局部更新可创建已有对象的最后一级字段，不自动补齐中间容器。已有 key 的 TTL 在根替换和局部更新后均保留。支持 `FORMAT JSON|STRING|BSON` 和显式的 `FPHA` 数值数组选项，默认不启用有损浮点精度。命令均可用于 EXEC 和 Lua。`TYPE`/`SCAN TYPE` 使用 Redis 的 `ReJSON-RL` 类型名称。
 
+`JSON.DEL key [path]` 使用 `ComputeCommand`，返回被删除的值的数量，同样可用于 EXEC 和 Lua。省略路径、`$` 和 legacy `.` 都表示根，删除根即删除 key；key 不存在时返回 0 且不解析路径，路径之后的多余参数被忽略，均与 Redis 一致。legacy 路径和 `$` 路径一样删除全部匹配项；重复匹配只删除一次，已匹配节点内部的匹配随祖先一起删除，不重复计数。局部删除保留 TTL；如果本次删除使根容器变成空对象或空数组，则与 Redis 一样删除整个 key，原本就为空的文档不受影响。
+
+删除顺序沿用 RedisJSON：同一数组内下标从高到低，前一次删除不会移动待删除的下标；同一对象内先按键名升序删除非数字键，再按数值降序删除数字键。ijson 删除字段时把末尾字段换入空位，因此删除顺序决定剩余字段的顺序。该顺序属于复制状态，各副本以及快照 CAS 回放必须得到相同的字段顺序。匹配、去重和排序只在 JSON.DEL 内进行，成本为 O(N + M log M)，N 为遍历的节点数、M 为匹配数；每次数组元素删除还需移动其后的元素。
+
 快照编码采用显式类型标签，直接通过 serde/bincode 流式编码树及数值数组，不依赖 `IValue` 的 `deserialize_any`。恢复校验深度、类型和数值，并保留对象字段顺序及数值数组精度。快照 `Start` 期间沿用现有 `snapshot_clone` 隔离：对象和数组会深克隆，长字符串共享；本实现不宣称分块 COW，也不保证大文档频繁更新时的低峰值。`MEMORY USAGE` 统计可达分配，跨 key 共享字符串和全局共享池使其与实际 RSS 存在差异。
 
 ### 其他

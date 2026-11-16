@@ -90,6 +90,10 @@ fn assert_error(value: Value) {
     assert!(matches!(value, Value::Error(_)), "{value:?}");
 }
 
+fn assert_integer(value: Value, expected: i64) {
+    assert_eq!(value.encode(), format!(":{expected}\r\n").as_bytes());
+}
+
 #[tokio::test]
 async fn json_partial_depth_limited_updates_are_recorded_and_replayed() {
     let cache = MyCache::new(1).unwrap();
@@ -790,6 +794,128 @@ fn json_type_memory_and_key_commands_use_the_new_data_type() {
     assert_null(run(&cache, &["JSON.GET", "renamed"]));
 }
 
+#[test]
+fn json_del_removes_matches_roots_and_emptied_documents() {
+    let cache = MyCache::new(1).unwrap();
+    // Redis does not compile the path of a missing key.
+    assert_integer(run(&cache, &["JSON.DEL", "doc"]), 0);
+    assert_integer(run(&cache, &["JSON.DEL", "doc", "$.broken["]), 0);
+    assert_error(run(&cache, &["JSON.DEL"]));
+
+    assert_ok(run(
+        &cache,
+        &[
+            "JSON.SET",
+            "doc",
+            "$",
+            r#"{"a":1,"nested":{"a":2,"b":[1,2,3]},"keep":true}"#,
+        ],
+    ));
+    assert_integer(run(&cache, &["JSON.DEL", "doc", "$..a"]), 2);
+    assert_integer(run(&cache, &["JSON.DEL", "doc", "$.nested.b[0,-1]"]), 2);
+    assert_integer(run(&cache, &["JSON.DEL", "doc", "$.missing"]), 0);
+    assert_integer(run(&cache, &["JSON.DEL", "doc", ".nested.b[5]"]), 0);
+    for path in ["$.broken[", "$.keep + 1"] {
+        assert_error(run(&cache, &["JSON.DEL", "doc", path]));
+    }
+    assert_eq!(
+        json_reply(run(&cache, &["JSON.GET", "doc"])),
+        json!({"nested":{"b":[2]},"keep":true})
+    );
+    // Arguments after the path are ignored, as in Redis.
+    assert_integer(run(&cache, &["JSON.DEL", "doc", "$.keep", "ignored"]), 1);
+    // A deletion that empties the root container deletes the key.
+    assert_integer(run(&cache, &["JSON.DEL", "doc", "$.nested"]), 1);
+    assert_integer(run(&cache, &["EXISTS", "doc"]), 0);
+
+    // The root is addressed by an omitted path, `$`, or legacy `.`.
+    for path in [None, Some("$"), Some(".")] {
+        assert_ok(run(&cache, &["JSON.SET", "doc", "$", "[1,2]"]));
+        let mut args = vec!["JSON.DEL", "doc"];
+        args.extend(path);
+        assert_integer(run(&cache, &args), 1);
+        assert_null(run(&cache, &["JSON.GET", "doc"]));
+    }
+
+    // Only a container emptied by this command is removed.
+    assert_ok(run(&cache, &["JSON.SET", "array", "$", "[1]"]));
+    assert_integer(run(&cache, &["JSON.DEL", "array", "$[0]"]), 1);
+    assert_integer(run(&cache, &["EXISTS", "array"]), 0);
+    assert_ok(run(&cache, &["JSON.SET", "empty", "$", "{}"]));
+    assert_integer(run(&cache, &["JSON.DEL", "empty", "$.a"]), 0);
+    assert_integer(run(&cache, &["EXISTS", "empty"]), 1);
+
+    assert_ok(run(&cache, &["SET", "string", "unchanged"]));
+    assert_error(run(&cache, &["JSON.DEL", "string"]));
+    assert_error(run(&cache, &["JSON.DEL", "string", "$.a"]));
+    assert_eq!(bulk(run(&cache, &["GET", "string"])).as_ref(), b"unchanged");
+}
+
+#[test]
+fn json_del_keeps_ttl_of_a_partially_deleted_document() {
+    let cache = MyCache::new(1).unwrap();
+    assert_ok(run(&cache, &["JSON.SET", "doc", "$", r#"{"a":1,"b":2}"#]));
+    assert_integer(run(&cache, &["PEXPIRE", "doc", "5000"]), 1);
+    assert_integer(
+        apply(&cache, command(&["JSON.DEL", "doc", "$.a"]), 0, 2_000, None),
+        1,
+    );
+    assert_eq!(
+        cache.databases[0]
+            .mocha
+            .get_entry(b"doc".as_slice())
+            .unwrap()
+            .expire_at,
+        Some(6_000)
+    );
+    assert_eq!(
+        json_reply(read(&cache, &["JSON.GET", "doc"], 5_999)),
+        json!({"b":2})
+    );
+    // An expired document is a missing key.
+    assert_integer(
+        apply(&cache, command(&["JSON.DEL", "doc", "$.b"]), 0, 6_000, None),
+        0,
+    );
+}
+
+#[test]
+fn json_del_and_hdel_run_inside_lua_and_exec() {
+    let cache = MyCache::new(1).unwrap();
+    assert_ok(run(
+        &cache,
+        &["JSON.SET", "doc", "$", r#"{"a":1,"b":2,"c":3}"#],
+    ));
+    assert_integer(run(&cache, &["HSET", "hash", "f1", "1", "f2", "2"]), 2);
+    let eval = EvalParams::new(
+        "return {redis.call('JSON.DEL', KEYS[1], '$.a'), redis.call('HDEL', KEYS[2], 'f1', 'missing'), redis.pcall('json.del', KEYS[1], '$.missing')}".into(),
+        2,
+        vec!["doc".into(), "hash".into()],
+        Vec::new(),
+    );
+    let reply = apply(
+        &cache,
+        Operation::Redis(RedisOperation::RedisEval(eval)),
+        0,
+        1_000,
+        None,
+    );
+    assert_eq!(reply.encode(), b"*3\r\n:1\r\n:1\r\n:0\r\n");
+    let exec = Operation::Redis(RedisOperation::RedisExec(ExecParams {
+        operations: vec![
+            QueuedOperation::new(0, command(&["JSON.DEL", "doc", "$.b"])),
+            QueuedOperation::new(0, command(&["HDEL", "hash", "f2"])),
+            QueuedOperation::new(0, command(&["JSON.GET", "doc"])),
+        ],
+    }));
+    assert_eq!(
+        apply(&cache, exec, 0, 1_000, None).encode(),
+        b"*3\r\n:1\r\n:1\r\n$7\r\n{\"c\":3}\r\n"
+    );
+    // HDEL removed the last field, and with it the hash.
+    assert_integer(run(&cache, &["EXISTS", "hash"]), 0);
+}
+
 async fn dump(cache: &MyCache) -> Vec<u8> {
     let mut bytes = Cursor::new(Vec::new());
     cache.dump_cache_to_writer(&mut bytes).await.unwrap();
@@ -983,5 +1109,70 @@ async fn json_exec_and_lua_remain_deterministic_after_snapshot_restore() {
             json!([1, 9, 3])
         );
         assert_null(read(cache, &["JSON.GET", "doc"], 11_000));
+    }
+}
+
+#[tokio::test]
+async fn json_del_snapshot_cas_replays_every_scan_cut() {
+    let cache = MyCache::new(2).unwrap();
+    let mut cuts = vec![dump(&cache).await];
+    let mut queue = Vec::new();
+    let mut revision = 0;
+    let operations = [
+        vec![
+            "JSON.SET",
+            "doc",
+            "$",
+            r#"{"a":1,"b":[1,2,3],"c":{"a":2},"d":4}"#,
+        ],
+        vec!["PEXPIRE", "doc", "10000"],
+        vec!["JSON.DEL", "doc", "$..a"],
+        vec!["JSON.DEL", "doc", "$.missing"],
+        vec!["JSON.DEL", "doc", "$.b[0]"],
+        vec!["JSON.SET", "emptied", "$", r#"{"only":1}"#],
+        vec!["JSON.DEL", "emptied", "$.only"],
+        vec!["JSON.SET", "root", "$", "[1]"],
+        vec!["JSON.DEL", "root"],
+    ];
+    for (index, args) in operations.iter().enumerate() {
+        let response = apply(
+            &cache,
+            command(args),
+            1,
+            1_000 + index as u64,
+            Some((&mut queue, &mut revision)),
+        );
+        assert!(
+            !matches!(response, Value::Error(_)),
+            "{args:?}: {response:?}"
+        );
+        cuts.push(dump(&cache).await);
+    }
+    assert_eq!(
+        queue.len(),
+        8,
+        "a deletion without a match records no write"
+    );
+    // Replay must also reproduce the field order left by the removals.
+    let expected = bulk(apply(&cache, command(&["JSON.GET", "doc"]), 1, 1_009, None));
+    assert_eq!(
+        serde_json::from_slice::<Json>(&expected).unwrap(),
+        json!({"b":[2,3],"c":{},"d":4})
+    );
+    for (index, full) in cuts.iter().enumerate() {
+        let restored = restore(full, &queue, 1_009).await;
+        let response = apply(&restored, command(&["JSON.GET", "doc"]), 1, 1_009, None);
+        assert_eq!(bulk(response), expected, "scan cut {index}");
+        let entry = restored.databases[1]
+            .mocha
+            .get_entry(b"doc".as_slice())
+            .unwrap();
+        assert_eq!(entry.expire_at, Some(11_001), "scan cut {index}");
+        for key in ["emptied", "root"] {
+            assert_integer(
+                apply(&restored, command(&["EXISTS", key]), 1, 1_009, None),
+                0,
+            );
+        }
     }
 }
