@@ -1,5 +1,6 @@
 use crate::error::ProtocolError;
 use crate::protocol::bf::bf_add::BfAddCommand;
+use crate::protocol::bf::bf_card::BfCardCommand;
 use crate::protocol::bf::bf_exits::BfExistsCommand;
 use crate::protocol::bf::bf_info::BfInfoCommand;
 use crate::protocol::bf::bf_insert::BfInsertCommand;
@@ -34,6 +35,7 @@ use crate::protocol::key::dbsize::DbsizeCommand;
 use crate::protocol::key::del::DelCommand;
 use crate::protocol::key::exists::ExistsCommand;
 use crate::protocol::key::expire::ExpireCommand;
+use crate::protocol::key::flushall::FlushAllCommand;
 use crate::protocol::key::flushdb::FlushDBCommand;
 use crate::protocol::key::keys::KeysCommand;
 use crate::protocol::key::scan::ScanCommand;
@@ -227,6 +229,7 @@ impl RaftCommandFactory {
         factory.register("ZREM", ZRemCommand);
         factory.register("LTRIM", LTrimCommand);
         factory.register("FLUSHDB", FlushDBCommand);
+        factory.register("FLUSHALL", FlushAllCommand);
         factory.register("BITCOUNT", BitCountCommand);
         factory.register("BITPOS", BitPosCommand);
         factory.register("SCARD", SCardCommand);
@@ -265,6 +268,7 @@ impl RaftCommandFactory {
         factory.register("BF.RESERVE", BfReserveCommand);
         factory.register("BF.INFO", BfInfoCommand);
         factory.register("BF.INSERT", BfInsertCommand);
+        factory.register("BF.CARD", BfCardCommand);
         factory.register("BF.SCANDUMP", BfScanDumpCommand);
         factory.register("BF.LOADCHUNK", BfLoadChunkCommand);
         factory
@@ -384,5 +388,42 @@ mod tests {
             parse(&["JSON.DEL"]),
             Err(ProtocolError::WrongArgCount("json.del"))
         ));
+    }
+
+    #[test]
+    fn lua_factory_dispatches_flushall_and_bf_card() {
+        let factory = RaftCommandFactory::init_lua();
+        let parse = |args: &[&'static str]| {
+            let args = args
+                .iter()
+                .map(|value| Value::BulkString(Some((*value).into())))
+                .collect::<Vec<_>>();
+            factory.parse_request(&args)
+        };
+        for (args, async_mode) in [
+            (vec!["flushall"], false),
+            (vec!["FLUSHALL", "SYNC"], false),
+            (vec!["FLUSHALL", "async"], true),
+        ] {
+            let Ok(Operation::Base(BaseOperation::FlushAll(request))) = parse(&args) else {
+                panic!("expected FLUSHALL base operation");
+            };
+            assert_eq!(request.async_mode, async_mode, "{args:?}");
+        }
+        assert!(matches!(
+            parse(&["FLUSHALL", "later"]),
+            Err(ProtocolError::SyntaxError)
+        ));
+        let Ok(Operation::Read(ReadOperation::BfCard(params))) = parse(&["bf.card", "filter"])
+        else {
+            panic!("expected BF.CARD read operation");
+        };
+        assert_eq!(params.key.as_ref(), b"filter");
+        for args in [vec!["BF.CARD"], vec!["BF.CARD", "filter", "extra"]] {
+            assert!(matches!(
+                parse(&args),
+                Err(ProtocolError::WrongArgCount("bf.card"))
+            ));
+        }
     }
 }

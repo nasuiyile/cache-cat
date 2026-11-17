@@ -1,5 +1,3 @@
-use crate::protocol::hash::hdel::HDelReq;
-use crate::protocol::key::flushall::FlushAllReq;
 use crate::protocol::lua::eval::EvalParams;
 use crate::protocol::raft_command::RaftCommandFactory;
 use crate::protocol::transaction::QueuedOperation;
@@ -15,23 +13,6 @@ use bytes::Bytes;
 use std::io::Cursor;
 
 fn command(args: &[&str]) -> Operation {
-    // The Lua factory does not register every command accepted by the normal
-    // protocol dispatcher. Exercise their existing state-machine requests here.
-    match args[0] {
-        "FLUSHALL" => {
-            return Operation::Base(BaseOperation::FlushAll(FlushAllReq { async_mode: false }));
-        }
-        "HDEL" => {
-            return Operation::Base(BaseOperation::HDel(HDelReq {
-                key: Bytes::copy_from_slice(args[1].as_bytes()),
-                fields: args[2..]
-                    .iter()
-                    .map(|field| Bytes::copy_from_slice(field.as_bytes()))
-                    .collect(),
-            }));
-        }
-        _ => {}
-    }
     let values = args
         .iter()
         .map(|arg| Value::BulkString(Some(Bytes::copy_from_slice(arg.as_bytes()))))
@@ -650,6 +631,33 @@ async fn flush_replay_preserves_later_writes_and_database_scope() {
             (0, 7, command(&["SADD", "after", "member"])),
         ];
         assert_all_scan_cuts(&cache, 0, &operations, &["old", "after"]).await;
+    }
+}
+
+#[tokio::test]
+async fn lua_flushall_replays_as_its_recorded_writes() {
+    let cache = MyCache::new(2).unwrap();
+    for db in 0..2 {
+        apply(&cache, command(&["SET", "old", "10"]), db, 1, None);
+    }
+    let eval = Operation::Redis(RedisOperation::RedisEval(EvalParams::new(
+        "redis.call('INCR', 'old'); redis.call('FLUSHALL'); redis.call('SET', 'after', 'kept'); return redis.call('INCR', 'old')".into(),
+        0, vec![], vec![],
+    )));
+    let operations = [(0, 2, eval), (1, 3, command(&["SET", "after", "other-db"]))];
+    assert_all_scan_cuts(&cache, 0, &operations, &["old", "after"]).await;
+    // The script's flush reached the database it was not running in.
+    for (db, key, expected) in [
+        (0, "old", Some("1")),
+        (0, "after", Some("kept")),
+        (1, "old", None),
+        (1, "after", Some("other-db")),
+    ] {
+        assert_eq!(
+            entry(&cache, db, key),
+            expected.map(|value| (None, LogicalValue::String(value.into()))),
+            "db {db} key {key}"
+        );
     }
 }
 

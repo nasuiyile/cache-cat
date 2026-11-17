@@ -1156,6 +1156,54 @@ async fn ping_and_echo_are_replied_to_by_exec_in_queue_order() {
 }
 
 #[test]
+fn flushall_and_bf_card_dispatch_in_lua() {
+    fn eval(cache: &MyCache, db_number: u16, script: &'static str) -> Value {
+        let mut update_type = UpdateType::None;
+        let mut update = Update {
+            effects: None,
+            waiters: None,
+            db_number,
+            write_clock: 1,
+            update_type: &mut update_type,
+        };
+        do_request(
+            cache,
+            Operation::Redis(RedisOperation::RedisEval(
+                crate::protocol::lua::eval::EvalParams::new(
+                    script.into(),
+                    1,
+                    vec!["filter".into()],
+                    Vec::new(),
+                ),
+            )),
+            &mut update,
+            true,
+        )
+    }
+    let cache = MyCache::new(2).unwrap();
+    assert_eq!(
+        eval(&cache, 0, "return redis.call('SET', 'other', 'value')").encode(),
+        b"+OK\r\n"
+    );
+    let reply = eval(
+        &cache,
+        1,
+        "redis.call('BF.ADD', KEYS[1], 'a'); \
+         redis.call('BF.ADD', KEYS[1], 'b'); \
+         redis.call('BF.ADD', KEYS[1], 'a'); \
+         local before = redis.call('BF.CARD', KEYS[1]); \
+         local flushed = redis.call('FLUSHALL'); \
+         return {before, flushed.ok, redis.call('BF.CARD', KEYS[1])}",
+    );
+    assert_eq!(reply.encode(), b"*3\r\n:2\r\n$2\r\nOK\r\n:0\r\n");
+    // FLUSHALL is not scoped to the database the script runs in.
+    assert_eq!(
+        eval(&cache, 0, "return redis.call('EXISTS', 'other')").encode(),
+        b":0\r\n"
+    );
+}
+
+#[test]
 fn exec_returns_each_runtime_error_and_continues_with_later_commands() {
     let cache = MyCache::new(1).unwrap();
     let key: Bytes = "k".into();
