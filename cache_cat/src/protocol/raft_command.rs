@@ -15,6 +15,8 @@ use crate::protocol::bitmap::bitop::BitOpCommand;
 use crate::protocol::bitmap::bitpos::BitPosCommand;
 use crate::protocol::bitmap::getbit::GetBitCommand;
 use crate::protocol::bitmap::setbit::SetBitCommand;
+use crate::protocol::connection::echo::EchoCommand;
+use crate::protocol::connection::ping::PingCommand;
 use crate::protocol::hash::hdel::HDelCommand;
 use crate::protocol::hash::hexists::HExistsCommand;
 use crate::protocol::hash::hget::HGetCommand;
@@ -161,6 +163,8 @@ impl RaftCommandFactory {
         // MODULE is known to Redis but is not allowed inside scripts.
         factory.register("MODULE", ModuleCommand);
         // Register connection commands
+        factory.register("PING", PingCommand);
+        factory.register("ECHO", EchoCommand);
         factory.register("GET", GetCommand);
         factory.register("GETRANGE", GetRangeCommand);
         factory.register("JSON.GET", JsonGetCommand);
@@ -424,6 +428,44 @@ mod tests {
                 parse(&args),
                 Err(ProtocolError::WrongArgCount("bf.card"))
             ));
+        }
+    }
+
+    #[test]
+    fn lua_factory_dispatches_ping_and_echo_as_reads() {
+        let factory = RaftCommandFactory::init_lua();
+        let parse = |args: &[&'static str]| {
+            let args = args
+                .iter()
+                .map(|value| Value::BulkString(Some((*value).into())))
+                .collect::<Vec<_>>();
+            factory.parse_request(&args)
+        };
+        let Ok(Operation::Read(ReadOperation::Ping(params))) = parse(&["ping"]) else {
+            panic!("expected PING read operation");
+        };
+        assert_eq!(params.message, None);
+        assert_eq!(params.execute().encode(), b"+PONG\r\n");
+        let Ok(Operation::Read(ReadOperation::Ping(params))) = parse(&["PING", "hello"]) else {
+            panic!("expected PING read operation");
+        };
+        assert_eq!(params.execute().encode(), b"$5\r\nhello\r\n");
+        let Ok(Operation::Read(ReadOperation::Echo(params))) = parse(&["echo", "hello"]) else {
+            panic!("expected ECHO read operation");
+        };
+        assert_eq!(params.execute().encode(), b"$5\r\nhello\r\n");
+        for (args, name) in [
+            (vec!["PING", "a", "b"], "ping"),
+            (vec!["ECHO"], "echo"),
+            (vec!["ECHO", "a", "b"], "echo"),
+        ] {
+            assert!(
+                matches!(
+                    parse(&args),
+                    Err(ProtocolError::WrongArgCount(command)) if command == name
+                ),
+                "{args:?}"
+            );
         }
     }
 }

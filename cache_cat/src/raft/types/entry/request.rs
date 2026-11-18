@@ -87,7 +87,7 @@ pub enum RedisOperation {
     RedisExec(ExecParams),
     RedisUnlink(UnlinkParams),
     /// A deterministic connection-level reply captured while queueing a
-    /// command such as PING or ECHO in MULTI.
+    /// command such as SELECT or MODULE LIST in MULTI.
     RedisReply(crate::raft::types::core::response_value::Value),
     /// Local observability output.  The server-side fields are resolved at
     /// EXEC time; keyspace fields are rendered while the log is applied.
@@ -156,6 +156,8 @@ impl fmt::Display for Request {
                 ReadOperation::BfInfo(req) => write!(f, "BfInfo: {}", req),
                 ReadOperation::BfCard(req) => write!(f, "BfCard: {}", req),
                 ReadOperation::BfScanDump(req) => write!(f, "BfScanDump: {}", req),
+                ReadOperation::Ping(req) => write!(f, "Ping: {}", req),
+                ReadOperation::Echo(req) => write!(f, "Echo: {}", req),
             },
             Operation::Base(op) => match op {
                 BaseOperation::Empty => write!(f, "None"),

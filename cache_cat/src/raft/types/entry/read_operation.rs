@@ -6,6 +6,8 @@ use crate::protocol::bf::bf_scandump::BfScanDumpParams;
 use crate::protocol::bitmap::bitcount::BitCountParams;
 use crate::protocol::bitmap::bitpos::BitPosParams;
 use crate::protocol::bitmap::getbit::GetBitParams;
+use crate::protocol::connection::echo::EchoParams;
+use crate::protocol::connection::ping::PingParam;
 use crate::protocol::hash::hexists::HExistsParams;
 use crate::protocol::hash::hget::HGetParams;
 use crate::protocol::hash::hgetall::HGetAllParams;
@@ -106,4 +108,6 @@ pub enum ReadOperation {
     Scan(ScanParams),
     GetRange(GetRangeParams),
     JsonGet(JsonGetParams),
+    Ping(PingParam),
+    Echo(EchoParams),
 }

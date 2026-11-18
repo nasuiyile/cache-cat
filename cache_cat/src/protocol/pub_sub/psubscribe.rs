@@ -127,10 +127,7 @@ impl BlockCommand for PsubscribeCommand {
                     Value::BulkString(Some(params.message.unwrap_or_default())),
                 ])));
             }
-            return Ok(match params.message {
-                None => Value::SimpleString("PONG".to_string()),
-                Some(message) => Value::BulkString(Some(message)),
-            });
+            return Ok(params.execute());
         } else if cmd.name == "QUIT" {
             QuitCommand.execute(client, &cmd.items, server).await
         } else if cmd.name == "RESET" {

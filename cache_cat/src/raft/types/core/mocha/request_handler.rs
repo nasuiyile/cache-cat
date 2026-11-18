@@ -111,6 +111,8 @@ fn read_request_inner<const REPLICATED: bool>(
         ReadOperation::BfInfo(param) => my_cache.execute_read(param, db_number, read_clock),
         ReadOperation::BfCard(param) => my_cache.execute_read(param, db_number, read_clock),
         ReadOperation::BfScanDump(param) => my_cache.execute_read(param, db_number, read_clock),
+        ReadOperation::Ping(param) => param.execute(),
+        ReadOperation::Echo(param) => param.execute(),
     }
 }
 

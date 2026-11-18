@@ -1135,6 +1135,12 @@ async fn ping_and_echo_are_replied_to_by_exec_in_queue_order() {
     // the captured queue directly to verify the same state-machine path used
     // by EXEC without depending on Raft forwarding.
     let operations = client.transaction_queue.take().unwrap().operations;
+    // Both are queued as reads; neither needs a write of its own.
+    assert!(
+        operations
+            .iter()
+            .all(|queued| matches!(queued.operation, Operation::Read(_)))
+    );
     let cache = MyCache::new(1).unwrap();
     let mut update_type = UpdateType::None;
     let mut update = Update {
@@ -1153,6 +1159,49 @@ async fn ping_and_echo_are_replied_to_by_exec_in_queue_order() {
         true,
     );
     assert_eq!(response.encode(), b"*2\r\n+PONG\r\n$5\r\nhello\r\n");
+}
+
+#[test]
+fn ping_and_echo_are_read_only_in_lua() {
+    let cache = MyCache::new(1).unwrap();
+    let mut queue = Vec::new();
+    let mut revision = 7;
+    let reply = {
+        let mut update_type = UpdateType::Snapshot {
+            queue: &mut queue,
+            revision: &mut revision,
+        };
+        let mut update = Update {
+            effects: None,
+            waiters: None,
+            db_number: 0,
+            write_clock: 1,
+            update_type: &mut update_type,
+        };
+        do_request(
+            &cache,
+            Operation::Redis(RedisOperation::RedisEval(
+                crate::protocol::lua::eval::EvalParams::new(
+                    "return {redis.call('PING'), redis.call('ping', ARGV[1]), \
+                     redis.call('ECHO', ARGV[1]), redis.pcall('ECHO').err ~= nil, \
+                     redis.pcall('PING', 'a', 'b').err ~= nil}"
+                        .into(),
+                    0,
+                    Vec::new(),
+                    vec!["hello".into()],
+                ),
+            )),
+            &mut update,
+            true,
+        )
+    };
+    assert_eq!(
+        reply.encode(),
+        b"*5\r\n+PONG\r\n$5\r\nhello\r\n$5\r\nhello\r\n:1\r\n:1\r\n"
+    );
+    // A script of reads records no snapshot delta and takes no revision.
+    assert!(queue.is_empty());
+    assert_eq!(revision, 7);
 }
 
 #[test]
