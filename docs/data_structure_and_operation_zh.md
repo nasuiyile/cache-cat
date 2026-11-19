@@ -68,6 +68,16 @@ Raft 中执行的读取（Lua/EXEC）返回按成员字节排序的全部匹配�
 
 快照按分数、成员顺序仅序列化一次逻辑 `(member, score)`。恢复时逐条验证该顺序。对于编码声明超过 4096 个成员的集合，通过有界缓冲按顺序直接构建层链接、成员跨度和反向链接，并重建成员哈希索引，预期时间为 O(N)。构建保留普通顺序插入的布局：缓冲达到 65 个成员时，将前 32 个形成节点，其余继续作为尾部；完整节点及尾部沿用原来的预留容量，避免恢复后插入或合并增加重新分配。较小集合及未提供长度的编码保留逐项插入路径。初始预分配受限；恢复拒绝重复成员、NaN 分数及不符合分数、成员顺序的编码，正负零视为相同分数。这替换了之前 alpha 版本的 ZSET 编码。MEMORY USAGE 按哈希数组、跳表 arena 和层数组的实际分配估算内存，共享的成员 payload 只计算一次。`cache_cat/examples/zset_bench.rs` 对照原 BTreeSet + HashMap 实现测量查询及写入性能。 `cache_cat/examples/zset_restore_bench.rs` 测量快照解码和恢复后的读写性能。
 
+### Geospatial
+
+GEO 索引就是普通的 ZSET：成员的分数是经纬度按 Redis `geohash.c` 交织得到的 52 位整数（经度 ±180、纬度 ±85.05112878，各 26 位），double 可以精确保存。不新增 `ValueObject`、快照编码或锁；`TYPE` 返回 `zset`，ZSET 命令和 GEO 命令可以读写同一个键，删除成员使用 `ZREM`。命令实现位于 `cache_cat/src/protocol/geo`，编解码只使用加减乘除和整数转换，各平台结果逐位一致。
+
+`GEOADD key [NX|XX] [CH] longitude latitude member [...]` 使用 `ComputeCommand`，对应独立的 Raft 指令 `BaseOperation::GeoAdd`。主节点在解析阶段完成全部校验并算出分数，日志只携带成员和分数；状态机应用时与 ZADD 共用同一段有序集合更新逻辑（Redis 同样把 GEOADD 改写为 ZADD 执行），不做浮点运算。参数不是完整的三元组、或同时给出 NX 和 XX 时返回语法错误；任何一对坐标非法都会拒绝整条命令，不写入任何成员。坐标按 Redis `string2d` 的规则解析：接受十六进制浮点和显式的无穷大，拒绝 NaN、上溢以及下溢为零的输入。快照 `Start` 期间 GEOADD 以自身记录到增量队列并按 CAS 回放，EXEC 和 Lua 中同样可用。
+
+`GEOHASH key [member ...]` 使用 `ReadCommand`，返回每个成员的 11 字符标准 geohash，键或成员不存在时对应位置返回空值。内部分数使用的纬度范围比标准 geohash 窄，因此先解码为格子中心，再按 ±90 纬度重新编码；52 位只够 10 个字符，第 11 个字符与 Redis 一样固定为 `0`。持有 value 锁期间只查找成员分数，字符串在锁外生成。该命令也接受由 ZADD 写入的任意分数；超出 u64 范围的分数在 C 中转换结果未定义，这里采用饱和转换。
+
+其余 GEO 命令（GEOPOS、GEODIST、GEOSEARCH、GEOSEARCHSTORE 以及已废弃的 GEORADIUS 系列）尚未实现。
+
 ### JSON
 
 JSON 使用 `Arc<Mutex<JsonDocument>>`，内部直接存放 Redis 官方 `ijson` fork 的紧凑 `IValue`，不常驻第二份 JSON 文本或 `serde_json::Value`。上游版本和本地适配记录在 `vendor/ijson/UPSTREAM.md`。64 位平台的值句柄为 8 字节；短字符串内联，小对象按连续字段保存，同质数值数组使用紧凑元素。长字符串共享池在 JSON 内部同步，普通 Redis 类型不访问该池。
@@ -84,7 +94,7 @@ JSON 使用 `Arc<Mutex<JsonDocument>>`，内部直接存放 Redis 官方 `ijson`
 
 ### 其他
 
-已知Redis还支持bitmap，hyperloglog，Geospatial，Streams，Bitfield等。暂未有计划支持。
+已知Redis还支持bitmap，hyperloglog，Streams，Bitfield等。暂未有计划支持。
 
 ## 读写并发模型
 

@@ -5,6 +5,7 @@ use crate::protocol::bf::bf_madd::BfMAddReq;
 use crate::protocol::bf::bf_reserve::BfReserveReq;
 use crate::protocol::bitmap::bitfield::BitFieldReq;
 use crate::protocol::bitmap::setbit::SetBitReq;
+use crate::protocol::geo::geoadd::GeoAddReq;
 use crate::protocol::hash::hdel::HDelReq;
 use crate::protocol::hash::hincrby::HIncrReq;
 use crate::protocol::hash::hincrbyfloat::HIncrByFloatReq;
@@ -111,6 +112,8 @@ pub enum BaseOperation {
     XGroup(XGroupReq),
     JsonSet(JsonSetReq),
     JsonDel(JsonDelReq),
+    // geo
+    GeoAdd(GeoAddReq),
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]

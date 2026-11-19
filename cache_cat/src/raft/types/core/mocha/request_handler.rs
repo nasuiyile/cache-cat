@@ -113,6 +113,7 @@ fn read_request_inner<const REPLICATED: bool>(
         ReadOperation::BfScanDump(param) => my_cache.execute_read(param, db_number, read_clock),
         ReadOperation::Ping(param) => param.execute(),
         ReadOperation::Echo(param) => param.execute(),
+        ReadOperation::GeoHash(param) => my_cache.execute_read(param, db_number, read_clock),
     }
 }
 
@@ -208,6 +209,7 @@ fn base_request_inner(
         BaseOperation::BfInsert(param) => my_cache.bf_insert(param, update),
         BaseOperation::BfLoadChunk(param) => my_cache.bf_load(param, update),
         BaseOperation::XGroup(param) => my_cache.x_group(param, update),
+        BaseOperation::GeoAdd(param) => my_cache.execute_compute(param, update),
     }
 }
 

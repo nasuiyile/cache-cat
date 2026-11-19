@@ -27,3 +27,6 @@ mod scan_snapshot_tests;
 
 #[cfg(test)]
 mod json_tests;
+
+#[cfg(test)]
+mod geo_tests;

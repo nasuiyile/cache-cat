@@ -68,6 +68,16 @@ For reads applied through Raft (Lua/EXEC), ZSCAN returns all matching members so
 
 Snapshots serialize each logical `(member, score)` once in score/member order. Restoration validates that order. For sequences declaring more than 4096 members, a bounded buffer directly builds level links, member spans and backward links in order, while rebuilding the member hash index, in expected O(N) time. Construction preserves the ordinary sorted-insertion layout: at 65 buffered members, the first 32 form a node and the remainder stays in the tail. Nodes and the tail keep their usual spare capacity so subsequent insertions and merges need no extra reallocations. Smaller sets and encodings without a length hint retain per-member insertion. Initial preallocation is bounded; duplicate members, NaN scores and out-of-order entries are rejected, with signed zeros comparing as equal scores. This replaces the previous alpha ZSET encoding. MEMORY USAGE accounts for the hash arrays, skiplist arena and level allocations, counting shared member payloads once. `cache_cat/examples/zset_bench.rs` compares queries and writes against the former BTreeSet + HashMap implementation. `cache_cat/examples/zset_restore_bench.rs` measures snapshot decoding and reads/writes on the restored layout.
 
+### Geospatial
+
+A GEO index is an ordinary ZSET. A member's score is the 52-bit integer that Redis `geohash.c` interleaves from its longitude and latitude (±180 and ±85.05112878, 26 bits each), which a double stores exactly. There is no new `ValueObject`, snapshot encoding or lock; `TYPE` returns `zset`, ZSET and GEO commands read and write the same key, and members are removed with `ZREM`. The commands live in `cache_cat/src/protocol/geo`. Encoding and decoding use only `+ - * /` and integer conversions, so every platform produces the same bits.
+
+`GEOADD key [NX|XX] [CH] longitude latitude member [...]` implements `ComputeCommand` and has its own Raft operation, `BaseOperation::GeoAdd`. The leader validates every argument and computes the scores while parsing, so the log carries only members and scores. Applying it shares the sorted-set update with ZADD (Redis also executes GEOADD by rewriting it to ZADD) and needs no floating-point arithmetic. Incomplete triples, or NX together with XX, are syntax errors. One invalid coordinate pair rejects the whole command without adding any member. Coordinates follow Redis `string2d`: hexadecimal floats and explicit infinities parse, while NaN, overflow and underflow to zero are rejected. During snapshot `Start`, GEOADD is queued as itself and replayed through CAS. It also works inside EXEC and Lua.
+
+`GEOHASH key [member ...]` implements `ReadCommand` and returns the standard 11-character geohash of each member, with a null for a missing key or member. Scores cover a narrower latitude range than standard geohashes, so the score is decoded to the centre of its cell and encoded again for ±90 latitude. 52 bits fill only ten characters; as in Redis, the eleventh is always `0`. Only the score lookups run under the value lock, and the strings are built after it is released. The command also accepts arbitrary scores written by ZADD. Converting a score outside the u64 range is undefined in C; this implementation saturates.
+
+The other GEO commands (GEOPOS, GEODIST, GEOSEARCH, GEOSEARCHSTORE and the deprecated GEORADIUS family) are not implemented yet.
+
 ### JSON
 
 JSON uses `Arc<Mutex<JsonDocument>>` around the compact `IValue` from Redis's official `ijson` fork, without retaining a second JSON text or `serde_json::Value`. `vendor/ijson/UPSTREAM.md` records the upstream revision and local adaptations. On 64-bit platforms, value handles occupy eight bytes; short strings are inline, small objects use dense fields, and homogeneous numeric arrays use compact elements. Synchronization of the shared long-string pool is confined to JSON; other Redis types do not access it.
@@ -84,7 +94,7 @@ Snapshots use explicit tags and stream the tree and typed numeric arrays through
 
 ### Others
 
-It is known that Redis also supports bitmap, hyperloglog, Geospatial, Streams, Bitfield, etc. There are currently no plans to support them.
+It is known that Redis also supports bitmap, hyperloglog, Streams, Bitfield, etc. There are currently no plans to support them.
 
 ## Read-Write Concurrency Model
 

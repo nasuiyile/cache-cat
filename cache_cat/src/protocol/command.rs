@@ -24,6 +24,8 @@ use crate::protocol::connection::ping::PingCommand;
 use crate::protocol::connection::quit::QuitCommand;
 use crate::protocol::connection::reset::ResetCommand;
 use crate::protocol::connection::select::SelectCommand;
+use crate::protocol::geo::geoadd::GeoAddCommand;
+use crate::protocol::geo::geohash::GeoHashCommand;
 use crate::protocol::hash::hdel::HDelCommand;
 use crate::protocol::hash::hexists::HExistsCommand;
 use crate::protocol::hash::hget::HGetCommand;
@@ -436,6 +438,9 @@ impl CommandFactory {
         factory.register("ZPOPMIN", ZPopMinCommand);
         factory.register("ZREVRANK", ZRevRankCommand);
         factory.register("ZINCRBY", ZIncrByCommand);
+        // Geo commands
+        factory.register("GEOADD", GeoAddCommand);
+        factory.register("GEOHASH", GeoHashCommand);
         // Bitmap commands
         factory.register("SETBIT", SetBitCommand);
         factory.register("GETBIT", GetBitCommand);

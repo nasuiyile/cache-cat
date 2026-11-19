@@ -4,8 +4,8 @@
 //! identical across hosts, including hosts whose native long double is f64.
 
 use bytes::Bytes;
-use rustc_apfloat::ieee::X87DoubleExtended;
-use rustc_apfloat::{Float, Round, Status};
+use rustc_apfloat::ieee::{Double, X87DoubleExtended};
+use rustc_apfloat::{Float, FloatConvert, Round, Status};
 
 const MAX_LONG_DOUBLE_CHARS: usize = 5 * 1024;
 const FRACTION_DIGITS: u32 = 17;
@@ -97,6 +97,36 @@ pub(in crate::protocol) fn parse(bytes: &[u8]) -> Option<X87DoubleExtended> {
     } else {
         Some(parsed.value)
     }
+}
+
+/// Parse a C `double` with the acceptance rules of Redis `string2d`: `strtod`
+/// must consume the whole argument, and NaN, overflow to infinity and
+/// underflow to zero are rejected. Explicit infinities are valid numbers.
+pub(in crate::protocol) fn parse_double(bytes: &[u8]) -> Option<f64> {
+    let unsigned = bytes
+        .strip_prefix(b"-")
+        .or_else(|| bytes.strip_prefix(b"+"))
+        .unwrap_or(bytes);
+    if unsigned.starts_with(b"0x") || unsigned.starts_with(b"0X") {
+        // Rust has no hexadecimal float syntax. This rare form goes through
+        // the extended parser; more than 64 significant bits round twice.
+        let extended = parse(bytes)?;
+        let double: Double = extended
+            .convert_r(Round::NearestTiesToEven, &mut false)
+            .value;
+        return (double.is_finite() && double.is_zero() == extended.is_zero())
+            .then(|| f64::from_bits(double.to_bits() as u64));
+    }
+    // Rust accepts a subset of the decimal `strtod` grammar, without leading
+    // whitespace, and rounds the same way. It reports no range errors.
+    let value = std::str::from_utf8(bytes).ok()?.parse::<f64>().ok()?;
+    let overflow = value.is_infinite() && !matches!(unsigned.first(), Some(b'i' | b'I'));
+    let underflow = value == 0.0
+        && unsigned
+            .iter()
+            .take_while(|byte| !matches!(byte, b'e' | b'E'))
+            .any(|byte| matches!(byte, b'1'..=b'9'));
+    (!value.is_nan() && !overflow && !underflow).then_some(value)
 }
 
 /// Format a finite value like Redis's `%.17Lf`, then trim fractional zeroes.
@@ -274,5 +304,55 @@ mod tests {
             assert!(!formatted.contains(&b'.'));
             assert_eq!(parse(&formatted).unwrap().to_bits(), value.to_bits());
         }
+    }
+
+    #[test]
+    fn double_parsing_follows_string2d() {
+        for (input, expected) in [
+            ("13.361389", 13.361389),
+            ("+.5", 0.5),
+            ("-1.", -1.0),
+            ("1E2", 100.0),
+            ("0e-999", 0.0),
+            ("3e-324", 5e-324),
+            ("0x10", 16.0),
+            ("-0X1.8p+1", -3.0),
+            ("0x0", 0.0),
+            ("0x1p-1074", 5e-324),
+        ] {
+            assert_eq!(parse_double(input.as_bytes()), Some(expected), "{input}");
+        }
+        assert!(parse_double(b"-0").unwrap().is_sign_negative());
+        for (input, expected) in [
+            ("inf", f64::INFINITY),
+            ("+Infinity", f64::INFINITY),
+            ("-INF", f64::NEG_INFINITY),
+        ] {
+            assert_eq!(parse_double(input.as_bytes()), Some(expected), "{input}");
+        }
+        for input in [
+            "",
+            " 1",
+            "1 ",
+            "1\0",
+            "abc",
+            "1e",
+            "1e+",
+            ".",
+            "1,5",
+            "nan",
+            "-NaN",
+            "nan(1)",
+            // strtod reports ERANGE for these, which string2d rejects.
+            "1e400",
+            "-1e400",
+            "1e-400",
+            "-0.1e-400",
+            "0x1p1024",
+            "0x1p-1080",
+        ] {
+            assert_eq!(parse_double(input.as_bytes()), None, "{input:?}");
+        }
+        assert_eq!(parse_double(&[0xff, b'1']), None);
     }
 }

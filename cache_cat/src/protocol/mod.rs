@@ -1,5 +1,6 @@
 pub mod command;
 pub mod connection;
+pub mod geo;
 pub mod hash;
 pub mod json;
 pub mod key;

@@ -158,6 +158,7 @@ impl fmt::Display for Request {
                 ReadOperation::BfScanDump(req) => write!(f, "BfScanDump: {}", req),
                 ReadOperation::Ping(req) => write!(f, "Ping: {}", req),
                 ReadOperation::Echo(req) => write!(f, "Echo: {}", req),
+                ReadOperation::GeoHash(req) => write!(f, "GeoHash: {}", req),
             },
             Operation::Base(op) => match op {
                 BaseOperation::Empty => write!(f, "None"),
@@ -208,6 +209,7 @@ impl fmt::Display for Request {
                 BaseOperation::BfInsert(req) => write!(f, "BfInsert: {}", req),
                 BaseOperation::BfLoadChunk(req) => write!(f, "BfLoadChunk: {}", req),
                 BaseOperation::XGroup(req) => write!(f, "XGroup: {}", req),
+                BaseOperation::GeoAdd(req) => write!(f, "GeoAdd: {}", req),
             },
             Operation::Redis(op) => match op {
                 RedisOperation::RedisSet(req) => write!(f, "RedisSet: {}", req),
