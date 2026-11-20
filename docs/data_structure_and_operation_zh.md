@@ -68,6 +68,8 @@ Raft 中执行的读取（Lua/EXEC）返回按成员字节排序的全部匹配�
 
 快照按分数、成员顺序仅序列化一次逻辑 `(member, score)`。恢复时逐条验证该顺序。对于编码声明超过 4096 个成员的集合，通过有界缓冲按顺序直接构建层链接、成员跨度和反向链接，并重建成员哈希索引，预期时间为 O(N)。构建保留普通顺序插入的布局：缓冲达到 65 个成员时，将前 32 个形成节点，其余继续作为尾部；完整节点及尾部沿用原来的预留容量，避免恢复后插入或合并增加重新分配。较小集合及未提供长度的编码保留逐项插入路径。初始预分配受限；恢复拒绝重复成员、NaN 分数及不符合分数、成员顺序的编码，正负零视为相同分数。这替换了之前 alpha 版本的 ZSET 编码。MEMORY USAGE 按哈希数组、跳表 arena 和层数组的实际分配估算内存，共享的成员 payload 只计算一次。`cache_cat/examples/zset_bench.rs` 对照原 BTreeSet + HashMap 实现测量查询及写入性能。 `cache_cat/examples/zset_restore_bench.rs` 测量快照解码和恢复后的读写性能。
 
+分数等 double 回复的文本由 `format_double` 生成，对应 Redis 的 `d2string`：`nan`、`inf`/`-inf`、`0`/`-0` 为固定写法；绝对值不超过 2^62 的整数值按整数输出；其余交给 `cache_cat/src/utils/fpconv.rs`，它逐步移植了 Redis 使用的 `fpconv_dtoa`（Grisu2，Boost 许可证，文件头保留了原始声明）。没有使用 Rust 自带的最短表示，原因有两个。其一是写法不同：小于 0.001 且末位有效数字超出小数点后 6 位的值，以及有效数字之后还要补 8 个及以上零的大数，`fpconv_dtoa` 使用科学计数法（`1.2345e-4`、`1e+21`），而 `0.000015`、`10000000` 仍是普通写法。其二是 Grisu2 输出的并不总是最短数字串，例如恰好落在两个 double 中点上的十进制数（`1.726839e20` 输出为 `172683900000000020000`）。两者都会让回复的字节与 Redis 不同。ZSCORE、ZINCRBY、WITHSCORES、GEOPOS 以及 Lua 返回的 `{double=...}` 都经过这条路径；ZSCAN 的分数按 Redis 的 `%.17Lg` 单独处理。
+
 ### Geospatial
 
 GEO 索引就是普通的 ZSET：成员的分数是经纬度按 Redis `geohash.c` 交织得到的 52 位整数（经度 ±180、纬度 ±85.05112878，各 26 位），double 可以精确保存。不新增 `ValueObject`、快照编码或锁；`TYPE` 返回 `zset`，ZSET 命令和 GEO 命令可以读写同一个键，删除成员使用 `ZREM`。命令实现位于 `cache_cat/src/protocol/geo`，编解码只使用加减乘除和整数转换，各平台结果逐位一致。
@@ -76,7 +78,9 @@ GEO 索引就是普通的 ZSET：成员的分数是经纬度按 Redis `geohash.c
 
 `GEOHASH key [member ...]` 使用 `ReadCommand`，返回每个成员的 11 字符标准 geohash，键或成员不存在时对应位置返回空值。内部分数使用的纬度范围比标准 geohash 窄，因此先解码为格子中心，再按 ±90 纬度重新编码；52 位只够 10 个字符，第 11 个字符与 Redis 一样固定为 `0`。持有 value 锁期间只查找成员分数，字符串在锁外生成。该命令也接受由 ZADD 写入的任意分数；超出 u64 范围的分数在 C 中转换结果未定义，这里采用饱和转换。
 
-其余 GEO 命令（GEOPOS、GEODIST、GEOSEARCH、GEOSEARCHSTORE 以及已废弃的 GEORADIUS 系列）尚未实现。
+`GEOPOS key [member ...]` 使用 `ReadCommand`，对应读指令 `ReadOperation::GeoPos`，按参数顺序返回每个成员的经度和纬度。返回的是成员所在格子的中心，不是 GEOADD 收到的原始坐标，误差不超过一个格子（经度方向 360/2^26 度）；落在范围之外的中心会被钳制到坐标上下限。坐标的写法跟随 Redis 8.0 起使用的 `addReplyDouble`：RESP2 为批量字符串，RESP3 为 double，文本取能够往返的最短十进制表示，整数值不带小数部分；Redis 7.4 及更早版本则固定输出 17 位小数（如 `13.36138933897018433`）。键或成员不存在时对应位置是空数组（RESP2 为 `*-1`，RESP3 为 `_`），这一点与 GEOHASH 返回的空批量字符串不同。与 GEOHASH 相同，持有 value 锁期间只查找成员分数，解码在锁外进行，也接受由 ZADD 写入的任意分数；两个命令共用参数解析和分数查找。坐标文本由全局共用的 `format_double` 生成，因此靠近 0 的坐标与 Redis 一样写成科学计数法（如 `9.924173355102539e-5`）。
+
+其余 GEO 命令（GEODIST、GEOSEARCH、GEOSEARCHSTORE 以及已废弃的 GEORADIUS 系列）尚未实现。
 
 ### JSON
 

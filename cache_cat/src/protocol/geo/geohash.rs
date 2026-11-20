@@ -2,12 +2,12 @@ use crate::error::{CacheCatError, ProtocolError};
 use crate::mocha::EntrySnapshot;
 use crate::protocol::command::{Client, Command};
 use crate::protocol::geo::codec::geohash_string;
+use crate::protocol::geo::{member_scores, parse_key_members};
 use crate::protocol::raft_command::{RaftCommand, ReadRaftCommand};
 use crate::raft::network::redis_server::RedisServer;
 use crate::raft::types::core::mocha::core::MyValue;
 use crate::raft::types::core::mocha::read_command::ReadCommand;
 use crate::raft::types::core::response_value::Value;
-use crate::raft::types::core::value_object::ValueObject::ZSet;
 use crate::raft::types::entry::read_operation::ReadOperation;
 use async_trait::async_trait;
 use bytes::Bytes;
@@ -29,19 +29,9 @@ impl ReadCommand for GeoHashParams {
     }
 
     fn execute(&self, value: Option<EntrySnapshot<MyValue>>) -> Value {
-        // Only the lookups run under the value lock.
-        let scores: Vec<Option<f64>> = match value {
-            None => vec![None; self.members.len()],
-            Some(entry) => match entry.value.data {
-                ZSet(zset) => {
-                    let zset = zset.lock();
-                    self.members
-                        .iter()
-                        .map(|member| zset.zscore(member))
-                        .collect()
-                }
-                _ => return CacheCatError::from(ProtocolError::WrongType).into(),
-            },
+        let scores = match member_scores(value, &self.members) {
+            Ok(scores) => scores,
+            Err(error) => return error.into(),
         };
         let hashes = scores
             .into_iter()
@@ -69,20 +59,7 @@ impl Display for GeoHashParams {
 
 impl GeoHashCommand {
     fn parse(items: &[Value]) -> Result<GeoHashParams, ProtocolError> {
-        if items.len() < 2 {
-            return Err(ProtocolError::WrongArgCount("geohash"));
-        }
-        let key = items[1]
-            .string_bytes_clone()
-            .ok_or(ProtocolError::InvalidArgument("key"))?;
-        let members = items[2..]
-            .iter()
-            .map(|member| {
-                member
-                    .string_bytes_clone()
-                    .ok_or(ProtocolError::InvalidArgument("member"))
-            })
-            .collect::<Result<_, _>>()?;
+        let (key, members) = parse_key_members(items, "geohash")?;
         Ok(GeoHashParams { key, members })
     }
 }
@@ -139,7 +116,7 @@ mod tests {
         let mut zset = SortedSet::new();
         zset.zincrby("Palermo".into(), 3479099956230698.0);
         zset.zincrby("Catania".into(), 3479447370796909.0);
-        let index = entry(ZSet(Arc::new(Mutex::new(zset))));
+        let index = entry(ValueObject::ZSet(Arc::new(Mutex::new(zset))));
 
         let reply =
             params(&["GEOHASH", "Sicily", "Catania", "missing", "Palermo"]).execute(index.clone());

@@ -7,7 +7,7 @@ use crate::protocol::raft_command::RaftCommandFactory;
 use crate::protocol::transaction::{QueuedOperation, exec::ExecParams};
 use crate::raft::types::core::mocha::core::{MyCache, Update, UpdateType};
 use crate::raft::types::core::mocha::request_handler::{base_request, do_request, read_request};
-use crate::raft::types::core::response_value::Value;
+use crate::raft::types::core::response_value::{Value, format_double};
 use crate::raft::types::core::value_object::ValueObject;
 use crate::raft::types::entry::base_operation::BaseOperation;
 use crate::raft::types::entry::request::{AtomicRequest, Operation, RedisOperation, Request};
@@ -16,6 +16,9 @@ use std::io::Cursor;
 
 const PALERMO_HASH: &str = "sqc8b49rny0";
 const CATANIA_HASH: &str = "sqdtr74hyu0";
+// Positions the Redis GEOPOS documentation prints for the two cities.
+const PALERMO_POSITION: [&str; 2] = ["13.361389338970184", "38.1155563954963"];
+const CATANIA_POSITION: [&str; 2] = ["15.087267458438873", "37.50266842333162"];
 const WRONG_TYPE: &[u8] = b"-WRONGTYPE Operation against a key holding the wrong kind of value\r\n";
 
 fn parse(args: &[&str]) -> Result<Operation, ProtocolError> {
@@ -291,6 +294,187 @@ fn geo_commands_run_inside_exec_and_lua() {
         b"-ERR invalid longitude,latitude pair 200.000000,0.000000\r\n"
     );
     assert_eq!(index(&cache, "Sicily").unwrap().1.len(), 2);
+}
+
+/// One GEOPOS position as RESP2 sends it.
+fn position([longitude, latitude]: [&str; 2]) -> String {
+    format!(
+        "*2\r\n${}\r\n{longitude}\r\n${}\r\n{latitude}\r\n",
+        longitude.len(),
+        latitude.len()
+    )
+}
+
+/// Longitude and latitude GEOPOS replies with for each member.
+fn positions(cache: &MyCache, key: &str, members: &[&str]) -> Vec<Option<(f64, f64)>> {
+    let mut args = vec!["GEOPOS", key];
+    args.extend_from_slice(members);
+    let Value::Array(Some(replies)) = run(cache, &args) else {
+        panic!("{args:?} did not reply with an array");
+    };
+    replies
+        .into_iter()
+        .map(|reply| match reply {
+            Value::Array(None) => None,
+            Value::Array(Some(pair)) => match pair[..] {
+                [Value::Double(longitude), Value::Double(latitude)] => Some((longitude, latitude)),
+                _ => panic!("{pair:?}"),
+            },
+            other => panic!("{other:?}"),
+        })
+        .collect()
+}
+
+#[test]
+fn geopos_reads_positions_from_geo_indexes_and_plain_sorted_sets() {
+    let cache = MyCache::new(2).unwrap();
+    run(
+        &cache,
+        &[
+            "GEOADD",
+            "Sicily",
+            "13.361389",
+            "38.115556",
+            "Palermo",
+            "15.087269",
+            "37.502669",
+            "Catania",
+        ],
+    );
+
+    // The reply of the Redis documentation example.
+    let reply = run(
+        &cache,
+        &["GEOPOS", "Sicily", "Palermo", "Catania", "NonExisting"],
+    );
+    assert_eq!(
+        String::from_utf8(reply.encode_proto(2)).unwrap(),
+        format!(
+            "*3\r\n{}{}*-1\r\n",
+            position(PALERMO_POSITION),
+            position(CATANIA_POSITION)
+        )
+    );
+    assert_eq!(
+        String::from_utf8(reply.encode_proto(3)).unwrap(),
+        "*3\r\n*2\r\n,13.361389338970184\r\n,38.1155563954963\r\n\
+         *2\r\n,15.087267458438873\r\n,37.50266842333162\r\n_\r\n"
+    );
+
+    // A member written by ZADD has a position as well.
+    assert_eq!(
+        run(&cache, &["ZADD", "Sicily", "3479447370796909", "raw"]).encode(),
+        b":1\r\n"
+    );
+    let found = positions(&cache, "Sicily", &["raw", "Catania"]);
+    assert!(found[0].is_some());
+    assert_eq!(found[0], found[1]);
+
+    // Missing keys and members are null arrays, and reading creates nothing.
+    assert_eq!(
+        run(&cache, &["GEOPOS", "absent", "a", "b"]).encode_proto(2),
+        b"*2\r\n*-1\r\n*-1\r\n"
+    );
+    assert_eq!(index(&cache, "absent"), None);
+    assert_eq!(run(&cache, &["GEOPOS", "Sicily"]).encode(), b"*0\r\n");
+
+    assert_eq!(run(&cache, &["SET", "text", "value"]).encode(), b"+OK\r\n");
+    for args in [vec!["GEOPOS", "text", "member"], vec!["GEOPOS", "text"]] {
+        assert_eq!(run(&cache, &args).encode(), WRONG_TYPE, "{args:?}");
+    }
+    assert_eq!(
+        run(&cache, &["GEOPOS"]).encode(),
+        b"-ERR wrong number of arguments for 'geopos' command\r\n"
+    );
+}
+
+#[test]
+fn geoadd_maps_a_geopos_reply_back_to_the_same_score() {
+    let cache = MyCache::new(2).unwrap();
+    let places = [
+        ("London", "-0.127758", "51.507351"),
+        ("Quito", "-78.467834", "-0.180653"),
+        ("Sydney", "151.2099", "-33.865143"),
+        ("near zero", "0.0001", "-0.0001"),
+        ("north-east", "180", "85.05112878"),
+        ("south-west", "-180", "-85.05112878"),
+    ];
+    for (member, longitude, latitude) in places {
+        assert_eq!(
+            run(&cache, &["GEOADD", "index", longitude, latitude, member]).encode(),
+            b":1\r\n"
+        );
+    }
+
+    let members = places.map(|(member, ..)| member);
+    for ((member, longitude, latitude), found) in
+        places.into_iter().zip(positions(&cache, "index", &members))
+    {
+        // A position is the centre of its cell, at most 360 / 2^26 degrees wide.
+        let (found_longitude, found_latitude) = found.unwrap();
+        assert!((found_longitude - longitude.parse::<f64>().unwrap()).abs() < 1e-5);
+        assert!((found_latitude - latitude.parse::<f64>().unwrap()).abs() < 1e-5);
+        // Sent back as the text of the reply, it lands in the same cell.
+        let added = run(
+            &cache,
+            &[
+                "GEOADD",
+                "copy",
+                &format_double(found_longitude),
+                &format_double(found_latitude),
+                member,
+            ],
+        );
+        assert_eq!(added.encode(), b":1\r\n", "{member}");
+    }
+    assert_eq!(index(&cache, "copy"), index(&cache, "index"));
+}
+
+#[test]
+fn geopos_runs_inside_exec_and_lua() {
+    let cache = MyCache::new(2).unwrap();
+    // Reads in a transaction see the writes queued before them.
+    let transaction = exec(&[
+        &["GEOADD", "Sicily", "13.361389", "38.115556", "Palermo"],
+        &["GEOPOS", "Sicily", "Palermo", "missing"],
+        &["ZREM", "Sicily", "Palermo"],
+        &["GEOPOS", "Sicily", "Palermo"],
+    ]);
+    assert_eq!(
+        String::from_utf8(apply(&cache, transaction, 10, None).encode_proto(2)).unwrap(),
+        format!(
+            "*4\r\n:1\r\n*2\r\n{}*-1\r\n:1\r\n*1\r\n*-1\r\n",
+            position(PALERMO_POSITION)
+        )
+    );
+
+    // A script sees the RESP2 reply by default: strings, and false for a null.
+    let script = eval(
+        "redis.call('GEOADD', KEYS[1], 13.361389, 38.115556, 'Palermo') \
+         local positions = redis.call('GEOPOS', KEYS[1], 'Palermo', 'missing') \
+         return {positions[1][1], positions[1][2], \
+                 positions[2] == false and 'absent' or 'present'}",
+        &["Sicily"],
+        &[],
+    );
+    assert_eq!(
+        String::from_utf8(apply(&cache, script, 20, None).encode_proto(2)).unwrap(),
+        "*3\r\n$18\r\n13.361389338970184\r\n$16\r\n38.1155563954963\r\n$6\r\nabsent\r\n"
+    );
+
+    // After redis.setresp(3) the coordinates are doubles and a null is nil.
+    let script = eval(
+        "redis.setresp(3) \
+         local positions = redis.call('GEOPOS', KEYS[1], 'Palermo', 'missing') \
+         return {positions[1][1], positions[1][2], type(positions[1][1].double), \
+                 positions[2] == nil and 'nil' or 'other'}",
+        &["Sicily"],
+        &[],
+    );
+    assert_eq!(
+        String::from_utf8(apply(&cache, script, 30, None).encode_proto(3)).unwrap(),
+        "*4\r\n,13.361389338970184\r\n,38.1155563954963\r\n$6\r\nnumber\r\n$3\r\nnil\r\n"
+    );
 }
 
 async fn dump(cache: &MyCache) -> Vec<u8> {

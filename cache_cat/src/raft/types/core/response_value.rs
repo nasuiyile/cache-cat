@@ -1,4 +1,5 @@
 use crate::error::ProtocolError;
+use crate::utils::fpconv;
 use crate::utils::parse_canonical_i64;
 use bytes::{BufMut, Bytes};
 use mlua::{Lua, Value as LuaValue};
@@ -77,8 +78,9 @@ pub enum Value {
 
 /// Format a double the way Redis `d2string()` does:
 /// nan -> "nan", +/-inf -> "inf"/"-inf", signed zero -> "0"/"-0",
-/// integral values within i64 -> integer form ("3" not "3.0"),
-/// otherwise the shortest round-trip decimal representation.
+/// integral values up to 2^62 in magnitude -> integer form ("3" not "3.0"),
+/// otherwise the text of `fpconv_dtoa`, which is scientific below 1e-3 and
+/// from about 1e18 ("1.2345e-4", "1e+21") unless the value has few digits.
 pub fn format_double(d: f64) -> String {
     if d.is_nan() {
         "nan".to_string()
@@ -86,14 +88,25 @@ pub fn format_double(d: f64) -> String {
         if d < 0.0 { "-inf" } else { "inf" }.to_string()
     } else if d == 0.0 {
         if d.is_sign_negative() { "-0" } else { "0" }.to_string()
-    } else if d == d.trunc() && d >= -9.223_372_036_854_776E18 && d < 9.223_372_036_854_776E18 {
-        // Same as Redis double2ll + ll2string fast path.
-        format!("{}", d as i64)
+    } else if let Some(integer) = double_to_i64(d) {
+        integer.to_string()
     } else {
-        // Rust's Display for f64 is the shortest representation that
-        // round-trips, equivalent in spirit to Redis' fpconv_dtoa.
-        format!("{}", d)
+        let mut text = [0; fpconv::MAX_LEN];
+        let len = fpconv::dtoa(d, &mut text);
+        // The text is ASCII, so nothing is replaced.
+        String::from_utf8_lossy(&text[..len]).into_owned()
     }
+}
+
+/// Redis `double2ll`: the value as an integer if the conversion is lossless.
+/// Only half the `long long` range qualifies, as in Redis.
+fn double_to_i64(d: f64) -> Option<i64> {
+    const LIMIT: f64 = (i64::MAX / 2) as f64;
+    if !(-LIMIT..=LIMIT).contains(&d) {
+        return None;
+    }
+    let integer = d as i64;
+    (integer as f64 == d).then_some(integer)
 }
 
 impl Value {
@@ -753,6 +766,33 @@ mod tests {
         assert_eq!(enc(&Value::Double(f64::INFINITY), 3), ",inf\r\n");
         assert_eq!(enc(&Value::Double(f64::NEG_INFINITY), 3), ",-inf\r\n");
         assert_eq!(enc(&Value::Double(f64::NAN), 3), ",nan\r\n");
+    }
+
+    #[test]
+    fn format_double_follows_redis_d2string() {
+        for (value, expected) in [
+            (f64::NAN, "nan"),
+            (-f64::NAN, "nan"),
+            (f64::INFINITY, "inf"),
+            (f64::NEG_INFINITY, "-inf"),
+            (0.0, "0"),
+            (-0.0, "-0"),
+            // Integers print in full up to 2^62 in magnitude.
+            (3.0, "3"),
+            (-17.0, "-17"),
+            (4611686018427387904.0, "4611686018427387904"),
+            (-4611686018427387904.0, "-4611686018427387904"),
+            // Larger ones are left to fpconv, like every fraction.
+            (9223372036854775808.0, "9223372036854776000"),
+            (1e19, "1e+19"),
+            (-1e21, "-1e+21"),
+            (0.1, "0.1"),
+            (-1.5, "-1.5"),
+            (0.000015, "0.000015"),
+            (0.00012345, "1.2345e-4"),
+        ] {
+            assert_eq!(format_double(value), expected);
+        }
     }
 
     #[test]

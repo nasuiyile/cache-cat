@@ -114,6 +114,7 @@ fn read_request_inner<const REPLICATED: bool>(
         ReadOperation::Ping(param) => param.execute(),
         ReadOperation::Echo(param) => param.execute(),
         ReadOperation::GeoHash(param) => my_cache.execute_read(param, db_number, read_clock),
+        ReadOperation::GeoPos(param) => my_cache.execute_read(param, db_number, read_clock),
     }
 }
 

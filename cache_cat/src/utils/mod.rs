@@ -1,3 +1,4 @@
+pub(crate) mod fpconv;
 pub mod glob;
 mod list;
 mod number;
