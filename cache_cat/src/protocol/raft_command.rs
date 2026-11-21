@@ -18,6 +18,7 @@ use crate::protocol::bitmap::setbit::SetBitCommand;
 use crate::protocol::connection::echo::EchoCommand;
 use crate::protocol::connection::ping::PingCommand;
 use crate::protocol::geo::geoadd::GeoAddCommand;
+use crate::protocol::geo::geodist::GeoDistCommand;
 use crate::protocol::geo::geohash::GeoHashCommand;
 use crate::protocol::geo::geopos::GeoPosCommand;
 use crate::protocol::hash::hdel::HDelCommand;
@@ -263,6 +264,7 @@ impl RaftCommandFactory {
         factory.register("GEOADD", GeoAddCommand);
         factory.register("GEOHASH", GeoHashCommand);
         factory.register("GEOPOS", GeoPosCommand);
+        factory.register("GEODIST", GeoDistCommand);
         factory.register("DBSIZE", DbsizeCommand);
         factory.register("PFCOUNT", PfcountCommand);
         factory.register("PFADD", PfAddCommand);

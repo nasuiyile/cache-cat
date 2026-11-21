@@ -477,6 +477,179 @@ fn geopos_runs_inside_exec_and_lua() {
     );
 }
 
+#[test]
+fn geodist_measures_members_of_geo_indexes_and_plain_sorted_sets() {
+    let cache = MyCache::new(2).unwrap();
+    run(
+        &cache,
+        &[
+            "GEOADD",
+            "Sicily",
+            "13.361389",
+            "38.115556",
+            "Palermo",
+            "15.087269",
+            "37.502669",
+            "Catania",
+        ],
+    );
+
+    // The replies of the Redis documentation example, in both protocols.
+    for (unit, expected) in [
+        (None, "$11\r\n166274.1516\r\n"),
+        (Some("m"), "$11\r\n166274.1516\r\n"),
+        (Some("km"), "$8\r\n166.2742\r\n"),
+        (Some("MI"), "$8\r\n103.3182\r\n"),
+        (Some("Ft"), "$11\r\n545518.8700\r\n"),
+    ] {
+        let mut args = vec!["GEODIST", "Sicily", "Palermo", "Catania"];
+        args.extend(unit);
+        let reply = run(&cache, &args);
+        for proto in [2, 3] {
+            assert_eq!(
+                String::from_utf8(reply.encode_proto(proto)).unwrap(),
+                expected,
+                "{args:?}"
+            );
+        }
+    }
+    assert_eq!(
+        run(&cache, &["GEODIST", "Sicily", "Catania", "Palermo", "km"]).encode(),
+        b"$8\r\n166.2742\r\n"
+    );
+    assert_eq!(
+        run(&cache, &["GEODIST", "Sicily", "Palermo", "Palermo"]).encode(),
+        b"$6\r\n0.0000\r\n"
+    );
+
+    // A member written by ZADD is measured from the cell of its score.
+    assert_eq!(
+        run(&cache, &["ZADD", "Sicily", "3479447370796909", "raw"]).encode(),
+        b":1\r\n"
+    );
+    assert_eq!(
+        run(&cache, &["GEODIST", "Sicily", "raw", "Catania"]).encode(),
+        b"$6\r\n0.0000\r\n"
+    );
+    assert_eq!(
+        run(&cache, &["GEODIST", "Sicily", "raw", "Palermo"]).encode(),
+        b"$11\r\n166274.1516\r\n"
+    );
+
+    // A missing key or member is a null, and reading creates nothing.
+    for args in [
+        ["GEODIST", "Sicily", "Foo", "Bar"],
+        ["GEODIST", "Sicily", "Palermo", "Bar"],
+        ["GEODIST", "Sicily", "Foo", "Catania"],
+        ["GEODIST", "absent", "Palermo", "Catania"],
+    ] {
+        let reply = run(&cache, &args);
+        assert_eq!(reply.encode_proto(2), b"$-1\r\n", "{args:?}");
+        assert_eq!(reply.encode_proto(3), b"_\r\n", "{args:?}");
+    }
+    assert_eq!(index(&cache, "absent"), None);
+
+    // The arguments are checked before the key is looked at.
+    assert_eq!(run(&cache, &["SET", "text", "value"]).encode(), b"+OK\r\n");
+    assert_eq!(
+        run(&cache, &["GEODIST", "text", "a", "b"]).encode(),
+        WRONG_TYPE
+    );
+    for key in ["text", "absent", "Sicily"] {
+        assert_eq!(
+            run(&cache, &["GEODIST", key, "Palermo", "Catania", "yd"]).encode(),
+            b"-ERR unsupported unit provided. please use M, KM, FT, MI\r\n",
+            "{key}"
+        );
+        assert_eq!(
+            run(&cache, &["GEODIST", key, "Palermo", "Catania", "km", "m"]).encode(),
+            b"-ERR syntax error\r\n",
+            "{key}"
+        );
+    }
+    for args in [
+        &["GEODIST"][..],
+        &["GEODIST", "Sicily"],
+        &["GEODIST", "Sicily", "Palermo"],
+    ] {
+        assert_eq!(
+            run(&cache, args).encode(),
+            b"-ERR wrong number of arguments for 'geodist' command\r\n",
+            "{args:?}"
+        );
+    }
+}
+
+#[test]
+fn geodist_runs_inside_exec_and_lua() {
+    let cache = MyCache::new(2).unwrap();
+    // Reads in a transaction see the writes queued before them.
+    let transaction = exec(&[
+        &[
+            "GEOADD",
+            "Sicily",
+            "13.361389",
+            "38.115556",
+            "Palermo",
+            "15.087269",
+            "37.502669",
+            "Catania",
+        ],
+        &["GEODIST", "Sicily", "Palermo", "Catania", "km"],
+        &["ZREM", "Sicily", "Catania"],
+        &["GEODIST", "Sicily", "Palermo", "Catania", "km"],
+    ]);
+    assert_eq!(
+        String::from_utf8(apply(&cache, transaction, 10, None).encode_proto(2)).unwrap(),
+        "*4\r\n:2\r\n$8\r\n166.2742\r\n:1\r\n$-1\r\n"
+    );
+
+    // A script gets the distance as a string and false for a null, and may
+    // write what it read.
+    let script = eval(
+        "redis.call('GEOADD', KEYS[1], 15.087269, 37.502669, 'Catania') \
+         local distance = redis.call('GEODIST', KEYS[1], 'Palermo', 'Catania', ARGV[1]) \
+         redis.call('SET', KEYS[2], distance) \
+         local missing = redis.call('GEODIST', KEYS[1], 'Palermo', 'missing') \
+         return {distance, type(distance), missing == false and 'absent' or 'present'}",
+        &["Sicily", "distance"],
+        &["mi"],
+    );
+    assert_eq!(
+        String::from_utf8(apply(&cache, script, 20, None).encode_proto(2)).unwrap(),
+        "*3\r\n$8\r\n103.3182\r\n$6\r\nstring\r\n$6\r\nabsent\r\n"
+    );
+    assert_eq!(
+        run(&cache, &["GET", "distance"]).encode(),
+        b"$8\r\n103.3182\r\n"
+    );
+
+    // After redis.setresp(3) the distance is still a string and a null is nil.
+    let script = eval(
+        "redis.setresp(3) \
+         local distance = redis.call('GEODIST', KEYS[1], 'Palermo', 'Catania') \
+         local missing = redis.call('GEODIST', KEYS[1], 'Palermo', 'missing') \
+         return {distance, type(distance), missing == nil and 'nil' or 'other'}",
+        &["Sicily"],
+        &[],
+    );
+    assert_eq!(
+        String::from_utf8(apply(&cache, script, 30, None).encode_proto(3)).unwrap(),
+        "*3\r\n$11\r\n166274.1516\r\n$6\r\nstring\r\n$3\r\nnil\r\n"
+    );
+
+    // A bad unit is an error reply for pcall.
+    let rejected = eval(
+        "return redis.pcall('GEODIST', KEYS[1], 'Palermo', 'Catania', 'yd')",
+        &["Sicily"],
+        &[],
+    );
+    assert_eq!(
+        apply(&cache, rejected, 40, None).encode(),
+        b"-ERR unsupported unit provided. please use M, KM, FT, MI\r\n"
+    );
+}
+
 async fn dump(cache: &MyCache) -> Vec<u8> {
     let mut bytes = Cursor::new(Vec::new());
     cache.dump_cache_to_writer(&mut bytes).await.unwrap();

@@ -2,7 +2,9 @@
 //! 52-bit geohashes, so the sorted-set commands work on these keys as well.
 
 mod codec;
+pub mod distance;
 pub mod geoadd;
+pub mod geodist;
 pub mod geohash;
 pub mod geopos;
 

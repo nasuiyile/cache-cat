@@ -54,6 +54,7 @@ regex = "1"
 half = "2"
 bson = "2.11"
 blart = "0.5.0"
+libm = "0.2.16"
 [dev-dependencies]
 papaya = "0.2.4"
 anyhow = "1.0.102"

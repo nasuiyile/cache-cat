@@ -80,7 +80,11 @@ GEO 索引就是普通的 ZSET：成员的分数是经纬度按 Redis `geohash.c
 
 `GEOPOS key [member ...]` 使用 `ReadCommand`，对应读指令 `ReadOperation::GeoPos`，按参数顺序返回每个成员的经度和纬度。返回的是成员所在格子的中心，不是 GEOADD 收到的原始坐标，误差不超过一个格子（经度方向 360/2^26 度）；落在范围之外的中心会被钳制到坐标上下限。坐标的写法跟随 Redis 8.0 起使用的 `addReplyDouble`：RESP2 为批量字符串，RESP3 为 double，文本取能够往返的最短十进制表示，整数值不带小数部分；Redis 7.4 及更早版本则固定输出 17 位小数（如 `13.36138933897018433`）。键或成员不存在时对应位置是空数组（RESP2 为 `*-1`，RESP3 为 `_`），这一点与 GEOHASH 返回的空批量字符串不同。与 GEOHASH 相同，持有 value 锁期间只查找成员分数，解码在锁外进行，也接受由 ZADD 写入的任意分数；两个命令共用参数解析和分数查找。坐标文本由全局共用的 `format_double` 生成，因此靠近 0 的坐标与 Redis 一样写成科学计数法（如 `9.924173355102539e-5`）。
 
-其余 GEO 命令（GEODIST、GEOSEARCH、GEOSEARCHSTORE 以及已废弃的 GEORADIUS 系列）尚未实现。
+`GEODIST key member1 member2 [M|KM|FT|MI]` 使用 `ReadCommand`，对应读指令 `ReadOperation::GeoDist`，返回两个成员之间的距离。距离在两个成员所在格子的中心之间测量（即 GEOPOS 返回的位置），按 Redis `geohashGetDistance` 的 haversine 公式计算，地球视为半径 6372797.560856 米的球体；两点经度相同时与 Redis 一样直接按纬度差计算。单位省略时为米，名称不区分大小写，`km`、`ft`、`mi` 分别按 1000、0.3048、1609.34 米换算。回复在 RESP2 和 RESP3 中都是批量字符串，固定 4 位小数，对应 Redis 的 `fixedpoint_d2string`：先乘以 10000，再把得到的 double 按“五成双”取整，因此个别值与对精确十进制值舍入的 `%.4f` 不同（如 0.12345 输出 `0.1234`）。键不存在或任一成员不存在时返回空值；参数少于 4 个返回参数个数错误，单位非法返回 `ERR unsupported unit provided. please use M, KM, FT, MI`，单位之后还有参数返回语法错误，这些都在解析阶段判定，先于键的查找和类型检查。时间复杂度为 O(1)：持有 value 锁期间只做两次成员分数查找，解码和三角函数运算在锁外进行。单位解析、距离计算和回复格式位于 `cache_cat/src/protocol/geo/distance.rs`，供后续按距离查询的 GEO 命令复用。
+
+距离计算中的 `sin`、`cos`、`asin` 来自纯 Rust 的 `libm` crate，而不是 `f64` 的同名方法。后者调用所在平台的 C 数学库，Rust 文档说明其结果随平台和版本而变；而 Lua/EXEC 中的 GEODIST 在每个副本上各自执行，脚本可以把读到的距离写回状态机，所以各副本必须得到逐位相同的结果。平方根由 IEEE 754 规定为正确舍入，仍使用 `f64::sqrt`。Redis 自身使用平台的 C 数学库，因此最后一位上并不存在唯一的“Redis 结果”。在 macOS ARM64 上用 700 万对坐标对照系统数学库：随机坐标对的差异都小于 1e-6 米，4 位小数的回复约百万分之五不同；haversine 公式在对跖点附近是病态的，互为对跖点的坐标对中约 3% 相差可达 0.19 米。
+
+其余 GEO 命令（GEOSEARCH、GEOSEARCHSTORE 以及已废弃的 GEORADIUS 系列）尚未实现。
 
 ### JSON
 

@@ -25,6 +25,7 @@ use crate::protocol::connection::quit::QuitCommand;
 use crate::protocol::connection::reset::ResetCommand;
 use crate::protocol::connection::select::SelectCommand;
 use crate::protocol::geo::geoadd::GeoAddCommand;
+use crate::protocol::geo::geodist::GeoDistCommand;
 use crate::protocol::geo::geohash::GeoHashCommand;
 use crate::protocol::geo::geopos::GeoPosCommand;
 use crate::protocol::hash::hdel::HDelCommand;
@@ -443,6 +444,7 @@ impl CommandFactory {
         factory.register("GEOADD", GeoAddCommand);
         factory.register("GEOHASH", GeoHashCommand);
         factory.register("GEOPOS", GeoPosCommand);
+        factory.register("GEODIST", GeoDistCommand);
         // Bitmap commands
         factory.register("SETBIT", SetBitCommand);
         factory.register("GETBIT", GetBitCommand);

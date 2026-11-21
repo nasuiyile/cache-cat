@@ -8,6 +8,7 @@ use crate::protocol::bitmap::bitpos::BitPosParams;
 use crate::protocol::bitmap::getbit::GetBitParams;
 use crate::protocol::connection::echo::EchoParams;
 use crate::protocol::connection::ping::PingParam;
+use crate::protocol::geo::geodist::GeoDistParams;
 use crate::protocol::geo::geohash::GeoHashParams;
 use crate::protocol::geo::geopos::GeoPosParams;
 use crate::protocol::hash::hexists::HExistsParams;
@@ -114,4 +115,5 @@ pub enum ReadOperation {
     Echo(EchoParams),
     GeoHash(GeoHashParams),
     GeoPos(GeoPosParams),
+    GeoDist(GeoDistParams),
 }

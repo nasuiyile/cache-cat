@@ -160,6 +160,7 @@ impl fmt::Display for Request {
                 ReadOperation::Echo(req) => write!(f, "Echo: {}", req),
                 ReadOperation::GeoHash(req) => write!(f, "GeoHash: {}", req),
                 ReadOperation::GeoPos(req) => write!(f, "GeoPos: {}", req),
+                ReadOperation::GeoDist(req) => write!(f, "GeoDist: {}", req),
             },
             Operation::Base(op) => match op {
                 BaseOperation::Empty => write!(f, "None"),
