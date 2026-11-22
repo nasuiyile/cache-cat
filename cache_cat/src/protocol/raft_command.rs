@@ -21,6 +21,7 @@ use crate::protocol::geo::geoadd::GeoAddCommand;
 use crate::protocol::geo::geodist::GeoDistCommand;
 use crate::protocol::geo::geohash::GeoHashCommand;
 use crate::protocol::geo::geopos::GeoPosCommand;
+use crate::protocol::geo::georadius::GeoRadiusCommand;
 use crate::protocol::hash::hdel::HDelCommand;
 use crate::protocol::hash::hexists::HExistsCommand;
 use crate::protocol::hash::hget::HGetCommand;
@@ -265,6 +266,7 @@ impl RaftCommandFactory {
         factory.register("GEOHASH", GeoHashCommand);
         factory.register("GEOPOS", GeoPosCommand);
         factory.register("GEODIST", GeoDistCommand);
+        factory.register("GEORADIUS", GeoRadiusCommand);
         factory.register("DBSIZE", DbsizeCommand);
         factory.register("PFCOUNT", PfcountCommand);
         factory.register("PFADD", PfAddCommand);

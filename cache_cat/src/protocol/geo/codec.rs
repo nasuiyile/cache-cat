@@ -11,7 +11,7 @@ pub(super) const GEO_LAT_MIN: f64 = -85.05112878;
 pub(super) const GEO_LAT_MAX: f64 = 85.05112878;
 
 /// 26 bits per coordinate: the 52 bits a double score stores exactly.
-const GEO_STEP_MAX: u32 = 26;
+pub(super) const GEO_STEP_MAX: u8 = 26;
 const WGS84_LONG: (f64, f64) = (GEO_LONG_MIN, GEO_LONG_MAX);
 const WGS84_LAT: (f64, f64) = (GEO_LAT_MIN, GEO_LAT_MAX);
 /// Standard geohashes cover the whole latitude range.
@@ -44,13 +44,94 @@ fn deinterleave64(interleaved: u64) -> (u32, u32) {
     (squash(interleaved), squash(interleaved >> 1))
 }
 
-/// `geohashEncode` at 26 steps. Callers pass coordinates inside the ranges.
-fn encode(long_range: (f64, f64), lat_range: (f64, f64), longitude: f64, latitude: f64) -> u64 {
-    let scale = (1u64 << GEO_STEP_MAX) as f64;
+/// Redis `GeoHashBits`: one cell of the grid that splits each coordinate range
+/// into `2^step` parts. The bits of the two cell indices are interleaved.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) struct GeoHashBits {
+    pub bits: u64,
+    pub step: u8,
+}
+
+/// Redis `GeoHashArea`: the edges of a cell, each as `(min, max)` in degrees.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(super) struct GeoHashArea {
+    pub longitude: (f64, f64),
+    pub latitude: (f64, f64),
+}
+
+impl GeoHashBits {
+    /// `geohashEncode` in the ranges of a GEO index: the cell that holds a
+    /// position that passed the range check.
+    pub(super) fn of(longitude: f64, latitude: f64, step: u8) -> Self {
+        GeoHashBits {
+            bits: encode(WGS84_LONG, WGS84_LAT, longitude, latitude, step),
+            step,
+        }
+    }
+
+    /// `geohashDecode` in the ranges of a GEO index.
+    pub(super) fn area(self) -> GeoHashArea {
+        let (lat_bits, long_bits) = deinterleave64(self.bits);
+        let scale = (1u64 << self.step) as f64;
+        let edges = |bits: u32, (min, max): (f64, f64)| {
+            let span = max - min;
+            let low = min + (f64::from(bits) / scale) * span;
+            // Redis computes the upper edge with uint32_t arithmetic.
+            let high = min + (f64::from(bits.wrapping_add(1)) / scale) * span;
+            (low, high)
+        };
+        GeoHashArea {
+            longitude: edges(long_bits, WGS84_LONG),
+            latitude: edges(lat_bits, WGS84_LAT),
+        }
+    }
+
+    /// The cell `east` columns and `north` rows away, each -1, 0 or 1, as
+    /// `geohashNeighbors` finds it. The grid wraps around at all four edges.
+    pub(super) fn neighbor(self, east: i8, north: i8) -> Self {
+        let bits = step_coordinate(self.bits, LONG_BITS, self.step, east);
+        let bits = step_coordinate(bits, !LONG_BITS, self.step, north);
+        GeoHashBits { bits, ..self }
+    }
+}
+
+/// Longitude indices take the odd bit positions and latitude indices the
+/// even ones.
+const LONG_BITS: u64 = 0xaaaa_aaaa_aaaa_aaaa;
+
+/// `geohash_move_x` and `geohash_move_y`: moves the index stored in the bits
+/// of `mask` by one cell and wraps it around.
+fn step_coordinate(bits: u64, mask: u64, step: u8, direction: i8) -> u64 {
+    if direction == 0 {
+        return bits;
+    }
+    let unused = 64 - u32::from(step) * 2;
+    let moved = bits & mask;
+    let kept = bits & !mask;
+    // Setting the bits of the other coordinate lets a carry or a borrow
+    // travel through them.
+    let filler = !mask >> unused;
+    let moved = if direction > 0 {
+        moved.wrapping_add(filler + 1)
+    } else {
+        (moved | filler).wrapping_sub(filler + 1)
+    };
+    (moved & (mask >> unused)) | kept
+}
+
+/// `geohashEncode`. Callers pass coordinates inside the ranges.
+fn encode(
+    long_range: (f64, f64),
+    lat_range: (f64, f64),
+    longitude: f64,
+    latitude: f64,
+    step: u8,
+) -> u64 {
+    let scale = (1u64 << step) as f64;
     let lat_offset = (latitude - lat_range.0) / (lat_range.1 - lat_range.0) * scale;
     let long_offset = (longitude - long_range.0) / (long_range.1 - long_range.0) * scale;
     // Like the C conversion to uint32_t, `as` truncates. A coordinate on the
-    // upper limit yields 2^26 and therefore sets a bit above the 52nd.
+    // upper limit yields 2^step and therefore sets a bit above the others.
     interleave64(lat_offset as u32, long_offset as u32)
 }
 
@@ -59,7 +140,7 @@ fn encode(long_range: (f64, f64), lat_range: (f64, f64), longitude: f64, latitud
 /// Redis prints the bits as a decimal integer and ZADD parses them back, which
 /// rounds like this conversion when longitude 180 sets the 54th bit.
 pub(super) fn encode_score(longitude: f64, latitude: f64) -> f64 {
-    encode(WGS84_LONG, WGS84_LAT, longitude, latitude) as f64
+    GeoHashBits::of(longitude, latitude, GEO_STEP_MAX).bits as f64
 }
 
 /// `decodeGeohash`: longitude and latitude at the centre of a score's cell.
@@ -67,16 +148,17 @@ pub(super) fn encode_score(longitude: f64, latitude: f64) -> f64 {
 /// Any sorted-set score is accepted, as in Redis. Converting a score outside
 /// the u64 range is undefined in C; here it saturates, as it does on ARM64.
 pub(super) fn decode_score(score: f64) -> (f64, f64) {
-    let (lat_bits, long_bits) = deinterleave64(score as u64);
-    let scale = (1u64 << GEO_STEP_MAX) as f64;
-    let centre = |bits: u32, (min, max): (f64, f64)| {
-        let span = max - min;
-        let low = min + (f64::from(bits) / scale) * span;
-        // Redis computes the upper edge with uint32_t arithmetic.
-        let high = min + (f64::from(bits.wrapping_add(1)) / scale) * span;
-        ((low + high) / 2.0).clamp(min, max)
+    let cell = GeoHashBits {
+        bits: score as u64,
+        step: GEO_STEP_MAX,
     };
-    (centre(long_bits, WGS84_LONG), centre(lat_bits, WGS84_LAT))
+    let area = cell.area();
+    let centre =
+        |(low, high): (f64, f64), (min, max): (f64, f64)| ((low + high) / 2.0).clamp(min, max);
+    (
+        centre(area.longitude, WGS84_LONG),
+        centre(area.latitude, WGS84_LAT),
+    )
 }
 
 /// The standard 11-character geohash of a score, as GEOHASH replies with it.
@@ -86,7 +168,7 @@ pub(super) fn decode_score(score: f64) -> (f64, f64) {
 /// '0' as the eleventh.
 pub(super) fn geohash_string(score: f64) -> [u8; 11] {
     let (longitude, latitude) = decode_score(score);
-    let bits = encode(WGS84_LONG, STANDARD_LAT, longitude, latitude);
+    let bits = encode(WGS84_LONG, STANDARD_LAT, longitude, latitude, GEO_STEP_MAX);
     let mut text = [b'0'; 11];
     for (index, byte) in text.iter_mut().take(10).enumerate() {
         *byte = GEOHASH_ALPHABET[(bits >> (52 - (index + 1) * 5)) as usize & 0x1f];

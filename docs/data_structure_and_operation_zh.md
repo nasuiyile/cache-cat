@@ -84,7 +84,15 @@ GEO 索引就是普通的 ZSET：成员的分数是经纬度按 Redis `geohash.c
 
 距离计算中的 `sin`、`cos`、`asin` 来自纯 Rust 的 `libm` crate，而不是 `f64` 的同名方法。后者调用所在平台的 C 数学库，Rust 文档说明其结果随平台和版本而变；而 Lua/EXEC 中的 GEODIST 在每个副本上各自执行，脚本可以把读到的距离写回状态机，所以各副本必须得到逐位相同的结果。平方根由 IEEE 754 规定为正确舍入，仍使用 `f64::sqrt`。Redis 自身使用平台的 C 数学库，因此最后一位上并不存在唯一的“Redis 结果”。在 macOS ARM64 上用 700 万对坐标对照系统数学库：随机坐标对的差异都小于 1e-6 米，4 位小数的回复约百万分之五不同；haversine 公式在对跖点附近是病态的，互为对跖点的坐标对中约 3% 相差可达 0.19 米。
 
-其余 GEO 命令（GEOSEARCH、GEOSEARCHSTORE 以及已废弃的 GEORADIUS 系列）尚未实现。
+`GEORADIUS key longitude latitude radius M|KM|FT|MI [WITHCOORD] [WITHDIST] [WITHHASH] [COUNT count [ANY]] [ASC|DESC] [STORE key|STOREDIST key]` 返回某个位置给定半径内的成员。不带 STORE 或 STOREDIST 时它只读，因此使用 `ReadCommand`，对应读指令 `ReadOperation::GeoRadius`，走租约读而不写日志，尽管 Redis 把这个命令标记为写命令。带 STORE 或 STOREDIST 时使用 `MultiReadComputeCommand`，对应写指令 `RedisOperation::RedisGeoRadiusStore`：读取源键，把找到的成员作为一个有序集合写入目标键，分数是成员的 geohash（STORE），或者是以半径单位表示、未经舍入的距离（STOREDIST）。目标键无论原来是什么类型都会被替换并失去 TTL；没有找到成员或源键不存在时目标键被删除，回复是写入的成员数。快照 `Start` 阶段只记录计算出的目标键写入，回放时不会再去搜索可能已经变化的源键。两种形式都可以在 EXEC 和 Lua 中使用。
+
+搜索逻辑位于 `cache_cat/src/protocol/geo/search.rs`，供其他按距离查询的命令复用，并且逐步对照 Redis 的 `geohash_helper.c` 和 `geo.c`：先由半径和圆心纬度估算格子大小，取圆心所在的格子及其周围八个邻格；如果某个邻格够不到圆的外接矩形的边，就把格子放大一级；圆心格子在某一侧已经容纳整个矩形时，去掉那一侧的邻格。然后按“中心、北、南、东、西、东北、西北、东南、西南”的顺序扫描每个格子的分数范围，成员所在格子的中心（即 GEOPOS 返回的位置）到圆心的距离（即 GEODIST 的算法）不超过半径时保留。这个扫描顺序就是不带 ASC/DESC 时的回复顺序，也决定了 `COUNT n ANY` 在哪些成员处停止，因此实现保留了 Redis 的细节，包括：网格在四条边上都是回绕的；与上一个扫描过的格子相同的格子会被跳过，全球范围的搜索才不会把成员返回两次；GEOADD 写在经度恰为 180 或纬度恰为 85.05112878 处的成员，其格子编号比网格大一，只有以该上限为圆心的搜索才能找到。外接矩形需要一次 `cos`，与距离计算一样取自 `libm`，所以各副本扫描的格子相同。
+
+只有 COUNT 而没有 ANY 时按距离排序，默认由近到远，指定 DESC 时由远到近。ANY 返回扫描最先找到的成员，指定了顺序时只对这些成员排序。Redis 用 `qsort` 排序，COUNT 截断结果时用部分排序，两者都没有规定距离相等的成员（例如同一个格子里的两个成员）的先后；这里它们在两个方向上都保持扫描顺序。结果很多而 COUNT 很小时先选出前 count 个再排序，复杂度为 O(N + count log count)。没有 ANY 时，持有 value 锁期间只复制候选成员和分数，解码和三角函数运算在锁外进行，所以对同一个热点索引的搜索可以并行，对 Raft apply 线程的阻塞也只有复制这一段。ANY 需要在找到足够的成员时立刻停止，因此在锁内计算距离。
+
+回复的每一项是成员本身；带 WITH 选项时是一个数组，成员之后依次为距离（WITHDIST，与 GEODIST 相同的 4 位小数字符串，单位同半径）、整数形式的分数（WITHHASH）和坐标（WITHCOORD，写法同 GEOPOS），这个顺序与选项的书写顺序无关。键不存在或没有结果时返回空数组。Redis 在读取任何参数之前先查找键并检查类型，所以解析阶段只拒绝参数个数错误：其余参数错误虽然在解析时判定，但随读指令带到执行阶段，确认键不是其他类型之后才返回。在 MULTI 中也因此与 Redis 一致：参数个数错误在入队时被拒绝并使事务中止，其余参数错误是该命令在 EXEC 结果中的回复。按 Redis 的检查顺序，错误依次为：坐标非法、`ERR need numeric radius`、`ERR radius cannot be negative`、单位非法；然后从左到右读取选项，遇到语法错误、COUNT 不是整数或 `ERR COUNT must be > 0`；最后是 STORE 与 WITH 选项同时出现，以及 ANY 没有 COUNT。需要取值的选项出现在最后一个参数时是语法错误，重复的选项以后一个为准。
+
+其余 GEO 命令（GEOSEARCH、GEOSEARCHSTORE、GEORADIUS_RO、GEORADIUSBYMEMBER、GEORADIUSBYMEMBER_RO）尚未实现。
 
 ### JSON
 

@@ -414,6 +414,17 @@ impl SortedSet {
             .collect()
     }
 
+    /// Members with `min <= score < max` in score order.
+    ///
+    /// Nothing is copied: the GEO searches filter the members of a cell while
+    /// they iterate and may stop early.
+    pub fn score_range(&self, min: f64, max: f64) -> impl Iterator<Item = (&Bytes, f64)> {
+        self.tree
+            .iter_from_prefix(move |(score, _)| score.0 < min)
+            .take_while(move |(score, _)| score.0 < max)
+            .map(|(score, member)| (member, score.0))
+    }
+
     /// 删除指定成员。
     ///
     /// 时间复杂度：

@@ -782,3 +782,603 @@ async fn geoadd_snapshot_cas_replays_every_scan_cut_with_ttl_and_recreation() {
         assert_eq!(actual, expected, "scan after operation {cut}");
     }
 }
+
+const SICILY: [&str; 8] = [
+    "GEOADD",
+    "Sicily",
+    "13.361389",
+    "38.115556",
+    "Palermo",
+    "15.087269",
+    "37.502669",
+    "Catania",
+];
+
+fn text(reply: Value) -> String {
+    String::from_utf8(reply.encode()).unwrap()
+}
+
+/// TTL and the members in score order, with the exact bits of each score.
+fn scores(cache: &MyCache, key: &str) -> Option<(Option<u64>, Vec<(Bytes, u64)>)> {
+    let entry = cache.databases[0].mocha.get_entry(key.as_bytes())?;
+    let ValueObject::ZSet(zset) = entry.value.data else {
+        panic!("{key} is not a sorted set");
+    };
+    let members = zset
+        .lock()
+        .zrange(0, -1)
+        .into_iter()
+        .map(|(member, score)| (member, score.to_bits()))
+        .collect();
+    Some((entry.expire_at, members))
+}
+
+#[test]
+fn georadius_searches_geo_indexes_and_plain_sorted_sets() {
+    let cache = MyCache::new(2).unwrap();
+    run(&cache, &SICILY);
+
+    // The replies of the Redis documentation example. Coordinates are
+    // written as Redis 8 writes them.
+    let palermo = position(PALERMO_POSITION);
+    let catania = position(CATANIA_POSITION);
+    assert_eq!(
+        text(run(
+            &cache,
+            &["GEORADIUS", "Sicily", "15", "37", "200", "km", "WITHDIST"]
+        )),
+        "*2\r\n*2\r\n$7\r\nPalermo\r\n$8\r\n190.4424\r\n*2\r\n$7\r\nCatania\r\n$7\r\n56.4413\r\n"
+    );
+    assert_eq!(
+        text(run(
+            &cache,
+            &["GEORADIUS", "Sicily", "15", "37", "200", "km", "WITHCOORD"]
+        )),
+        format!("*2\r\n*2\r\n$7\r\nPalermo\r\n{palermo}*2\r\n$7\r\nCatania\r\n{catania}")
+    );
+    assert_eq!(
+        text(run(
+            &cache,
+            &[
+                "GEORADIUS",
+                "Sicily",
+                "15",
+                "37",
+                "200",
+                "km",
+                "WITHDIST",
+                "WITHCOORD"
+            ]
+        )),
+        format!(
+            "*2\r\n*3\r\n$7\r\nPalermo\r\n$8\r\n190.4424\r\n{palermo}\
+             *3\r\n$7\r\nCatania\r\n$7\r\n56.4413\r\n{catania}"
+        )
+    );
+    assert_eq!(
+        text(run(
+            &cache,
+            &["GEORADIUS", "Sicily", "15", "37", "200", "km", "COUNT", "1"]
+        )),
+        "*1\r\n$7\r\nCatania\r\n"
+    );
+
+    // A member written by ZADD is found by the cell of its score, and equal
+    // scores come in member order.
+    run(&cache, &["ZADD", "Sicily", "3479447370796909", "raw"]);
+    assert_eq!(
+        text(run(
+            &cache,
+            &["GEORADIUS", "Sicily", "15", "37", "100", "km", "WITHHASH"]
+        )),
+        "*2\r\n*2\r\n$7\r\nCatania\r\n:3479447370796909\r\n*2\r\n$3\r\nraw\r\n:3479447370796909\r\n"
+    );
+    // Small scores are cells in the south-west corner of the grid.
+    run(&cache, &["ZADD", "plain", "1", "one", "2", "two"]);
+    assert_eq!(
+        text(run(
+            &cache,
+            &["GEORADIUS", "plain", "-180", "-85.05112878", "1", "km"]
+        )),
+        "*2\r\n$3\r\none\r\n$3\r\ntwo\r\n"
+    );
+    assert_eq!(
+        text(run(
+            &cache,
+            &["GEORADIUS", "plain", "15", "37", "200", "km"]
+        )),
+        "*0\r\n"
+    );
+
+    // A missing key is an empty array, and reading creates nothing.
+    let absent = run(&cache, &["GEORADIUS", "absent", "15", "37", "200", "km"]);
+    assert_eq!(absent.encode_proto(2), b"*0\r\n");
+    assert_eq!(absent.encode_proto(3), b"*0\r\n");
+    assert_eq!(index(&cache, "absent"), None);
+
+    // The type of the key is checked before any argument but the arity.
+    run(&cache, &["SET", "text", "value"]);
+    for args in [
+        &["GEORADIUS", "text", "15", "37", "200", "km"][..],
+        &["GEORADIUS", "text", "x", "y", "far", "parsecs", "BOGUS"],
+        &[
+            "GEORADIUS",
+            "text",
+            "15",
+            "37",
+            "200",
+            "km",
+            "STORE",
+            "target",
+        ],
+    ] {
+        assert_eq!(run(&cache, args).encode(), WRONG_TYPE, "{args:?}");
+    }
+    for key in ["absent", "Sicily"] {
+        assert_eq!(
+            run(&cache, &["GEORADIUS", key, "15", "37", "200", "parsecs"]).encode(),
+            b"-ERR unsupported unit provided. please use M, KM, FT, MI\r\n",
+            "{key}"
+        );
+        assert_eq!(
+            run(&cache, &["GEORADIUS", key, "15", "37", "200", "km", "ANY"]).encode(),
+            b"-ERR the ANY argument requires COUNT argument\r\n",
+            "{key}"
+        );
+    }
+    assert_eq!(index(&cache, "target"), None);
+    for args in [
+        &["GEORADIUS"][..],
+        &["GEORADIUS", "text"],
+        &["GEORADIUS", "text", "15", "37", "200"],
+    ] {
+        assert_eq!(
+            run(&cache, args).encode(),
+            b"-ERR wrong number of arguments for 'georadius' command\r\n",
+            "{args:?}"
+        );
+    }
+}
+
+#[test]
+fn georadius_store_replaces_the_destination_with_a_sorted_set() {
+    let cache = MyCache::new(2).unwrap();
+    run(&cache, &SICILY);
+    let sicily = index(&cache, "Sicily");
+
+    // STORE copies the geohash scores, so the result is a GEO index again.
+    assert_eq!(
+        run(
+            &cache,
+            &[
+                "GEORADIUS",
+                "Sicily",
+                "15",
+                "37",
+                "200",
+                "km",
+                "STORE",
+                "near"
+            ]
+        )
+        .encode(),
+        b":2\r\n"
+    );
+    assert_eq!(index(&cache, "near"), sicily);
+    assert_eq!(run(&cache, &["TYPE", "near"]).encode(), b"+zset\r\n");
+    assert_eq!(
+        run(&cache, &["GEODIST", "near", "Palermo", "Catania", "km"]).encode(),
+        b"$8\r\n166.2742\r\n"
+    );
+
+    // STOREDIST stores the unrounded distance in the unit of the radius.
+    assert_eq!(
+        run(
+            &cache,
+            &[
+                "GEORADIUS",
+                "Sicily",
+                "15",
+                "37",
+                "200",
+                "km",
+                "STOREDIST",
+                "dist"
+            ]
+        )
+        .encode(),
+        b":2\r\n"
+    );
+    assert_eq!(
+        text(run(&cache, &["ZRANGE", "dist", "0", "-1"])),
+        "*2\r\n$7\r\nCatania\r\n$7\r\nPalermo\r\n"
+    );
+    for (member, kilometers) in [("Catania", 56.4413), ("Palermo", 190.4424)] {
+        let Value::Double(score) = run(&cache, &["ZSCORE", "dist", member]) else {
+            panic!("{member} has no score");
+        };
+        assert!((score - kilometers).abs() < 5e-5, "{member}: {score}");
+        assert_ne!(score, kilometers, "{member} was rounded");
+    }
+
+    // The destination is replaced whatever it held and loses its TTL. COUNT
+    // and the order choose what is stored.
+    run(&cache, &["SET", "near", "text"]);
+    run(&cache, &["PEXPIRE", "near", "100000"]);
+    assert_eq!(
+        run(
+            &cache,
+            &[
+                "GEORADIUS",
+                "Sicily",
+                "15",
+                "37",
+                "200",
+                "km",
+                "COUNT",
+                "1",
+                "DESC",
+                "STORE",
+                "near"
+            ]
+        )
+        .encode(),
+        b":1\r\n"
+    );
+    assert_eq!(
+        index(&cache, "near"),
+        Some((
+            None,
+            vec![(Bytes::from_static(b"Palermo"), 3479099956230698)]
+        ))
+    );
+
+    // Nothing found, or no source at all, deletes the destination.
+    assert_eq!(
+        run(
+            &cache,
+            &[
+                "GEORADIUS",
+                "Sicily",
+                "-120",
+                "40",
+                "1",
+                "km",
+                "STORE",
+                "near"
+            ]
+        )
+        .encode(),
+        b":0\r\n"
+    );
+    assert_eq!(index(&cache, "near"), None);
+    assert_eq!(
+        run(
+            &cache,
+            &[
+                "GEORADIUS",
+                "absent",
+                "15",
+                "37",
+                "200",
+                "km",
+                "STOREDIST",
+                "dist"
+            ]
+        )
+        .encode(),
+        b":0\r\n"
+    );
+    assert_eq!(index(&cache, "dist"), None);
+    assert_eq!(index(&cache, "absent"), None);
+
+    // A rejected command leaves the destination alone.
+    run(&cache, &["SET", "text", "value"]);
+    for args in [
+        &[
+            "GEORADIUS",
+            "Sicily",
+            "15",
+            "37",
+            "200",
+            "km",
+            "STORE",
+            "text",
+            "WITHDIST",
+        ][..],
+        &[
+            "GEORADIUS",
+            "Sicily",
+            "15",
+            "37",
+            "200",
+            "km",
+            "STORE",
+            "text",
+            "COUNT",
+            "0",
+        ],
+        &[
+            "GEORADIUS",
+            "text",
+            "15",
+            "37",
+            "200",
+            "km",
+            "STORE",
+            "Sicily",
+        ],
+    ] {
+        assert!(matches!(run(&cache, args), Value::Error(_)), "{args:?}");
+    }
+    assert_eq!(run(&cache, &["GET", "text"]).encode(), b"$5\r\nvalue\r\n");
+    assert_eq!(index(&cache, "Sicily"), sicily);
+
+    // The source may be its own destination.
+    assert_eq!(
+        run(
+            &cache,
+            &[
+                "GEORADIUS",
+                "Sicily",
+                "15",
+                "37",
+                "100",
+                "km",
+                "STORE",
+                "Sicily"
+            ]
+        )
+        .encode(),
+        b":1\r\n"
+    );
+    assert_eq!(
+        index(&cache, "Sicily"),
+        Some((
+            None,
+            vec![(Bytes::from_static(b"Catania"), 3479447370796909)]
+        ))
+    );
+}
+
+#[test]
+fn georadius_runs_inside_exec_and_lua() {
+    let cache = MyCache::new(2).unwrap();
+    // Searches in a transaction see the writes queued before them, and an
+    // argument error is the reply of its own command, as in Redis.
+    let transaction = exec(&[
+        &SICILY,
+        &[
+            "GEORADIUS",
+            "Sicily",
+            "15",
+            "37",
+            "200",
+            "km",
+            "WITHDIST",
+            "ASC",
+        ],
+        &[
+            "GEORADIUS",
+            "Sicily",
+            "15",
+            "37",
+            "100",
+            "km",
+            "STORE",
+            "near",
+        ],
+        &["ZREM", "Sicily", "Catania"],
+        &["GEORADIUS", "Sicily", "15", "37", "100", "km"],
+        &[
+            "GEORADIUS",
+            "near",
+            "15",
+            "37",
+            "100",
+            "km",
+            "COUNT",
+            "1",
+            "ANY",
+        ],
+        &["GEORADIUS", "Sicily", "15", "37", "100", "parsecs"],
+    ]);
+    assert_eq!(
+        text(apply(&cache, transaction, 10, None)),
+        "*7\r\n:2\r\n\
+         *2\r\n*2\r\n$7\r\nCatania\r\n$7\r\n56.4413\r\n*2\r\n$7\r\nPalermo\r\n$8\r\n190.4424\r\n\
+         :1\r\n:1\r\n*0\r\n*1\r\n$7\r\nCatania\r\n\
+         -ERR unsupported unit provided. please use M, KM, FT, MI\r\n"
+    );
+
+    // A script gets nested tables with strings, and may store a result.
+    let script = eval(
+        "redis.call('GEOADD', KEYS[1], 15.087269, 37.502669, 'Catania') \
+         local found = redis.call('GEORADIUS', KEYS[1], 15, 37, 200, ARGV[1], \
+                                  'WITHDIST', 'WITHCOORD', 'WITHHASH', 'DESC') \
+         local stored = redis.call('GEORADIUS', KEYS[1], 15, 37, 200, ARGV[1], 'STOREDIST', KEYS[2]) \
+         local farthest = redis.call('ZRANGE', KEYS[2], -1, -1)[1] \
+         local first = found[1] \
+         return {#found, #first, first[1], first[2], first[3], type(first[4][1]), first[4][2], \
+                 stored, farthest}",
+        &["Sicily", "distances"],
+        &["km"],
+    );
+    assert_eq!(
+        text(apply(&cache, script, 20, None)),
+        "*9\r\n:2\r\n:4\r\n$7\r\nPalermo\r\n$8\r\n190.4424\r\n:3479099956230698\r\n\
+         $6\r\nstring\r\n$16\r\n38.1155563954963\r\n:2\r\n$7\r\nPalermo\r\n"
+    );
+    assert_eq!(run(&cache, &["ZCARD", "distances"]).encode(), b":2\r\n");
+
+    // After redis.setresp(3) the coordinates are doubles.
+    let script = eval(
+        "redis.setresp(3) \
+         local found = redis.call('GEORADIUS', KEYS[1], 15, 37, 100, 'km', 'WITHCOORD') \
+         local nothing = redis.call('GEORADIUS', KEYS[1], -120, 40, 1, 'km') \
+         return {found[1][1], found[1][2][1], #nothing}",
+        &["Sicily"],
+        &[],
+    );
+    assert_eq!(
+        String::from_utf8(apply(&cache, script, 30, None).encode_proto(3)).unwrap(),
+        "*3\r\n$7\r\nCatania\r\n,15.087267458438873\r\n:0\r\n"
+    );
+
+    // An argument error is an error reply for pcall.
+    let rejected = eval(
+        "return redis.pcall('GEORADIUS', KEYS[1], 15, 37, -1, 'km')",
+        &["Sicily"],
+        &[],
+    );
+    assert_eq!(
+        apply(&cache, rejected, 40, None).encode(),
+        b"-ERR radius cannot be negative\r\n"
+    );
+}
+
+#[tokio::test]
+async fn georadius_store_snapshot_cas_replays_every_scan_cut() {
+    let cache = MyCache::new(2).unwrap();
+    apply(&cache, command(&SICILY), 1, None);
+    apply(&cache, command(&["SET", "old", "text"]), 2, None);
+    apply(&cache, command(&["ZADD", "copy", "1", "stale"]), 3, None);
+    apply(&cache, command(&["PEXPIRE", "copy", "100000"]), 4, None);
+
+    let operations = [
+        command(&[
+            "GEORADIUS",
+            "Sicily",
+            "15",
+            "37",
+            "200",
+            "km",
+            "STORE",
+            "near",
+        ]),
+        command(&[
+            "GEORADIUS",
+            "Sicily",
+            "15",
+            "37",
+            "200",
+            "km",
+            "STOREDIST",
+            "dist",
+        ]),
+        command(&["GEOADD", "Sicily", "15.1", "37.5", "Acireale"]),
+        exec(&[
+            &[
+                "GEORADIUS",
+                "Sicily",
+                "15",
+                "37",
+                "100",
+                "km",
+                "STORE",
+                "near",
+            ],
+            &[
+                "GEORADIUS",
+                "near",
+                "15",
+                "37",
+                "100",
+                "km",
+                "COUNT",
+                "1",
+                "STOREDIST",
+                "dist",
+            ],
+        ]),
+        eval(
+            "return redis.call('GEORADIUS', KEYS[1], 15, 37, 300, 'km', 'STORE', KEYS[2])",
+            &["Sicily", "copy"],
+            &[],
+        ),
+        // Nothing found, and a missing source, delete their destinations.
+        command(&[
+            "GEORADIUS",
+            "Sicily",
+            "-120",
+            "40",
+            "1",
+            "km",
+            "STORE",
+            "near",
+        ]),
+        command(&["GEORADIUS", "absent", "15", "37", "1", "km", "STORE", "old"]),
+        command(&[
+            "GEORADIUS",
+            "Sicily",
+            "15",
+            "37",
+            "60",
+            "km",
+            "STORE",
+            "Sicily",
+        ]),
+    ];
+
+    let mut cuts = vec![dump(&cache).await];
+    let mut queue = Vec::new();
+    let mut revision = 7;
+    for (step, operation) in operations.into_iter().enumerate() {
+        let reply = apply(
+            &cache,
+            operation,
+            step as u64 + 5,
+            Some((&mut queue, &mut revision)),
+        );
+        assert!(!matches!(reply, Value::Error(_)), "{reply:?}");
+        cuts.push(dump(&cache).await);
+    }
+
+    // A search is recorded as the write it computed, never as a search that
+    // a replay would run against a source that has changed since.
+    assert!(queue.iter().all(|delta| matches!(
+        delta.request,
+        BaseOperation::Insert(_) | BaseOperation::Del(_) | BaseOperation::GeoAdd(_)
+    )));
+    assert_eq!(
+        queue
+            .iter()
+            .filter(|delta| matches!(delta.request, BaseOperation::Insert(_)))
+            .count(),
+        6
+    );
+
+    let keys = ["Sicily", "near", "dist", "copy", "old", "absent"];
+    let expected = keys.map(|key| scores(&cache, key));
+    // The last search kept the two members within 60 km of the centre.
+    let (ttl, sicily) = expected[0].clone().unwrap();
+    assert_eq!(ttl, None);
+    assert_eq!(
+        sicily
+            .iter()
+            .map(|(member, _)| member.as_ref())
+            .collect::<Vec<_>>(),
+        [&b"Acireale"[..], b"Catania"]
+    );
+    assert_eq!(expected[1], None);
+    // The nearest member with its distance, which is not a geohash: Acireale
+    // lies a little closer to the centre than Catania's 56.4413 km.
+    let (ttl, dist) = expected[2].clone().unwrap();
+    assert_eq!(ttl, None);
+    assert_eq!(dist.len(), 1);
+    assert_eq!(dist[0].0.as_ref(), b"Acireale");
+    let kilometers = f64::from_bits(dist[0].1);
+    assert!((56.0..56.4413).contains(&kilometers), "{kilometers}");
+    // The script replaced the stale sorted set and its TTL.
+    let (ttl, copy) = expected[3].clone().unwrap();
+    assert_eq!(ttl, None);
+    assert_eq!(copy.len(), 3);
+    assert_eq!(expected[4], None);
+    assert_eq!(expected[5], None);
+
+    for (cut, full) in cuts.iter().enumerate() {
+        let restored = restore(full, &queue, cache.get_write_clock()).await;
+        let actual = keys.map(|key| scores(&restored, key));
+        assert_eq!(actual, expected, "scan after operation {cut}");
+    }
+}

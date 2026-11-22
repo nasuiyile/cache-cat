@@ -14,8 +14,8 @@ use serde::{Deserialize, Serialize};
 use std::fmt;
 
 /// Redis `EARTH_RADIUS_IN_METERS`: the Earth is taken as a perfect sphere.
-const EARTH_RADIUS_IN_METERS: f64 = 6372797.560856;
-const DEGREES_TO_RADIANS: f64 = std::f64::consts::PI / 180.0;
+pub(super) const EARTH_RADIUS_IN_METERS: f64 = 6372797.560856;
+pub(super) const DEGREES_TO_RADIANS: f64 = std::f64::consts::PI / 180.0;
 /// Fractional digits of a distance reply.
 const DISTANCE_SCALE: f64 = 10000.0;
 

@@ -116,6 +116,7 @@ fn read_request_inner<const REPLICATED: bool>(
         ReadOperation::GeoHash(param) => my_cache.execute_read(param, db_number, read_clock),
         ReadOperation::GeoPos(param) => my_cache.execute_read(param, db_number, read_clock),
         ReadOperation::GeoDist(param) => my_cache.execute_read(param, db_number, read_clock),
+        ReadOperation::GeoRadius(param) => my_cache.execute_read(param, db_number, read_clock),
     }
 }
 
@@ -247,6 +248,9 @@ pub fn do_request(
                 my_cache.execute_multi_read_compute(param, update)
             }
             RedisOperation::RedisPFMerge(param) => {
+                my_cache.execute_multi_read_compute(param, update)
+            }
+            RedisOperation::RedisGeoRadiusStore(param) => {
                 my_cache.execute_multi_read_compute(param, update)
             }
             RedisOperation::RedisRename(param) => {
