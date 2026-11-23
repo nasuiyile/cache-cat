@@ -92,7 +92,11 @@ GEO 索引就是普通的 ZSET：成员的分数是经纬度按 Redis `geohash.c
 
 回复的每一项是成员本身；带 WITH 选项时是一个数组，成员之后依次为距离（WITHDIST，与 GEODIST 相同的 4 位小数字符串，单位同半径）、整数形式的分数（WITHHASH）和坐标（WITHCOORD，写法同 GEOPOS），这个顺序与选项的书写顺序无关。键不存在或没有结果时返回空数组。Redis 在读取任何参数之前先查找键并检查类型，所以解析阶段只拒绝参数个数错误：其余参数错误虽然在解析时判定，但随读指令带到执行阶段，确认键不是其他类型之后才返回。在 MULTI 中也因此与 Redis 一致：参数个数错误在入队时被拒绝并使事务中止，其余参数错误是该命令在 EXEC 结果中的回复。按 Redis 的检查顺序，错误依次为：坐标非法、`ERR need numeric radius`、`ERR radius cannot be negative`、单位非法；然后从左到右读取选项，遇到语法错误、COUNT 不是整数或 `ERR COUNT must be > 0`；最后是 STORE 与 WITH 选项同时出现，以及 ANY 没有 COUNT。需要取值的选项出现在最后一个参数时是语法错误，重复的选项以后一个为准。
 
-其余 GEO 命令（GEOSEARCH、GEOSEARCHSTORE、GEORADIUS_RO、GEORADIUSBYMEMBER、GEORADIUSBYMEMBER_RO）尚未实现。
+`GEORADIUSBYMEMBER key member radius M|KM|FT|MI [WITHCOORD] [WITHDIST] [WITHHASH] [COUNT count [ANY]] [ASC|DESC] [STORE key|STOREDIST key]` 是以索引中某个成员的位置为圆心的 GEORADIUS，选项和回复都相同；成员自身也在结果中，距离为 0。它有自己的指令：读指令 `ReadOperation::GeoRadiusByMember`，带 STORE 或 STOREDIST 时是写指令 `RedisOperation::RedisGeoRadiusByMemberStore`。圆心取成员所在格子的中心，也就是 GEOPOS 返回的位置，因此回复与在该位置上执行 GEORADIUS 逐字节相同。成员的查找和周围格子的扫描在同一次持锁期间完成，圆心和找到的成员来自索引的同一个状态；距离计算与 GEORADIUS 一样在锁外进行。
+
+Redis 读取这个命令的参数的顺序取决于键是否存在，这里的实现与之一致。首先检查键的类型。只有键存在时才查找成员（索引中没有该成员时返回 `ERR could not decode requested zset member`），然后读取半径和单位。选项最后读取。键不存在时，成员、半径和单位完全不会被读取：即使它们非法，回复也是空数组，带 STORE 时目标键照样被删除。因此半径和选项的错误都在解析阶段判定、随指令携带，到 Redis 会读取该参数的位置才返回。写指令在 `RedisOperation` 中是装箱的：它带有三个键，比其他所有请求都大，不装箱会撑大每个命令都要携带的 `Operation`。圆心之后的参数、回复以及 STORE 的写入与 GEORADIUS 共用，位于 `cache_cat/src/protocol/geo/radius.rs`。
+
+其余 GEO 命令（GEOSEARCH、GEOSEARCHSTORE、GEORADIUS_RO、GEORADIUSBYMEMBER_RO）尚未实现。
 
 ### JSON
 

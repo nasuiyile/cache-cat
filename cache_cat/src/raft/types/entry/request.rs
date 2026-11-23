@@ -1,5 +1,6 @@
 use crate::protocol::bitmap::bitop::BitOpReq;
 use crate::protocol::geo::georadius::GeoRadiusStoreReq;
+use crate::protocol::geo::georadiusbymember::GeoRadiusByMemberStoreReq;
 use crate::protocol::key::rename::RenameParams;
 use crate::protocol::key::renamenx::RenameNxParams;
 use crate::protocol::key::unlink::UnlinkParams;
@@ -94,6 +95,8 @@ pub enum RedisOperation {
     /// EXEC time; keyspace fields are rendered while the log is applied.
     RedisInfo(InfoParams),
     RedisGeoRadiusStore(GeoRadiusStoreReq),
+    /// Boxed so that its three keys do not enlarge every other request.
+    RedisGeoRadiusByMemberStore(Box<GeoRadiusByMemberStoreReq>),
     /// Local MULTI placeholder; EXEC must resolve the script before replication.
     #[serde(skip)]
     RedisEvalSha {
@@ -164,6 +167,9 @@ impl fmt::Display for Request {
                 ReadOperation::GeoPos(req) => write!(f, "GeoPos: {}", req),
                 ReadOperation::GeoDist(req) => write!(f, "GeoDist: {}", req),
                 ReadOperation::GeoRadius(req) => write!(f, "GeoRadius: {}", req),
+                ReadOperation::GeoRadiusByMember(req) => {
+                    write!(f, "GeoRadiusByMember: {}", req)
+                }
             },
             Operation::Base(op) => match op {
                 BaseOperation::Empty => write!(f, "None"),
@@ -230,6 +236,9 @@ impl fmt::Display for Request {
                 RedisOperation::RedisSDiffStore(req) => write!(f, "RedisSDiffStore: {}", req),
                 RedisOperation::RedisGeoRadiusStore(req) => {
                     write!(f, "RedisGeoRadiusStore: {}", req)
+                }
+                RedisOperation::RedisGeoRadiusByMemberStore(req) => {
+                    write!(f, "RedisGeoRadiusByMemberStore: {}", req)
                 }
                 RedisOperation::RedisPFMerge(req) => write!(f, "RedisPFMerge: {}", req),
                 RedisOperation::RedisEval(req) => write!(f, "RedisEval: {}", req),

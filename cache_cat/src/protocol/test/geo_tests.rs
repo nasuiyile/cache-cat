@@ -1382,3 +1382,608 @@ async fn georadius_store_snapshot_cas_replays_every_scan_cut() {
         assert_eq!(actual, expected, "scan after operation {cut}");
     }
 }
+
+const AGRIGENTO: [&str; 5] = ["GEOADD", "Sicily", "13.583333", "37.316667", "Agrigento"];
+
+#[test]
+fn georadiusbymember_searches_around_the_position_of_a_member() {
+    let cache = MyCache::new(2).unwrap();
+    run(&cache, &AGRIGENTO);
+    run(&cache, &SICILY);
+
+    // The reply of the Redis documentation example.
+    assert_eq!(
+        text(run(
+            &cache,
+            &["GEORADIUSBYMEMBER", "Sicily", "Agrigento", "100", "km"]
+        )),
+        "*2\r\n$9\r\nAgrigento\r\n$7\r\nPalermo\r\n"
+    );
+
+    // The command is GEORADIUS around the position GEOPOS reports for the
+    // member, byte for byte.
+    let (longitude, latitude) = positions(&cache, "Sicily", &["Agrigento"])[0].unwrap();
+    let (longitude, latitude) = (format_double(longitude), format_double(latitude));
+    for (radius, unit) in [("100", "km"), ("200", "km"), ("60", "mi"), ("0", "m")] {
+        for options in [
+            &[][..],
+            &["WITHDIST", "WITHCOORD", "WITHHASH"],
+            &["COUNT", "2", "DESC", "WITHDIST"],
+            &["COUNT", "1", "ANY"],
+        ] {
+            let mut by_member = vec!["GEORADIUSBYMEMBER", "Sicily", "Agrigento", radius, unit];
+            by_member.extend(options);
+            let mut by_position = vec!["GEORADIUS", "Sicily", &longitude, &latitude, radius, unit];
+            by_position.extend(options);
+            let reply = run(&cache, &by_member);
+            assert!(matches!(&reply, Value::Array(Some(found)) if !found.is_empty()));
+            for proto in [2, 3] {
+                assert_eq!(
+                    reply.encode_proto(proto),
+                    run(&cache, &by_position).encode_proto(proto),
+                    "{by_member:?}"
+                );
+            }
+        }
+    }
+    // So the member is at distance zero, and the others at their GEODIST.
+    let Value::BulkString(Some(distance)) =
+        run(&cache, &["GEODIST", "Sicily", "Agrigento", "Palermo", "km"])
+    else {
+        panic!("no distance");
+    };
+    let distance = String::from_utf8(distance.to_vec()).unwrap();
+    assert!(distance.starts_with("90.97"), "{distance}");
+    assert_eq!(
+        text(run(
+            &cache,
+            &[
+                "GEORADIUSBYMEMBER",
+                "Sicily",
+                "Agrigento",
+                "100",
+                "km",
+                "WITHDIST"
+            ]
+        )),
+        format!(
+            "*2\r\n*2\r\n$9\r\nAgrigento\r\n$6\r\n0.0000\r\n*2\r\n$7\r\nPalermo\r\n$7\r\n{distance}\r\n"
+        )
+    );
+
+    // A member written by ZADD is a centre like any other.
+    run(&cache, &["ZADD", "Sicily", "3479447370796909", "raw"]);
+    assert_eq!(
+        text(run(
+            &cache,
+            &["GEORADIUSBYMEMBER", "Sicily", "raw", "1", "m"]
+        )),
+        "*2\r\n$7\r\nCatania\r\n$3\r\nraw\r\n"
+    );
+
+    // Without a key nothing is checked but the options, and reading creates
+    // nothing.
+    for args in [
+        &["GEORADIUSBYMEMBER", "absent", "Agrigento", "100", "km"][..],
+        &[
+            "GEORADIUSBYMEMBER",
+            "absent",
+            "nobody",
+            "far",
+            "parsecs",
+            "WITHDIST",
+        ],
+    ] {
+        let reply = run(&cache, args);
+        assert_eq!(reply.encode_proto(2), b"*0\r\n", "{args:?}");
+        assert_eq!(reply.encode_proto(3), b"*0\r\n", "{args:?}");
+    }
+    assert_eq!(
+        run(
+            &cache,
+            &[
+                "GEORADIUSBYMEMBER",
+                "absent",
+                "nobody",
+                "far",
+                "parsecs",
+                "ANY"
+            ]
+        )
+        .encode(),
+        b"-ERR the ANY argument requires COUNT argument\r\n"
+    );
+    assert_eq!(index(&cache, "absent"), None);
+
+    // With a key the member is checked first, then the radius and its unit.
+    for (args, error) in [
+        (
+            &[
+                "GEORADIUSBYMEMBER",
+                "Sicily",
+                "nobody",
+                "far",
+                "parsecs",
+                "ANY",
+            ][..],
+            "ERR could not decode requested zset member",
+        ),
+        (
+            &[
+                "GEORADIUSBYMEMBER",
+                "Sicily",
+                "Agrigento",
+                "far",
+                "parsecs",
+                "ANY",
+            ],
+            "ERR need numeric radius",
+        ),
+        (
+            &[
+                "GEORADIUSBYMEMBER",
+                "Sicily",
+                "Agrigento",
+                "-5",
+                "parsecs",
+                "ANY",
+            ],
+            "ERR radius cannot be negative",
+        ),
+        (
+            &[
+                "GEORADIUSBYMEMBER",
+                "Sicily",
+                "Agrigento",
+                "100",
+                "parsecs",
+                "ANY",
+            ],
+            "ERR unsupported unit provided. please use M, KM, FT, MI",
+        ),
+        (
+            &[
+                "GEORADIUSBYMEMBER",
+                "Sicily",
+                "Agrigento",
+                "100",
+                "km",
+                "ANY",
+            ],
+            "ERR the ANY argument requires COUNT argument",
+        ),
+    ] {
+        assert_eq!(text(run(&cache, args)), format!("-{error}\r\n"), "{args:?}");
+    }
+
+    // The type of the key comes before all of that, and the arity before it.
+    run(&cache, &["SET", "text", "value"]);
+    for args in [
+        &["GEORADIUSBYMEMBER", "text", "Agrigento", "100", "km"][..],
+        &[
+            "GEORADIUSBYMEMBER",
+            "text",
+            "nobody",
+            "far",
+            "parsecs",
+            "BOGUS",
+        ],
+        &[
+            "GEORADIUSBYMEMBER",
+            "text",
+            "Agrigento",
+            "100",
+            "km",
+            "STORE",
+            "target",
+        ],
+    ] {
+        assert_eq!(run(&cache, args).encode(), WRONG_TYPE, "{args:?}");
+    }
+    assert_eq!(index(&cache, "target"), None);
+    for args in [
+        &["GEORADIUSBYMEMBER"][..],
+        &["GEORADIUSBYMEMBER", "text"],
+        &["GEORADIUSBYMEMBER", "text", "Agrigento", "100"],
+    ] {
+        assert_eq!(
+            run(&cache, args).encode(),
+            b"-ERR wrong number of arguments for 'georadiusbymember' command\r\n",
+            "{args:?}"
+        );
+    }
+}
+
+#[test]
+fn georadiusbymember_store_replaces_the_destination_with_a_sorted_set() {
+    let cache = MyCache::new(2).unwrap();
+    run(&cache, &AGRIGENTO);
+    run(&cache, &SICILY);
+    let (_, sicily) = index(&cache, "Sicily").unwrap();
+    let scores_of = |names: &[&str]| {
+        sicily
+            .iter()
+            .filter(|(member, _)| names.iter().any(|name| name.as_bytes() == member.as_ref()))
+            .cloned()
+            .collect::<Vec<_>>()
+    };
+
+    // STORE copies the geohash scores of the members found.
+    assert_eq!(
+        run(
+            &cache,
+            &[
+                "GEORADIUSBYMEMBER",
+                "Sicily",
+                "Agrigento",
+                "100",
+                "km",
+                "STORE",
+                "near"
+            ]
+        )
+        .encode(),
+        b":2\r\n"
+    );
+    assert_eq!(
+        index(&cache, "near"),
+        Some((None, scores_of(&["Agrigento", "Palermo"])))
+    );
+
+    // STOREDIST stores the unrounded distances: zero for the centre.
+    assert_eq!(
+        run(
+            &cache,
+            &[
+                "GEORADIUSBYMEMBER",
+                "Sicily",
+                "Agrigento",
+                "100",
+                "km",
+                "STOREDIST",
+                "dist"
+            ]
+        )
+        .encode(),
+        b":2\r\n"
+    );
+    assert_eq!(
+        text(run(&cache, &["ZRANGE", "dist", "0", "-1"])),
+        "*2\r\n$9\r\nAgrigento\r\n$7\r\nPalermo\r\n"
+    );
+    assert!(matches!(
+        run(&cache, &["ZSCORE", "dist", "Agrigento"]),
+        Value::Double(distance) if distance == 0.0
+    ));
+    assert!(matches!(
+        run(&cache, &["ZSCORE", "dist", "Palermo"]),
+        Value::Double(distance) if (90.97..90.98).contains(&distance)
+    ));
+
+    // The destination is replaced whatever it held and loses its TTL.
+    run(&cache, &["SET", "near", "text"]);
+    run(&cache, &["PEXPIRE", "near", "100000"]);
+    assert_eq!(
+        run(
+            &cache,
+            &[
+                "GEORADIUSBYMEMBER",
+                "Sicily",
+                "Agrigento",
+                "200",
+                "km",
+                "COUNT",
+                "1",
+                "DESC",
+                "STORE",
+                "near"
+            ]
+        )
+        .encode(),
+        b":1\r\n"
+    );
+    assert_eq!(index(&cache, "near"), Some((None, scores_of(&["Catania"]))));
+
+    // With a key, a missing member or a bad radius writes nothing.
+    for args in [
+        &[
+            "GEORADIUSBYMEMBER",
+            "Sicily",
+            "nobody",
+            "100",
+            "km",
+            "STORE",
+            "near",
+        ][..],
+        &[
+            "GEORADIUSBYMEMBER",
+            "Sicily",
+            "Agrigento",
+            "far",
+            "km",
+            "STORE",
+            "near",
+        ],
+        &[
+            "GEORADIUSBYMEMBER",
+            "Sicily",
+            "Agrigento",
+            "1",
+            "km",
+            "STORE",
+            "near",
+            "WITHDIST",
+        ],
+    ] {
+        assert!(matches!(run(&cache, args), Value::Error(_)), "{args:?}");
+    }
+    assert_eq!(index(&cache, "near"), Some((None, scores_of(&["Catania"]))));
+
+    // Without a key the destination is deleted, whatever the member and the
+    // radius say.
+    run(&cache, &["SET", "victim", "text"]);
+    assert_eq!(
+        run(
+            &cache,
+            &[
+                "GEORADIUSBYMEMBER",
+                "absent",
+                "nobody",
+                "far",
+                "parsecs",
+                "STORE",
+                "victim"
+            ]
+        )
+        .encode(),
+        b":0\r\n"
+    );
+    assert_eq!(run(&cache, &["EXISTS", "victim"]).encode(), b":0\r\n");
+    assert_eq!(index(&cache, "absent"), None);
+
+    // The source may be its own destination.
+    assert_eq!(
+        run(
+            &cache,
+            &[
+                "GEORADIUSBYMEMBER",
+                "Sicily",
+                "Agrigento",
+                "100",
+                "km",
+                "STORE",
+                "Sicily"
+            ]
+        )
+        .encode(),
+        b":2\r\n"
+    );
+    assert_eq!(
+        index(&cache, "Sicily"),
+        Some((None, scores_of(&["Agrigento", "Palermo"])))
+    );
+}
+
+#[test]
+fn georadiusbymember_runs_inside_exec_and_lua() {
+    let cache = MyCache::new(2).unwrap();
+    // Searches in a transaction see the writes queued before them. A member
+    // that is gone by then is the error of its own command.
+    let transaction = exec(&[
+        &AGRIGENTO,
+        &SICILY,
+        &["GEORADIUSBYMEMBER", "Sicily", "Agrigento", "100", "km"],
+        &[
+            "GEORADIUSBYMEMBER",
+            "Sicily",
+            "Agrigento",
+            "100",
+            "km",
+            "STORE",
+            "near",
+        ],
+        &["ZREM", "Sicily", "Agrigento"],
+        &["GEORADIUSBYMEMBER", "Sicily", "Agrigento", "100", "km"],
+        &[
+            "GEORADIUSBYMEMBER",
+            "near",
+            "Agrigento",
+            "100",
+            "km",
+            "COUNT",
+            "1",
+        ],
+        &["GEORADIUSBYMEMBER", "absent", "nobody", "far", "parsecs"],
+    ]);
+    assert_eq!(
+        text(apply(&cache, transaction, 10, None)),
+        "*8\r\n:1\r\n:2\r\n*2\r\n$9\r\nAgrigento\r\n$7\r\nPalermo\r\n:2\r\n:1\r\n\
+         -ERR could not decode requested zset member\r\n\
+         *1\r\n$9\r\nAgrigento\r\n*0\r\n"
+    );
+
+    // A script gets nested tables with strings, and may store a result.
+    let script = eval(
+        "local found = redis.call('GEORADIUSBYMEMBER', KEYS[1], 'Palermo', 200, ARGV[1], \
+                                  'WITHDIST', 'ASC') \
+         local stored = redis.call('GEORADIUSBYMEMBER', KEYS[1], 'Palermo', 200, ARGV[1], \
+                                   'STOREDIST', KEYS[2]) \
+         local farthest = redis.call('ZRANGE', KEYS[2], -1, -1)[1] \
+         return {#found, found[1][1], found[1][2], found[2][1], found[2][2], stored, farthest}",
+        &["Sicily", "distances"],
+        &["km"],
+    );
+    assert_eq!(
+        text(apply(&cache, script, 20, None)),
+        "*7\r\n:2\r\n$7\r\nPalermo\r\n$6\r\n0.0000\r\n$7\r\nCatania\r\n$8\r\n166.2742\r\n\
+         :2\r\n$7\r\nCatania\r\n"
+    );
+    assert_eq!(run(&cache, &["ZCARD", "distances"]).encode(), b":2\r\n");
+
+    // After redis.setresp(3) the coordinates are doubles.
+    let script = eval(
+        "redis.setresp(3) \
+         local found = redis.call('GEORADIUSBYMEMBER', KEYS[1], 'Catania', 1, 'km', 'WITHCOORD') \
+         local nothing = redis.call('GEORADIUSBYMEMBER', KEYS[2], 'nobody', 'far', 'parsecs') \
+         return {found[1][1], found[1][2][1], #nothing}",
+        &["Sicily", "absent"],
+        &[],
+    );
+    assert_eq!(
+        String::from_utf8(apply(&cache, script, 30, None).encode_proto(3)).unwrap(),
+        "*3\r\n$7\r\nCatania\r\n,15.087267458438873\r\n:0\r\n"
+    );
+
+    // A missing member is an error reply for pcall.
+    let rejected = eval(
+        "return redis.pcall('GEORADIUSBYMEMBER', KEYS[1], 'nobody', 1, 'km')",
+        &["Sicily"],
+        &[],
+    );
+    assert_eq!(
+        apply(&cache, rejected, 40, None).encode(),
+        b"-ERR could not decode requested zset member\r\n"
+    );
+}
+
+#[tokio::test]
+async fn georadiusbymember_store_snapshot_cas_replays_every_scan_cut() {
+    let cache = MyCache::new(2).unwrap();
+    apply(&cache, command(&AGRIGENTO), 1, None);
+    apply(&cache, command(&SICILY), 2, None);
+    apply(&cache, command(&["SET", "old", "text"]), 3, None);
+    apply(&cache, command(&["ZADD", "copy", "1", "stale"]), 4, None);
+    apply(&cache, command(&["PEXPIRE", "copy", "100000"]), 5, None);
+
+    let operations = [
+        command(&[
+            "GEORADIUSBYMEMBER",
+            "Sicily",
+            "Agrigento",
+            "100",
+            "km",
+            "STORE",
+            "near",
+        ]),
+        command(&[
+            "GEORADIUSBYMEMBER",
+            "Sicily",
+            "Agrigento",
+            "200",
+            "km",
+            "STOREDIST",
+            "dist",
+        ]),
+        command(&["GEOADD", "Sicily", "13.6", "37.3", "Porto"]),
+        exec(&[
+            &[
+                "GEORADIUSBYMEMBER",
+                "Sicily",
+                "Palermo",
+                "100",
+                "km",
+                "STORE",
+                "near",
+            ],
+            &[
+                "GEORADIUSBYMEMBER",
+                "near",
+                "Palermo",
+                "100",
+                "km",
+                "COUNT",
+                "1",
+                "DESC",
+                "STOREDIST",
+                "dist",
+            ],
+        ]),
+        eval(
+            "return redis.call('GEORADIUSBYMEMBER', KEYS[1], 'Catania', 300, 'km', 'STORE', KEYS[2])",
+            &["Sicily", "copy"],
+            &[],
+        ),
+        // Without a key the destination is deleted.
+        command(&[
+            "GEORADIUSBYMEMBER",
+            "absent",
+            "nobody",
+            "far",
+            "parsecs",
+            "STORE",
+            "old",
+        ]),
+        command(&[
+            "GEORADIUSBYMEMBER",
+            "Sicily",
+            "Agrigento",
+            "10",
+            "km",
+            "STORE",
+            "Sicily",
+        ]),
+    ];
+
+    let mut cuts = vec![dump(&cache).await];
+    let mut queue = Vec::new();
+    let mut revision = 7;
+    for (step, operation) in operations.into_iter().enumerate() {
+        let reply = apply(
+            &cache,
+            operation,
+            step as u64 + 6,
+            Some((&mut queue, &mut revision)),
+        );
+        assert!(!matches!(reply, Value::Error(_)), "{reply:?}");
+        cuts.push(dump(&cache).await);
+    }
+
+    // Each search is recorded as the write it computed, so a replay looks
+    // neither the member nor its neighbours up again.
+    assert!(queue.iter().all(|delta| matches!(
+        delta.request,
+        BaseOperation::Insert(_) | BaseOperation::Del(_) | BaseOperation::GeoAdd(_)
+    )));
+    assert_eq!(
+        queue
+            .iter()
+            .filter(|delta| matches!(delta.request, BaseOperation::Insert(_)))
+            .count(),
+        6
+    );
+
+    let keys = ["Sicily", "near", "dist", "copy", "old", "absent"];
+    let expected = keys.map(|key| scores(&cache, key));
+    let names = |state: &Option<(Option<u64>, Vec<(Bytes, u64)>)>| {
+        let (ttl, members) = state.clone().unwrap();
+        assert_eq!(ttl, None);
+        members
+            .into_iter()
+            .map(|(member, _)| String::from_utf8(member.to_vec()).unwrap())
+            .collect::<Vec<_>>()
+    };
+    // The last search kept Agrigento and the member added two kilometers
+    // from it.
+    let mut sicily = names(&expected[0]);
+    sicily.sort();
+    assert_eq!(sicily, ["Agrigento", "Porto"]);
+    let mut near = names(&expected[1]);
+    near.sort();
+    assert_eq!(near, ["Agrigento", "Palermo", "Porto"]);
+    // The farthest member from Palermo within 100 km, with its distance.
+    let dist = names(&expected[2]);
+    assert_eq!(dist.len(), 1);
+    assert_ne!(dist[0], "Palermo");
+    let kilometers = f64::from_bits(expected[2].as_ref().unwrap().1[0].1);
+    assert!((90.0..100.0).contains(&kilometers), "{kilometers}");
+    // The script replaced the stale sorted set and its TTL.
+    assert_eq!(names(&expected[3]).len(), 4);
+    assert_eq!(expected[4], None);
+    assert_eq!(expected[5], None);
+
+    for (cut, full) in cuts.iter().enumerate() {
+        let restored = restore(full, &queue, cache.get_write_clock()).await;
+        let actual = keys.map(|key| scores(&restored, key));
+        assert_eq!(actual, expected, "scan after operation {cut}");
+    }
+}

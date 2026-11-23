@@ -8,6 +8,8 @@ pub mod geodist;
 pub mod geohash;
 pub mod geopos;
 pub mod georadius;
+pub mod georadiusbymember;
+pub mod radius;
 pub mod search;
 
 use crate::error::ProtocolError;

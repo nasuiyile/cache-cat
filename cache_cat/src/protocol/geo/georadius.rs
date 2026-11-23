@@ -1,28 +1,21 @@
 use crate::error::{CacheCatError, ProtocolError};
-use crate::mocha::{EntrySnapshot, ExpirePolicy, MochaOperation};
+use crate::mocha::EntrySnapshot;
 use crate::protocol::command::{Client, Command};
-use crate::protocol::common::float::parse_double;
-use crate::protocol::geo::distance::{GeoUnit, distance_reply};
-use crate::protocol::geo::search::{GeoOrder, GeoPoint, RadiusSearch};
+use crate::protocol::geo::radius::{RadiusOptions, members_reply, parse_radius, store};
+use crate::protocol::geo::search::{GeoPoint, RadiusSearch};
 use crate::protocol::geo::{parse_long_lat, sorted_set};
-use crate::protocol::option_eq;
 use crate::protocol::raft_command::RaftCommand;
-use crate::protocol::zset::zadd::ZAddReq;
 use crate::raft::network::redis_server::RedisServer;
 use crate::raft::types::core::mocha::cas::{ComputedWrite, MultiReadComputeCommand};
 use crate::raft::types::core::mocha::core::MyValue;
 use crate::raft::types::core::mocha::read_command::ReadCommand;
 use crate::raft::types::core::response_value::Value;
-use crate::raft::types::core::structure::sorted_set::SortedSet;
-use crate::raft::types::core::value_object::ValueObject;
 use crate::raft::types::entry::read_operation::ReadOperation;
 use crate::raft::types::entry::request::{Operation, RedisOperation};
 use async_trait::async_trait;
 use bytes::Bytes;
-use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
 use std::fmt::{self, Display};
-use std::sync::Arc;
 
 /// GEORADIUS key longitude latitude radius <M | KM | FT | MI> [WITHCOORD]
 /// [WITHDIST] [WITHHASH] [COUNT count [ANY]] [ASC | DESC]
@@ -52,40 +45,14 @@ pub struct GeoRadiusQuery {
 }
 
 impl GeoRadiusQuery {
-    /// One entry per member: its name, or an array that starts with the name
-    /// when a WITH option adds to it.
     fn reply(&self, points: Vec<GeoPoint>) -> Value {
-        let to_meters = self.search.unit.to_meters();
-        let extras = usize::from(self.with_dist)
-            + usize::from(self.with_hash)
-            + usize::from(self.with_coord);
-        let entries = points
-            .into_iter()
-            .map(|point| {
-                let member = Value::BulkString(Some(point.member));
-                if extras == 0 {
-                    return member;
-                }
-                // Redis sends the extras in this order, whatever the order
-                // of the options.
-                let mut entry = Vec::with_capacity(extras + 1);
-                entry.push(member);
-                if self.with_dist {
-                    entry.push(distance_reply(point.distance / to_meters));
-                }
-                if self.with_hash {
-                    entry.push(Value::Integer(point.score as i64));
-                }
-                if self.with_coord {
-                    entry.push(Value::Array(Some(vec![
-                        Value::Double(point.longitude),
-                        Value::Double(point.latitude),
-                    ])));
-                }
-                Value::Array(Some(entry))
-            })
-            .collect();
-        Value::Array(Some(entries))
+        members_reply(
+            points,
+            self.search.unit,
+            self.with_dist,
+            self.with_hash,
+            self.with_coord,
+        )
     }
 }
 
@@ -175,48 +142,7 @@ impl MultiReadComputeCommand for GeoRadiusStoreReq {
             Err(error) => return (Vec::new(), error.into()),
         };
         let points = source.map_or_else(Vec::new, |zset| self.search.points(&zset));
-        let to_meters = self.search.unit.to_meters();
-        let members = points
-            .into_iter()
-            .map(|point| {
-                let score = if self.store_dist {
-                    point.distance / to_meters
-                } else {
-                    point.score
-                };
-                (point.member, score)
-            })
-            // A sorted set cannot hold a NaN. Redis asserts on one here.
-            .filter(|(_, score)| !score.is_nan())
-            .collect();
-
-        let mut stored = SortedSet::new();
-        let added = stored.zadd(ZAddReq {
-            key: self.destination.clone(),
-            nx: false,
-            xx: false,
-            gt: false,
-            lt: false,
-            ch: false,
-            members,
-        });
-        // The destination is replaced whatever it held, and loses its TTL.
-        // Without a member to store it is deleted.
-        let operation = if stored.is_empty() {
-            MochaOperation::Remove
-        } else {
-            MochaOperation::Insert {
-                value: MyValue::new(ValueObject::ZSet(Arc::new(Mutex::new(stored)))),
-                expire: ExpirePolicy::Persistent,
-            }
-        };
-        (
-            vec![ComputedWrite {
-                key: self.destination,
-                operation,
-            }],
-            Value::Integer(added),
-        )
+        store(self.destination, self.store_dist, self.search.unit, points)
     }
 }
 
@@ -235,83 +161,13 @@ impl GeoRadiusCommand {
     /// with the first error it meets.
     fn parse_arguments(items: &[Value]) -> Result<Arguments, ProtocolError> {
         let (longitude, latitude) = parse_long_lat(&items[2], &items[3])?;
-        let radius = items[4]
-            .string_bytes_clone()
-            .and_then(|bytes| parse_double(&bytes))
-            .ok_or(ProtocolError::response("ERR need numeric radius"))?;
-        if radius < 0.0 {
-            return Err(ProtocolError::response("ERR radius cannot be negative"));
-        }
-        let unit = GeoUnit::parse(&items[5])?;
-
-        let (mut with_dist, mut with_hash, mut with_coord) = (false, false, false);
-        let (mut count, mut any, mut order, mut store) = (None, false, None, None);
-        let options = &items[6..];
-        let mut index = 0;
-        while index < options.len() {
-            let option = options[index].string_bytes_clone().unwrap_or_default();
-            // An option that takes a value is a syntax error as the last
-            // argument. A repeated option replaces the earlier one.
-            let value = options.get(index + 1);
-            if option_eq(&option, b"WITHDIST") {
-                with_dist = true;
-            } else if option_eq(&option, b"WITHHASH") {
-                with_hash = true;
-            } else if option_eq(&option, b"WITHCOORD") {
-                with_coord = true;
-            } else if option_eq(&option, b"ANY") {
-                any = true;
-            } else if option_eq(&option, b"ASC") {
-                order = Some(GeoOrder::Asc);
-            } else if option_eq(&option, b"DESC") {
-                order = Some(GeoOrder::Desc);
-            } else if let Some(value) = value
-                && option_eq(&option, b"COUNT")
-            {
-                let number = value.try_parse_canonical_i64()?;
-                if number <= 0 {
-                    return Err(ProtocolError::response("ERR COUNT must be > 0"));
-                }
-                count = Some(number as u64);
-                index += 1;
-            } else if let Some(value) = value
-                && (option_eq(&option, b"STORE") || option_eq(&option, b"STOREDIST"))
-            {
-                let destination = value
-                    .string_bytes_clone()
-                    .ok_or(ProtocolError::InvalidArgument("key"))?;
-                store = Some((destination, option_eq(&option, b"STOREDIST")));
-                index += 1;
-            } else {
-                return Err(ProtocolError::SyntaxError);
-            }
-            index += 1;
-        }
-
-        if store.is_some() && (with_dist || with_hash || with_coord) {
-            return Err(ProtocolError::response(
-                "ERR STORE option in GEORADIUS is not compatible with WITHDIST, WITHHASH and WITHCOORD options",
-            ));
-        }
-        if any && count.is_none() {
-            return Err(ProtocolError::response(
-                "ERR the ANY argument requires COUNT argument",
-            ));
-        }
-
+        let (radius, unit) = parse_radius(&items[4], &items[5])?;
+        let (options, store) = RadiusOptions::parse(&items[6..])?;
         Ok(Arguments {
-            search: RadiusSearch {
-                longitude,
-                latitude,
-                radius,
-                unit,
-                count,
-                any,
-                order,
-            },
-            with_dist,
-            with_hash,
-            with_coord,
+            search: options.search(longitude, latitude, radius, unit),
+            with_dist: options.with_dist,
+            with_hash: options.with_hash,
+            with_coord: options.with_coord,
             store,
         })
     }
@@ -380,6 +236,13 @@ impl Command for GeoRadiusCommand {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::mocha::{ExpirePolicy, MochaOperation};
+    use crate::protocol::geo::distance::GeoUnit;
+    use crate::protocol::geo::search::GeoOrder;
+    use crate::raft::types::core::structure::sorted_set::SortedSet;
+    use crate::raft::types::core::value_object::ValueObject;
+    use parking_lot::Mutex;
+    use std::sync::Arc;
 
     // Scores GEOADD stores for the two cities of the Redis documentation.
     const PALERMO: f64 = 3479099956230698.0;

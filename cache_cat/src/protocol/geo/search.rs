@@ -96,6 +96,14 @@ impl fmt::Display for RadiusSearch {
     }
 }
 
+/// What a scan takes out of an index while its lock is held.
+pub(super) enum Scan {
+    /// The members of the scanned cells, still to be measured.
+    Candidates(Vec<(Bytes, f64)>),
+    /// The members inside the circle that `ANY` stopped at.
+    Points(Vec<GeoPoint>),
+}
+
 impl RadiusSearch {
     /// The members of `zset` inside the circle, ordered and limited like the
     /// result of Redis `georadiusGeneric`.
@@ -104,57 +112,63 @@ impl RadiusSearch {
     /// by score and member inside a cell. Members at the same distance keep
     /// that order when they are sorted, in either direction.
     pub(super) fn points(&self, zset: &Mutex<SortedSet>) -> Vec<GeoPoint> {
-        let radius_meters = self.radius * self.unit.to_meters();
-        let cells = search_cells(self.longitude, self.latitude, radius_meters);
-        // `geoWithinShape`: a member is measured from the centre of its cell.
-        let locate = |score: f64| {
-            let (longitude, latitude) = decode_score(score);
-            let distance = distance(self.longitude, self.latitude, longitude, latitude);
-            // Negated like the C test, which keeps a distance that is NaN.
-            (!(distance > radius_meters)).then_some((longitude, latitude, distance))
-        };
-        let point = |member: Bytes, score: f64, (longitude, latitude, distance)| GeoPoint {
-            member,
-            score,
-            longitude,
-            latitude,
-            distance,
-        };
-        let limit = self
-            .count
-            .map_or(usize::MAX, |count| count.try_into().unwrap_or(usize::MAX));
+        // The lock is released when the scan returns.
+        let scan = self.scan(&zset.lock());
+        self.finish(scan)
+    }
 
-        let mut points = Vec::new();
-        if self.any {
-            // The scan ends at the first `limit` members inside the circle,
-            // so they have to be measured while the lock is held.
-            let zset = zset.lock();
-            'cells: for (min, max) in score_ranges(cells) {
-                for (member, score) in zset.score_range(min, max) {
-                    if let Some(position) = locate(score) {
-                        points.push(point(member.clone(), score, position));
-                        if points.len() >= limit {
-                            break 'cells;
-                        }
-                    }
-                }
-            }
-        } else {
+    /// The part of `points` that reads the index. A search whose centre comes
+    /// from the index calls it under the lock that looked the centre up, and
+    /// `finish` once that lock is released.
+    pub(super) fn scan(&self, zset: &SortedSet) -> Scan {
+        let radius_meters = self.radius_meters();
+        let cells = search_cells(self.longitude, self.latitude, radius_meters);
+        if !self.any {
             // Only the candidates are copied under the lock. Decoding and
-            // trigonometry, the bulk of the work, run after it is released.
-            let candidates: Vec<(Bytes, f64)> = {
-                let zset = zset.lock();
+            // trigonometry, the bulk of the work, are left to `finish`.
+            return Scan::Candidates(
                 score_ranges(cells)
                     .flat_map(|(min, max)| zset.score_range(min, max))
                     .map(|(member, score)| (member.clone(), score))
-                    .collect()
-            };
-            points.extend(candidates.into_iter().filter_map(|(member, score)| {
-                locate(score).map(|position| point(member, score, position))
-            }));
+                    .collect(),
+            );
         }
 
-        let returned = points.len().min(limit);
+        // The scan ends at the first `limit` members inside the circle, so
+        // they have to be measured while the lock is held.
+        let limit = self.limit();
+        let mut points = Vec::new();
+        'cells: for (min, max) in score_ranges(cells) {
+            for (member, score) in zset.score_range(min, max) {
+                if let Some(position) = self.locate(radius_meters, score) {
+                    points.push(GeoPoint::at(member.clone(), score, position));
+                    if points.len() >= limit {
+                        break 'cells;
+                    }
+                }
+            }
+        }
+        Scan::Points(points)
+    }
+
+    /// The part of `points` that needs no lock: measures the candidates, then
+    /// orders and limits the members inside the circle.
+    pub(super) fn finish(&self, scan: Scan) -> Vec<GeoPoint> {
+        let mut points = match scan {
+            Scan::Points(points) => points,
+            Scan::Candidates(candidates) => {
+                let radius_meters = self.radius_meters();
+                candidates
+                    .into_iter()
+                    .filter_map(|(member, score)| {
+                        let position = self.locate(radius_meters, score)?;
+                        Some(GeoPoint::at(member, score, position))
+                    })
+                    .collect()
+            }
+        };
+
+        let returned = points.len().min(self.limit());
         // COUNT asks for the nearest members unless ANY takes what comes.
         let order = self
             .order
@@ -165,6 +179,37 @@ impl RadiusSearch {
                 points.truncate(returned);
                 points
             }
+        }
+    }
+
+    fn radius_meters(&self) -> f64 {
+        self.radius * self.unit.to_meters()
+    }
+
+    fn limit(&self) -> usize {
+        self.count
+            .map_or(usize::MAX, |count| count.try_into().unwrap_or(usize::MAX))
+    }
+
+    /// `geoWithinShape`: the position of a score and its distance from the
+    /// centre, if that is within the radius. A member is measured from the
+    /// centre of its cell.
+    fn locate(&self, radius_meters: f64, score: f64) -> Option<(f64, f64, f64)> {
+        let (longitude, latitude) = decode_score(score);
+        let distance = distance(self.longitude, self.latitude, longitude, latitude);
+        // Negated like the C test, which keeps a distance that is NaN.
+        (!(distance > radius_meters)).then_some((longitude, latitude, distance))
+    }
+}
+
+impl GeoPoint {
+    fn at(member: Bytes, score: f64, (longitude, latitude, distance): (f64, f64, f64)) -> Self {
+        GeoPoint {
+            member,
+            score,
+            longitude,
+            latitude,
+            distance,
         }
     }
 }
