@@ -25,6 +25,7 @@ use crate::protocol::hash::hstrlen::HStrLenParams;
 use crate::protocol::hash::hvals::HValsParams;
 use crate::protocol::key::dbsize::DbsizeParams;
 use crate::protocol::json::get::JsonGetParams;
+use crate::protocol::json::type_::JsonTypeParams;
 use crate::protocol::key::exists::ExistsParams;
 use crate::protocol::key::keys::KeysParams;
 use crate::protocol::key::pttl::PTtlParams;
@@ -120,4 +121,5 @@ pub enum ReadOperation {
     GeoDist(GeoDistParams),
     GeoRadius(GeoRadiusParams),
     GeoRadiusByMember(GeoRadiusByMemberParams),
+    JsonType(JsonTypeParams),
 }

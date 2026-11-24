@@ -29,6 +29,14 @@ pub struct LuaEnv {
     interrupt_flag: Arc<AtomicBool>,
 }
 
+fn set_reply_protocol(operation: &mut Operation, proto: u8) {
+    match operation {
+        Operation::Read(ReadOperation::JsonGet(params)) => params.resp3 = proto == 3,
+        Operation::Read(ReadOperation::JsonType(params)) => params.resp3 = proto == 3,
+        _ => {}
+    }
+}
+
 impl LuaEnv {
     // Return whether the current execution is in progress
     pub fn interrupt(&self) -> bool {
@@ -142,14 +150,13 @@ impl LuaEnv {
                         .raft_command
                         .parse_request(&vec)
                         .map_err(LuaError::external)?;
-                    if let Operation::Read(ReadOperation::JsonGet(params)) = &mut operation {
-                        params.resp3 = call_resp.load(Ordering::Relaxed) == 3;
-                    }
+                    let proto = call_resp.load(Ordering::Relaxed);
+                    set_reply_protocol(&mut operation, proto);
                     let value = do_request(cache, operation, update, false);
                     if let Value::Error(e) = value {
                         return Err(LuaError::external(e));
                     }
-                    value.into_lua_value(&self.lua, call_resp.load(Ordering::Relaxed))
+                    value.into_lua_value(&self.lua, proto)
                 })?;
 
             // ---- redis.pcall ----
@@ -173,11 +180,10 @@ impl LuaEnv {
 
                     match self.raft_command.parse_request(&vec) {
                         Ok(mut operation) => {
-                            if let Operation::Read(ReadOperation::JsonGet(params)) = &mut operation {
-                                params.resp3 = pcall_resp.load(Ordering::Relaxed) == 3;
-                            }
+                            let proto = pcall_resp.load(Ordering::Relaxed);
+                            set_reply_protocol(&mut operation, proto);
                             do_request(cache, operation, update, false)
-                                .into_lua_value(&self.lua, pcall_resp.load(Ordering::Relaxed))
+                                .into_lua_value(&self.lua, proto)
                         }
                         Err(e) => {
                             let err_table = self.lua.create_table()?;

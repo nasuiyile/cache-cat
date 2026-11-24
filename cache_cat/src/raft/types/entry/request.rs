@@ -112,6 +112,7 @@ impl fmt::Display for Request {
                 ReadOperation::Get(req) => write!(f, "Get: {}", req),
                 ReadOperation::GetRange(req) => write!(f, "GetRange: {}", req),
                 ReadOperation::JsonGet(req) => write!(f, "JsonGet: {}", req),
+                ReadOperation::JsonType(req) => write!(f, "JsonType: {}", req),
                 ReadOperation::MGet(req) => write!(f, "MGet: {}", req),
                 ReadOperation::XRead(req) => write!(f, "XRead: {}", req),
                 ReadOperation::ZRange(req) => write!(f, "ZRange: {}", req),

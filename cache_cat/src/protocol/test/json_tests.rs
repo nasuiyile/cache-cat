@@ -190,6 +190,119 @@ fn json_get_preserves_legacy_enhanced_and_multipath_reply_shapes() {
 }
 
 #[test]
+fn json_type_returns_bulk_type_names_for_all_values_and_packed_numbers() {
+    let cache = MyCache::new(1).unwrap();
+    let document = r#"{"all":[null,true,1,1.0,"x",[],{}],"ints":[0,18446744073709551615],"floats":[1.0,2.5],"$":true}"#;
+    assert_ok(run(&cache, &["JSON.SET", "doc", "$", document]));
+    assert_eq!(
+        read(&cache, &["jSoN.tYpE", "doc", "$.all[*]"], 1_000).encode(),
+        concat!(
+            "*7\r\n$4\r\nnull\r\n$7\r\nboolean\r\n$7\r\ninteger\r\n",
+            "$6\r\nnumber\r\n$6\r\nstring\r\n$5\r\narray\r\n$6\r\nobject\r\n",
+        )
+        .as_bytes()
+    );
+    for (path, expected) in [
+        (".ints[-1]", "integer"),
+        (".floats[0]", "number"),
+        ("$ ", "boolean"),
+        (" $", "boolean"),
+    ] {
+        assert_eq!(
+            bulk(read(&cache, &["JSON.TYPE", "doc", path], 1_000)).as_ref(),
+            expected.as_bytes()
+        );
+    }
+}
+
+#[test]
+fn json_type_preserves_path_and_protocol_reply_shapes() {
+    let cache = MyCache::new(1).unwrap();
+    assert_ok(run(&cache, &["JSON.SET", "doc", "$", "[null,true]"]));
+    for (args, resp2, resp3) in [
+        (
+            &["JSON.TYPE", "doc"][..],
+            "$5\r\narray\r\n",
+            "*1\r\n$5\r\narray\r\n",
+        ),
+        (
+            &["JSON.TYPE", "doc", "[*]", "ignored"],
+            "$4\r\nnull\r\n",
+            "*1\r\n$4\r\nnull\r\n",
+        ),
+        (
+            &["JSON.TYPE", "doc", "$[1]"],
+            "*1\r\n$7\r\nboolean\r\n",
+            "*1\r\n*1\r\n$7\r\nboolean\r\n",
+        ),
+        (&["JSON.TYPE", "doc", "$.missing"], "*0\r\n", "*1\r\n*0\r\n"),
+        (&["JSON.TYPE", "doc", ".missing"], "$-1\r\n", "*1\r\n_\r\n"),
+        (&["JSON.TYPE", "doc", ".broken["], "$-1\r\n", "*1\r\n_\r\n"),
+        (&["JSON.TYPE", "absent", "$["], "$-1\r\n", "*1\r\n_\r\n"),
+    ] {
+        assert_eq!(
+            read(&cache, args, 1_000).encode(),
+            resp2.as_bytes(),
+            "{args:?}"
+        );
+        let Operation::Read(ReadOperation::JsonType(mut params)) = command(args) else {
+            panic!("expected JSON.TYPE");
+        };
+        params.resp3 = true;
+        let value = read_request(&cache, ReadOperation::JsonType(params), 0, 1_000);
+        assert_eq!(value.encode_proto(3), resp3.as_bytes(), "{args:?}");
+    }
+
+    let binary_path = [b"JSON.TYPE".as_slice(), b"doc", b"\xff"]
+        .map(|part| Value::BulkString(Some(Bytes::from_static(part))));
+    let operation = RaftCommandFactory::init_lua()
+        .parse_request(&binary_path)
+        .unwrap();
+    assert_eq!(
+        bulk(apply(&cache, operation, 0, 1_000, None)).as_ref(),
+        b"array"
+    );
+
+    assert!(matches!(
+        parse(&["JSON.TYPE"]),
+        Err(ProtocolError::WrongArgCount("json.type"))
+    ));
+    assert_eq!(
+        run(&cache, &["JSON.TYPE", "doc", "$["]).encode(),
+        b"-Error occurred at position 2, Error at position 2: expected one of the following: '<string>[,<string>,...]', '<number>', ['start:end:steps'], '*'\r\n"
+    );
+    assert_ok(run(&cache, &["SET", "other", "string"]));
+    assert_eq!(
+        run(&cache, &["JSON.TYPE", "other", "$["]).encode(),
+        b"-Existing key has wrong Redis type\r\n"
+    );
+    for (key, path) in [("doc", "$[1] + 1"), ("absent", "n + 1")] {
+        assert_eq!(
+            run(&cache, &["JSON.TYPE", key, path]).encode(),
+            b"-ERR computed/projection expressions are only supported by JSON.GET/JSON.MGET/JSON.RESP\r\n"
+        );
+    }
+}
+
+#[test]
+fn json_type_inside_exec_and_lua_uses_the_script_protocol() {
+    let cache = MyCache::new(1).unwrap();
+    let script = "redis.setresp(3); return redis.call('JSON.TYPE', KEYS[1], '$')";
+    let eval = EvalParams::new(script.into(), 1, vec!["doc".into()], Vec::new());
+    let exec = Operation::Redis(RedisOperation::RedisExec(ExecParams {
+        operations: vec![
+            QueuedOperation::new(0, command(&["JSON.SET", "doc", "$", "true"])),
+            QueuedOperation::new(0, command(&["JSON.TYPE", "doc"])),
+            QueuedOperation::new(0, Operation::Redis(RedisOperation::RedisEval(eval))),
+        ],
+    }));
+    assert_eq!(
+        apply(&cache, exec, 0, 1_000, None).encode(),
+        b"*3\r\n+OK\r\n$7\r\nboolean\r\n*1\r\n*1\r\n$7\r\nboolean\r\n"
+    );
+}
+
+#[test]
 fn json_set_conditions_create_only_the_final_object_field() {
     let cache = MyCache::new(1).unwrap();
     assert_null(run(&cache, &["JSON.SET", "doc", "$", "{}", "XX"]));

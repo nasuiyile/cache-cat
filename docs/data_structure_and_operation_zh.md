@@ -104,6 +104,8 @@ JSON 使用 `Arc<Mutex<JsonDocument>>`，内部直接存放 Redis 官方 `ijson`
 
 `JSON.GET key [INDENT indent] [NEWLINE newline] [SPACE space] [path ...]` 使用 `ReadCommand`。省略路径时采用 legacy 根路径 `.`；legacy 路径返回首个匹配值，`$` 路径返回匹配数组。多个路径返回以原路径为键的对象；混合 legacy 和 `$` 路径时，各项均为数组。格式化直接序列化借用的节点，不复制整份文档。`NOESCAPE` 为兼容选项，不关闭转义；RESP3 支持 `FORMAT STRING|EXPAND|EXPAND1`。
 
+`JSON.TYPE key [path]` 使用 `ReadCommand`。省略路径时返回根节点类型。传统路径以批量字符串返回首个匹配节点的类型，没有匹配时返回 nil。JSONPath 按匹配顺序返回类型数组，没有匹配时返回空数组。两种模式下，键不存在都返回 nil。RESP3 会在成功回复外再包一层数组。JSON 空值的类型名为 `null`，整数为 `integer`，浮点数为 `number`。
+
 `JSON.SET key path json [NX|XX]` 使用 `ComputeCommand`，日志保存输入字节和选项，状态机直接解析为紧凑树。只允许在根路径创建新 key；局部更新可创建已有对象的最后一级字段，不自动补齐中间容器。已有 key 的 TTL 在根替换和局部更新后均保留。支持 `FORMAT JSON|STRING|BSON` 和显式的 `FPHA` 数值数组选项，默认不启用有损浮点精度。命令均可用于 EXEC 和 Lua。`TYPE`/`SCAN TYPE` 使用 Redis 的 `ReJSON-RL` 类型名称。
 
 `JSON.DEL key [path]` 使用 `ComputeCommand`，返回被删除的值的数量，同样可用于 EXEC 和 Lua。省略路径、`$` 和 legacy `.` 都表示根，删除根即删除 key；key 不存在时返回 0 且不解析路径，路径之后的多余参数被忽略，均与 Redis 一致。legacy 路径和 `$` 路径一样删除全部匹配项；重复匹配只删除一次，已匹配节点内部的匹配随祖先一起删除，不重复计数。局部删除保留 TTL；如果本次删除使根容器变成空对象或空数组，则与 Redis 一样删除整个 key，原本就为空的文档不受影响。

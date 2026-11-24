@@ -25,6 +25,7 @@ fn read_request_inner<const REPLICATED: bool>(
         ReadOperation::Get(param) => my_cache.execute_read(param, db_number, read_clock),
         ReadOperation::GetRange(param) => my_cache.execute_read(param, db_number, read_clock),
         ReadOperation::JsonGet(param) => my_cache.execute_read(param, db_number, read_clock),
+        ReadOperation::JsonType(param) => my_cache.execute_read(param, db_number, read_clock),
         ReadOperation::LRange(param) => my_cache.execute_read(param, db_number, read_clock),
         ReadOperation::MGet(param) => my_cache.execute_multi_read(param, db_number, read_clock),
         ReadOperation::XRead(param) => my_cache.execute_multi_read(param, db_number, read_clock),

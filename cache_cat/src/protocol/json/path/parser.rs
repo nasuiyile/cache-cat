@@ -2,35 +2,81 @@ use super::{Expr, JsonPath, Op, PathError, Segment};
 use ijson::{IArray, IObject, IValue};
 
 const MAX_NESTING: usize = 128;
+const BRACKET_SELECTORS: &str = "'<string>[,<string>,...]', '<number>', ['start:end:steps'], '*'";
+
+/// RedisJSON determines the reply mode from the raw argument, before compiling
+/// its normalized path. Leading or trailing spaces can change this decision.
+pub(crate) enum PathSource<'a> {
+    Legacy(&'a str),
+    Modern(&'a str),
+}
+
+impl<'a> PathSource<'a> {
+    pub(crate) fn new(source: &'a str) -> Self {
+        let rooted_or_paren = |s: &str| s.starts_with('(') || root_prefix(s);
+        let modern = match source.as_bytes().first() {
+            Some(b'+' | b'-') => rooted_or_paren(source[1..].trim_start_matches(' ')),
+            Some(b'a'..=b'z' | b'A'..=b'Z' | b'_') => after_identifier(source)
+                .trim_start_matches(' ')
+                .starts_with('('),
+            _ => rooted_or_paren(source),
+        };
+        if modern {
+            Self::Modern(source)
+        } else {
+            Self::Legacy(source)
+        }
+    }
+
+    pub(crate) fn is_legacy(&self) -> bool {
+        matches!(self, Self::Legacy(_))
+    }
+
+    pub(crate) fn parse(&self) -> Result<JsonPath, PathError> {
+        match *self {
+            // An underscore can select modern reply mode, but the JSONPath
+            // grammar requires a prefix function name to begin with a letter.
+            Self::Modern(path) if path.starts_with('_') => {
+                Err(redis_syntax_error(0, "arith_factor"))
+            }
+            Self::Modern(path) => parse_input(path, false, true),
+            Self::Legacy(".") => parse_input("$", true, false),
+            Self::Legacy(path) if path.starts_with('.') => {
+                parse_input(&format!("${path}"), true, false)
+            }
+            Self::Legacy(path) => parse_input(&format!("$.{path}"), true, false),
+        }
+    }
+}
 
 pub(super) fn parse(source: &str) -> Result<JsonPath, PathError> {
     let source = source.trim();
     if source.is_empty() {
         return Err(PathError("invalid empty path".into()));
     }
-    let legacy = !is_expression(source);
-    let normalized;
-    let input = if legacy {
-        normalized = if source == "." {
-            "$".to_owned()
-        } else if source.starts_with('.') || source.starts_with('[') {
-            format!("${source}")
-        } else {
-            format!("$.{source}")
-        };
-        normalized.as_str()
+    if is_expression(source) {
+        parse_input(source, false, false)
+    } else if source.starts_with('[') {
+        parse_input(&format!("${source}"), true, false)
     } else {
-        source
-    };
+        PathSource::Legacy(source).parse()
+    }
+}
+
+fn parse_input(input: &str, legacy: bool, redis_errors: bool) -> Result<JsonPath, PathError> {
     let mut parser = Parser {
         input,
         pos: 0,
         depth: 0,
+        redis_errors,
     };
     let expression = parser.expression(4)?;
     parser.space();
     if parser.pos != input.len() {
-        return Err(parser.error());
+        return Err(parser.expected_at(
+            parser.pos,
+            "EOI, add, sub, mul, div, rem, postfix_method, get_keys_op, '..'",
+        ));
     }
     if !arithmetic_expression(&expression) {
         return Err(parser.error());
@@ -60,36 +106,53 @@ fn root_prefix(source: &str) -> bool {
         || source.starts_with("$.")
         || source.starts_with("$[")
         || source.starts_with("$~")
-        || source.starts_with("$ ")
 }
 
 pub(super) fn is_expression(source: &str) -> bool {
-    if root_prefix(source) || source.starts_with('(') {
+    let rooted_or_paren = |s: &str| root_prefix(s) || s.starts_with("$ ") || s.starts_with('(');
+    if rooted_or_paren(source) {
         return true;
     }
     if let Some(rest) = source.strip_prefix(['+', '-']) {
         let rest = rest.trim_start();
-        if root_prefix(rest) || rest.starts_with('(') {
+        if rooted_or_paren(rest) {
             return true;
         }
     }
-    let end = source
-        .find(|c: char| !c.is_ascii_alphanumeric() && c != '_')
-        .unwrap_or(source.len());
-    end > 0
-        && source.as_bytes()[0].is_ascii_alphabetic()
-        && source[end..].trim_start().starts_with('(')
+    source
+        .as_bytes()
+        .first()
+        .is_some_and(u8::is_ascii_alphabetic)
+        && after_identifier(source).trim_start().starts_with('(')
+}
+
+fn after_identifier(source: &str) -> &str {
+    source.trim_start_matches(|c: char| c.is_ascii_alphanumeric() || c == '_')
 }
 
 struct Parser<'a> {
     input: &'a str,
     pos: usize,
     depth: usize,
+    redis_errors: bool,
+}
+
+fn redis_syntax_error(pos: usize, expected: &str) -> PathError {
+    PathError(format!(
+        "Error occurred at position {pos}, Error at position {pos}: expected one of the following: {expected}"
+    ))
 }
 
 impl Parser<'_> {
     fn error(&self) -> PathError {
-        PathError(format!("invalid JSONPath at position {}", self.pos))
+        self.expected_at(self.pos, "arith_factor")
+    }
+    fn expected_at(&self, pos: usize, expected: &str) -> PathError {
+        if self.redis_errors {
+            redis_syntax_error(pos, expected)
+        } else {
+            PathError(format!("invalid JSONPath at position {}", self.pos))
+        }
     }
     fn bytes(&self) -> &[u8] {
         self.input.as_bytes()
@@ -327,10 +390,10 @@ impl Parser<'_> {
                     self.pos += 1;
                     if self.peek() == Some(b'.') {
                         self.pos += 1;
-                        let segment = self.path_segment()?;
+                        let segment = self.path_segment("<string>, '*'")?;
                         Segment::Recursive(Box::new(segment))
                     } else {
-                        let segment = self.path_segment()?;
+                        let segment = self.path_segment("<string>, function_name, '*'")?;
                         self.space();
                         if matches!(segment, Segment::Field(_)) && self.peek() == Some(b'(') {
                             self.pos = saved;
@@ -371,7 +434,7 @@ impl Parser<'_> {
         Ok(segments)
     }
 
-    fn path_segment(&mut self) -> Result<Segment, PathError> {
+    fn path_segment(&mut self, expected: &str) -> Result<Segment, PathError> {
         self.space();
         match self.peek() {
             Some(b'*') => {
@@ -379,7 +442,10 @@ impl Parser<'_> {
                 Ok(Segment::Wildcard)
             }
             Some(b'[') => self.bracket(),
-            _ => self.field().map(Segment::Field),
+            _ => self
+                .field()
+                .map(Segment::Field)
+                .map_err(|_| self.expected_at(self.pos, expected)),
         }
     }
 
@@ -407,10 +473,14 @@ impl Parser<'_> {
                 Segment::Union(fields)
             });
         }
+        let selector_pos = self.pos;
         let start = if self.peek() == Some(b':') {
             None
         } else {
-            Some(self.integer()?)
+            Some(
+                self.integer()
+                    .map_err(|_| self.expected_at(selector_pos, BRACKET_SELECTORS))?,
+            )
         };
         if self.consume(":") {
             self.space();
@@ -436,9 +506,14 @@ impl Parser<'_> {
         }
         let mut indexes = vec![Segment::Index(start.ok_or_else(|| self.error())?)];
         while self.consume(",") {
-            indexes.push(Segment::Index(self.integer()?));
+            indexes.push(Segment::Index(
+                self.integer()
+                    .map_err(|_| self.expected_at(self.pos, "'<number>'"))?,
+            ));
         }
-        self.expect("]")?;
+        if !self.consume("]") {
+            return Err(self.expected_at(selector_pos, "['start:end:steps']"));
+        }
         Ok(if indexes.len() == 1 {
             indexes.pop().unwrap()
         } else {

@@ -5,10 +5,12 @@
 
 use ijson::{IArray, IValue};
 use serde::{Deserialize, Serialize, Serializer};
-use std::{cmp::Ordering, collections::HashSet, fmt};
+use std::{cmp::Ordering, collections::HashSet, convert::Infallible, fmt, ops::ControlFlow};
 
 mod eval;
 mod parser;
+
+pub(super) use parser::PathSource;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum SetMode {
@@ -160,6 +162,19 @@ impl JsonPath {
 
     pub fn select<'a>(&'a self, root: &'a IValue) -> Vec<Node<'a>> {
         eval::evaluate(&self.expression, root, root)
+    }
+
+    /// Visit matching document nodes in selection order. Projections compute
+    /// values and have no document nodes to visit.
+    pub(super) fn visit_matches<'a, B>(
+        &self,
+        root: &'a IValue,
+        mut visit: impl FnMut(Node<'a>) -> ControlFlow<B>,
+    ) -> ControlFlow<B> {
+        let Expr::Path { segments, .. } = &self.expression else {
+            return ControlFlow::Continue(());
+        };
+        walk_read(Node::Borrowed(root), segments, root, &mut visit)
     }
 
     /// Mutations address document nodes; a projection only computes values.
@@ -457,21 +472,25 @@ impl Edge<'_> {
     }
 }
 
-fn children<'a>(value: &'a IValue, mut f: impl FnMut(Node<'a>, Edge<'a>)) {
+fn children<'a, B>(
+    value: &'a IValue,
+    mut visit: impl FnMut(Node<'a>, Edge<'a>) -> ControlFlow<B>,
+) -> ControlFlow<B> {
     if let Some(object) = value.as_object() {
         // ijson iterates its dense field array, whose order is independent of
         // hash seeds. Preserve it rather than sorting ordinary JSON queries.
         for (key, child) in object.iter() {
-            f(Node::Borrowed(child), Edge::Field(key.as_str()));
+            visit(Node::Borrowed(child), Edge::Field(key.as_str()))?;
         }
     } else if let Some(array) = value.as_array() {
         for index in 0..array.len() as usize {
-            f(
+            visit(
                 array_node(array, index).expect("in bounds"),
                 Edge::Index(index),
-            );
+            )?;
         }
     }
+    ControlFlow::Continue(())
 }
 
 fn walk<'a>(
@@ -486,40 +505,38 @@ fn walk<'a>(
         return;
     };
     let Node::Borrowed(value) = node else { return };
-    match first {
+    let mut descend = |child, edge: Edge<'a>, remaining: &[Segment]| {
+        path.push(edge.owned());
+        walk(child, remaining, root, path, output);
+        path.pop();
+        ControlFlow::<Infallible>::Continue(())
+    };
+    let ControlFlow::Continue(()) = match first {
         Segment::Recursive(inner) => {
-            apply_segment(value, inner, root, &mut |child, edge| {
-                path.push(edge.owned());
-                walk(child, rest, root, path, output);
-                path.pop();
+            let ControlFlow::Continue(()) = apply_segment(value, inner, root, &mut |child, edge| {
+                descend(child, edge, rest)
             });
-            children(value, |child, part| {
-                path.push(part.owned());
-                walk(child, segments, root, path, output);
-                path.pop();
-            });
+            children(value, |child, edge| descend(child, edge, segments))
         }
         _ => apply_segment(value, first, root, &mut |child, edge| {
-            path.push(edge.owned());
-            walk(child, rest, root, path, output);
-            path.pop();
+            descend(child, edge, rest)
         }),
-    }
+    };
 }
 
-fn apply_segment<'a>(
+fn apply_segment<'a, B>(
     value: &'a IValue,
     segment: &Segment,
     root: &'a IValue,
-    output: &mut dyn FnMut(Node<'a>, Edge<'a>),
-) {
+    output: &mut dyn FnMut(Node<'a>, Edge<'a>) -> ControlFlow<B>,
+) -> ControlFlow<B> {
     match segment {
         Segment::Field(field) => {
             if let Some((field, child)) = value
                 .as_object()
                 .and_then(|o| o.get_key_value(field.as_str()))
             {
-                output(Node::Borrowed(child), Edge::Field(field.as_str()));
+                output(Node::Borrowed(child), Edge::Field(field.as_str()))?;
             }
         }
         Segment::Index(index) => {
@@ -529,13 +546,13 @@ fn apply_segment<'a>(
                 output(
                     array_node(array, index).expect("in bounds"),
                     Edge::Index(index),
-                );
+                )?;
             }
         }
-        Segment::Wildcard => children(value, output),
+        Segment::Wildcard => children(value, output)?,
         Segment::Union(selectors) => {
             for selector in selectors {
-                apply_segment(value, selector, root, output);
+                apply_segment(value, selector, root, output)?;
             }
         }
         Segment::Slice(start, end, step) => {
@@ -554,7 +571,7 @@ fn apply_segment<'a>(
                     output(
                         array_node(array, index as usize).expect("in bounds"),
                         Edge::Index(index as usize),
-                    );
+                    )?;
                     let Some(next) = index.checked_add((*step).min(i64::MAX as u64) as i64) else {
                         break;
                     };
@@ -564,41 +581,46 @@ fn apply_segment<'a>(
         }
         Segment::Filter(expression) => children(value, |child, part| {
             if eval::test(expression, root, child.as_value()) {
-                output(child, part);
+                return output(child, part);
             }
-        }),
+            ControlFlow::Continue(())
+        })?,
         Segment::Recursive(_) => unreachable!("recursive selectors handled by walk"),
     }
+    ControlFlow::Continue(())
 }
 
 fn select_segments<'a>(value: &'a IValue, segments: &[Segment], root: &'a IValue) -> Vec<Node<'a>> {
     let mut result = Vec::new();
-    walk_read(Node::Borrowed(value), segments, root, &mut |node| {
-        result.push(node)
-    });
+    let ControlFlow::<Infallible>::Continue(()) =
+        walk_read(Node::Borrowed(value), segments, root, &mut |node| {
+            result.push(node);
+            ControlFlow::Continue(())
+        });
     result
 }
 
-fn walk_read<'a>(
+fn walk_read<'a, B>(
     node: Node<'a>,
     segments: &[Segment],
     root: &'a IValue,
-    output: &mut dyn FnMut(Node<'a>),
-) {
+    output: &mut dyn FnMut(Node<'a>) -> ControlFlow<B>,
+) -> ControlFlow<B> {
     let Some((first, rest)) = segments.split_first() else {
-        output(node);
-        return;
+        return output(node);
     };
-    let Node::Borrowed(value) = node else { return };
+    let Node::Borrowed(value) = node else {
+        return ControlFlow::Continue(());
+    };
     if let Segment::Recursive(inner) = first {
         apply_segment(value, inner, root, &mut |child, _| {
             walk_read(child, rest, root, output)
-        });
-        children(value, |child, _| walk_read(child, segments, root, output));
+        })?;
+        children(value, |child, _| walk_read(child, segments, root, output))
     } else {
         apply_segment(value, first, root, &mut |child, _| {
             walk_read(child, rest, root, output)
-        });
+        })
     }
 }
 
