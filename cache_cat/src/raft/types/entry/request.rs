@@ -176,6 +176,7 @@ impl fmt::Display for Request {
                 BaseOperation::Empty => write!(f, "None"),
                 BaseOperation::Set(req) => write!(f, "Set: {}", req),
                 BaseOperation::JsonSet(req) => write!(f, "JsonSet: {}", req),
+                BaseOperation::JsonNumIncrBy(req) => write!(f, "JsonNumIncrBy: {}", req),
                 BaseOperation::JsonDel(req) => write!(f, "JsonDel: {}", req),
                 BaseOperation::XAdd(req) => write!(f, "XAdd: {}", req),
                 BaseOperation::LPush(req) => write!(f, "LPush: {}", req),

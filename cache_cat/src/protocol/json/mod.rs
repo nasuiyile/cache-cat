@@ -2,6 +2,7 @@
 
 pub mod del;
 pub mod get;
+pub mod numincrby;
 pub mod set;
 pub mod type_;
 mod format;

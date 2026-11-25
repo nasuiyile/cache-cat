@@ -40,11 +40,7 @@ impl<'a> PathSource<'a> {
                 Err(redis_syntax_error(0, "arith_factor"))
             }
             Self::Modern(path) => parse_input(path, false, true),
-            Self::Legacy(".") => parse_input("$", true, false),
-            Self::Legacy(path) if path.starts_with('.') => {
-                parse_input(&format!("${path}"), true, false)
-            }
-            Self::Legacy(path) => parse_input(&format!("$.{path}"), true, false),
+            Self::Legacy(path) => parse_legacy(path, true),
         }
     }
 }
@@ -59,7 +55,17 @@ pub(super) fn parse(source: &str) -> Result<JsonPath, PathError> {
     } else if source.starts_with('[') {
         parse_input(&format!("${source}"), true, false)
     } else {
-        PathSource::Legacy(source).parse()
+        parse_legacy(source, false)
+    }
+}
+
+fn parse_legacy(path: &str, redis_errors: bool) -> Result<JsonPath, PathError> {
+    if path == "." {
+        parse_input("$", true, redis_errors)
+    } else if path.starts_with('.') {
+        parse_input(&format!("${path}"), true, redis_errors)
+    } else {
+        parse_input(&format!("$.{path}"), true, redis_errors)
     }
 }
 

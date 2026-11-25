@@ -3,7 +3,9 @@ use crate::protocol::raft_command::RaftCommandFactory;
 use crate::raft::types::core::mocha::core::{MyCache, Update};
 use crate::raft::types::core::mocha::request_handler::do_request;
 use crate::raft::types::core::response_value::Value;
-use crate::raft::types::entry::{read_operation::ReadOperation, request::Operation};
+use crate::raft::types::entry::{
+    base_operation::BaseOperation, read_operation::ReadOperation, request::Operation,
+};
 use bytes::Bytes;
 use lru::LruCache;
 use mlua::prelude::LuaError;
@@ -31,6 +33,7 @@ pub struct LuaEnv {
 
 fn set_reply_protocol(operation: &mut Operation, proto: u8) {
     match operation {
+        Operation::Base(BaseOperation::JsonNumIncrBy(req)) => req.resp3 = proto == 3,
         Operation::Read(ReadOperation::JsonGet(params)) => params.resp3 = proto == 3,
         Operation::Read(ReadOperation::JsonType(params)) => params.resp3 = proto == 3,
         _ => {}

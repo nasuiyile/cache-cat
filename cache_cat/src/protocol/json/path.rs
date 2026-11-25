@@ -124,6 +124,30 @@ enum Part {
     Index(usize),
 }
 
+pub(super) struct Location(Vec<Part>);
+
+/// Packed numbers are stored in the parent array without an IValue slot.
+pub(super) enum WriteTarget<'a> {
+    Value(&'a mut IValue),
+    Element(&'a mut IArray, usize),
+}
+
+impl Location {
+    pub(super) fn target<'a>(&self, root: &'a mut IValue) -> WriteTarget<'a> {
+        match self.0.split_last() {
+            Some((Part::Index(index), parent)) => {
+                let array = get_mut(root, parent)
+                    .and_then(IValue::as_array_mut)
+                    .expect("numeric updates preserve the matched array");
+                WriteTarget::Element(array, *index)
+            }
+            _ => WriteTarget::Value(
+                get_mut(root, &self.0).expect("numeric updates preserve matched locations"),
+            ),
+        }
+    }
+}
+
 impl Part {
     /// RedisJSON orders array slots and numeric-looking object keys alike.
     fn number(&self) -> Option<usize> {
@@ -185,6 +209,30 @@ impl JsonPath {
                 "path must identify document nodes, not a projection".into(),
             )),
         }
+    }
+
+    /// Freeze matches before updating numbers that a later filter may read.
+    /// Keep duplicates in order and retain placeholders only for array replies.
+    pub(super) fn numeric_locations(
+        &self,
+        root: &IValue,
+        include_non_numbers: bool,
+    ) -> Result<Vec<Option<Location>>, PathError> {
+        let mut matches = Vec::new();
+        walk(
+            Node::Borrowed(root),
+            self.segments()?,
+            root,
+            &mut Vec::new(),
+            &mut |node, path| {
+                if node.as_value().is_number() {
+                    matches.push(Some(Location(path.to_vec())));
+                } else if include_non_numbers {
+                    matches.push(None);
+                }
+            },
+        );
+        Ok(matches)
     }
 
     /// Remove every matched node, returning how many were removed. The root

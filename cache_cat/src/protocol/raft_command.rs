@@ -90,7 +90,8 @@ use crate::protocol::string::fadd::PfAddCommand;
 use crate::protocol::string::get::GetCommand;
 use crate::protocol::string::getrange::GetRangeCommand;
 use crate::protocol::json::{
-    del::JsonDelCommand, get::JsonGetCommand, set::JsonSetCommand, type_::JsonTypeCommand,
+    del::JsonDelCommand, get::JsonGetCommand, numincrby::JsonNumIncrByCommand, set::JsonSetCommand,
+    type_::JsonTypeCommand,
 };
 use crate::protocol::string::getset::GetSetCommand;
 use crate::protocol::string::incr::IncrCommand;
@@ -178,6 +179,7 @@ impl RaftCommandFactory {
         factory.register("JSON.GET", JsonGetCommand);
         factory.register("JSON.TYPE", JsonTypeCommand);
         factory.register("JSON.SET", JsonSetCommand);
+        factory.register("JSON.NUMINCRBY", JsonNumIncrByCommand);
         factory.register("JSON.DEL", JsonDelCommand);
         factory.register("SET", SetCommand);
         factory.register("DEL", DelCommand);

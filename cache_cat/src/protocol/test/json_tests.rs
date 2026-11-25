@@ -9,6 +9,7 @@ use crate::protocol::transaction::{QueuedOperation, exec::ExecParams};
 use crate::raft::types::core::mocha::core::{MyCache, Update, UpdateType};
 use crate::raft::types::core::mocha::request_handler::{base_request, do_request, read_request};
 use crate::raft::types::core::response_value::Value;
+use crate::raft::types::entry::base_operation::BaseOperation;
 use crate::raft::types::entry::read_operation::ReadOperation;
 use crate::raft::types::entry::request::{AtomicRequest, Operation, RedisOperation, Request};
 use bytes::Bytes;
@@ -299,6 +300,165 @@ fn json_type_inside_exec_and_lua_uses_the_script_protocol() {
     assert_eq!(
         apply(&cache, exec, 0, 1_000, None).encode(),
         b"*3\r\n+OK\r\n$7\r\nboolean\r\n*1\r\n*1\r\n$7\r\nboolean\r\n"
+    );
+}
+
+#[test]
+fn json_numincrby_updates_each_match_in_order_and_preserves_numeric_types() {
+    let cache = MyCache::new(1).unwrap();
+    let document = r#"[1,"s",null,1.5,true]"#;
+    for (path, reply, stored) in [
+        ("$[*]", "[3,null,null,3.5,null]", r#"[3,"s",null,3.5,true]"#),
+        ("[*]", "3.5", r#"[3,"s",null,3.5,true]"#),
+        ("$[3,3,0]", "[3.5,5.5,3]", r#"[3,"s",null,5.5,true]"#),
+    ] {
+        assert_ok(run(&cache, &["JSON.SET", "doc", "$", document]));
+        assert_eq!(
+            bulk(run(&cache, &["json.numincrby", "doc", path, "2"])).as_ref(),
+            reply.as_bytes()
+        );
+        assert_eq!(
+            bulk(read(&cache, &["JSON.GET", "doc"], 1_000)).as_ref(),
+            stored.as_bytes()
+        );
+    }
+
+    assert_ok(run(&cache, &["JSON.SET", "doc", "$", "[2,2,2,3]"]));
+    assert_eq!(
+        bulk(run(
+            &cache,
+            &["JSON.NUMINCRBY", "doc", "$[?(@ == $[0])]", "10"]
+        ))
+        .as_ref(),
+        b"[12,12,12]"
+    );
+    assert_eq!(
+        bulk(read(&cache, &["JSON.GET", "doc"], 1_000)).as_ref(),
+        b"[12,12,12,3]"
+    );
+
+    for (start, increment, expected) in [
+        ("-10", "-5", "-15"),
+        ("2", "1e3", "1002.0"),
+        ("3", "-0", "3.0"),
+        ("18446744073709551615", "1", "1.8446744073709552e19"),
+    ] {
+        assert_ok(run(&cache, &["JSON.SET", "n", "$", start]));
+        assert_eq!(
+            bulk(run(&cache, &["JSON.NUMINCRBY", "n", ".", increment])).as_ref(),
+            expected.as_bytes()
+        );
+        assert_eq!(
+            bulk(read(&cache, &["JSON.GET", "n"], 1_000)).as_ref(),
+            expected.as_bytes()
+        );
+    }
+    assert_ok(run(&cache, &["JSON.SET", "n", "$", "9223372036854775807"]));
+    assert_eq!(
+        run(&cache, &["JSON.NUMINCRBY", "n", "$", "1"]).encode(),
+        b"-ERR numeric overflow\r\n"
+    );
+    assert_eq!(
+        bulk(read(&cache, &["JSON.GET", "n"], 1_000)).as_ref(),
+        b"9223372036854775807"
+    );
+
+    assert_ok(run(
+        &cache,
+        &["JSON.SET", "a", "$", "[1,9223372036854775807,3]"],
+    ));
+    assert_eq!(
+        bulk(run(&cache, &["JSON.NUMINCRBY", "a", "$[*]", "1"])).as_ref(),
+        b"[2,9223372036854775808,4]"
+    );
+    assert_ok(run(
+        &cache,
+        &["JSON.SET", "a", "$", "[1.0,2.0]", "FPHA", "FP16"],
+    ));
+    assert_eq!(
+        bulk(run(&cache, &["JSON.NUMINCRBY", "a", "$[0]", "0.1"])).as_ref(),
+        b"[1.099609375]"
+    );
+    assert_eq!(
+        bulk(read(&cache, &["JSON.GET", "a"], 1_000)).as_ref(),
+        b"[1.1,2.0]"
+    );
+}
+
+#[test]
+fn json_numincrby_validates_the_key_path_and_operand_in_redis_order() {
+    let cache = MyCache::new(1).unwrap();
+    assert_ok(run(&cache, &["SET", "string", "1"]));
+    assert_ok(run(
+        &cache,
+        &["JSON.SET", "doc", "$", r#"{"n":5,"s":"text"}"#],
+    ));
+    let increment =
+        |key: &str, path: &str, operand: &str| run(&cache, &["JSON.NUMINCRBY", key, path, operand]);
+    assert_eq!(
+        increment("missing", "$[", "+1").encode(),
+        b"-ERR could not perform this operation on a key that doesn't exist\r\n"
+    );
+    assert_eq!(
+        increment("string", "$[", "+1").encode(),
+        b"-Existing key has wrong Redis type\r\n"
+    );
+    assert_error(increment("doc", "$[", "1"));
+    assert_error(increment("doc", "$.n + 1", "1"));
+    assert_eq!(bulk(increment("doc", "$.missing", "+1")).as_ref(), b"[]");
+    assert_eq!(bulk(increment("doc", "$.s", "+1")).as_ref(), b"[null]");
+    assert_eq!(
+        increment("doc", ".s", "+1").encode(),
+        b"-ERR Path does not exist or does not contains a number\r\n"
+    );
+    assert_eq!(
+        increment("doc", ".n", "true").encode(),
+        b"-bad input number\r\n"
+    );
+    assert_eq!(
+        increment("doc", ".n", "1e999").encode(),
+        b"-ERR number out of range at line 1 column 5\r\n"
+    );
+    assert_eq!(
+        bulk(read(&cache, &["JSON.GET", "doc", ".n"], 1_000)).as_ref(),
+        b"5"
+    );
+    assert!(matches!(
+        parse(&["JSON.NUMINCRBY", "doc", "$"]),
+        Err(ProtocolError::WrongArgCount("json.numincrby"))
+    ));
+    assert!(matches!(
+        parse(&["JSON.NUMINCRBY", "doc", "$", "1", "extra"]),
+        Err(ProtocolError::WrongArgCount("json.numincrby"))
+    ));
+}
+
+#[test]
+fn json_numincrby_resp3_replies_survive_exec_and_lua_protocol_selection() {
+    let cache = MyCache::new(1).unwrap();
+    assert_ok(run(&cache, &["JSON.SET", "doc", "$", r#"[1,"s",2.5]"#]));
+    let invalid_utf8 = [b"JSON.NUMINCRBY".as_slice(), b"absent", b"$", b"\xff"]
+        .map(|part| Value::BulkString(Some(Bytes::from_static(part))));
+    let invalid = RaftCommandFactory::init_lua()
+        .parse_request(&invalid_utf8)
+        .unwrap();
+    let mut increment = command(&["JSON.NUMINCRBY", "doc", "[*]", "1"]);
+    let Operation::Base(BaseOperation::JsonNumIncrBy(params)) = &mut increment else {
+        panic!("expected JSON.NUMINCRBY");
+    };
+    params.resp3 = true;
+    let script = "redis.setresp(3); return redis.call('JSON.NUMINCRBY', KEYS[1], '[0]', 2)[1]";
+    let eval = EvalParams::new(script.into(), 1, vec!["doc".into()], Vec::new());
+    let exec = Operation::Redis(RedisOperation::RedisExec(ExecParams {
+        operations: vec![
+            QueuedOperation::new(0, invalid),
+            QueuedOperation::new(0, increment),
+            QueuedOperation::new(0, Operation::Redis(RedisOperation::RedisEval(eval))),
+        ],
+    }));
+    assert_eq!(
+        apply(&cache, exec, 0, 1_000, None).encode_proto(3),
+        b"*3\r\n-Couldn't parse as UTF-8 string\r\n*3\r\n:2\r\n_\r\n,3.5\r\n:4\r\n"
     );
 }
 
@@ -1222,6 +1382,41 @@ async fn json_exec_and_lua_remain_deterministic_after_snapshot_restore() {
             json!([1, 9, 3])
         );
         assert_null(read(cache, &["JSON.GET", "doc"], 11_000));
+    }
+}
+
+#[tokio::test]
+async fn json_numincrby_partial_writes_replay_once_and_keep_ttl() {
+    let cache = MyCache::new(2).unwrap();
+    assert_ok(run(&cache, &["JSON.SET", "doc", "$", "[1,1e308,3]"]));
+    assert_integer(run(&cache, &["PEXPIRE", "doc", "5000"]), 1);
+    let mut cuts = vec![dump(&cache).await];
+    let mut queue = Vec::new();
+    let mut revision = 0;
+    for (path, operand, wire) in [
+        ("$[*]", "1e308", "-ERR result is not a number\r\n"),
+        ("$[1]", "1e308", "-ERR result is not a number\r\n"),
+        ("$.missing", "2", "$2\r\n[]\r\n"),
+        ("$[2]", "2", "$3\r\n[5]\r\n"),
+    ] {
+        let response = apply(
+            &cache,
+            command(&["JSON.NUMINCRBY", "doc", path, operand]),
+            0,
+            2_000,
+            Some((&mut queue, &mut revision)),
+        );
+        assert_eq!(response.encode(), wire.as_bytes());
+        cuts.push(dump(&cache).await);
+    }
+    assert_eq!(queue.len(), 2);
+    for full in &cuts {
+        let restored = restore(full, &queue, 2_000).await;
+        assert_eq!(
+            json_reply(read(&restored, &["JSON.GET", "doc"], 5_999)),
+            json!([1e308, 1e308, 5])
+        );
+        assert_null(read(&restored, &["JSON.GET", "doc"], 6_000));
     }
 }
 

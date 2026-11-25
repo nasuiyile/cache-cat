@@ -14,6 +14,7 @@ use crate::protocol::hash::hset::HSetReq;
 use crate::protocol::hash::hsetnx::HSetNxReq;
 use crate::protocol::key::del::DelReq;
 use crate::protocol::json::del::JsonDelReq;
+use crate::protocol::json::numincrby::JsonNumIncrByReq;
 use crate::protocol::json::set::JsonSetReq;
 use crate::protocol::key::expire::ExpireReq;
 use crate::protocol::key::flushall::FlushAllReq;
@@ -114,6 +115,7 @@ pub enum BaseOperation {
     JsonDel(JsonDelReq),
     // geo
     GeoAdd(GeoAddReq),
+    JsonNumIncrBy(JsonNumIncrByReq),
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
