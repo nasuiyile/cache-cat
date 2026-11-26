@@ -114,7 +114,7 @@ use crate::protocol::string::get::GetCommand;
 use crate::protocol::string::getrange::GetRangeCommand;
 use crate::protocol::json::{
     del::JsonDelCommand, get::JsonGetCommand, numincrby::JsonNumIncrByCommand, set::JsonSetCommand,
-    type_::JsonTypeCommand,
+    strappend::JsonStrAppendCommand, type_::JsonTypeCommand,
 };
 use crate::protocol::string::getset::GetSetCommand;
 use crate::protocol::string::incr::IncrCommand;
@@ -357,6 +357,7 @@ impl CommandFactory {
         factory.register("JSON.TYPE", JsonTypeCommand);
         factory.register("JSON.SET", JsonSetCommand);
         factory.register("JSON.NUMINCRBY", JsonNumIncrByCommand);
+        factory.register("JSON.STRAPPEND", JsonStrAppendCommand);
         factory.register("JSON.DEL", JsonDelCommand);
         factory.register("SET", SetCommand);
         factory.register("DEL", DelCommand);

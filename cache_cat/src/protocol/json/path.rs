@@ -133,6 +133,10 @@ pub(super) enum WriteTarget<'a> {
 }
 
 impl Location {
+    pub(super) fn value_mut<'a>(&self, root: &'a mut IValue) -> Option<&'a mut IValue> {
+        get_mut(root, &self.0)
+    }
+
     pub(super) fn target<'a>(&self, root: &'a mut IValue) -> WriteTarget<'a> {
         match self.0.split_last() {
             Some((Part::Index(index), parent)) => {
@@ -211,12 +215,13 @@ impl JsonPath {
         }
     }
 
-    /// Freeze matches before updating numbers that a later filter may read.
+    /// Freeze matches before updating values that a later filter may read.
     /// Keep duplicates in order and retain placeholders only for array replies.
-    pub(super) fn numeric_locations(
+    pub(super) fn filtered_locations(
         &self,
         root: &IValue,
-        include_non_numbers: bool,
+        include_unmatched: bool,
+        mut accepts: impl FnMut(&IValue) -> bool,
     ) -> Result<Vec<Option<Location>>, PathError> {
         let mut matches = Vec::new();
         walk(
@@ -225,9 +230,9 @@ impl JsonPath {
             root,
             &mut Vec::new(),
             &mut |node, path| {
-                if node.as_value().is_number() {
+                if accepts(node.as_value()) {
                     matches.push(Some(Location(path.to_vec())));
-                } else if include_non_numbers {
+                } else if include_unmatched {
                     matches.push(None);
                 }
             },

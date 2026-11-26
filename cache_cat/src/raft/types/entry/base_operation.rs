@@ -16,6 +16,7 @@ use crate::protocol::key::del::DelReq;
 use crate::protocol::json::del::JsonDelReq;
 use crate::protocol::json::numincrby::JsonNumIncrByReq;
 use crate::protocol::json::set::JsonSetReq;
+use crate::protocol::json::strappend::JsonStrAppendReq;
 use crate::protocol::key::expire::ExpireReq;
 use crate::protocol::key::flushall::FlushAllReq;
 use crate::protocol::key::flushdb::FlushDBReq;
@@ -116,6 +117,7 @@ pub enum BaseOperation {
     // geo
     GeoAdd(GeoAddReq),
     JsonNumIncrBy(JsonNumIncrByReq),
+    JsonStrAppend(JsonStrAppendReq),
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]

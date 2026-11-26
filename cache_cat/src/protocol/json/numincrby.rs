@@ -112,7 +112,7 @@ impl JsonNumIncrByReq {
     ) -> Result<IncrementReply, Value> {
         let all = self.resp3 || !path.is_legacy_syntax();
         let locations = path
-            .numeric_locations(root, all)
+            .filtered_locations(root, all, IValue::is_number)
             .map_err(|err| Value::error(err.to_string()))?;
         // Redis ignores the operand when the selection contains no numbers.
         let operand = LazyCell::new(|| Self::operand(increment));

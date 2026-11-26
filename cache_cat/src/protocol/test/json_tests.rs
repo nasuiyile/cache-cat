@@ -463,6 +463,125 @@ fn json_numincrby_resp3_replies_survive_exec_and_lua_protocol_selection() {
 }
 
 #[test]
+fn json_strappend_uses_byte_lengths_and_keeps_match_order() {
+    let cache = MyCache::new(1).unwrap();
+    assert_ok(run(&cache, &["JSON.SET", "root", "$", r#""猫""#]));
+    assert_integer(
+        run(&cache, &["jSoN.StRaPpEnD", "root", r#""\u00e9\u0000""#]),
+        6,
+    );
+    assert_integer(run(&cache, &["JSON.STRAPPEND", "root", ".", r#""""#]), 6);
+    assert_eq!(
+        json_reply(read(&cache, &["JSON.GET", "root"], 1_000)),
+        json!("猫é\0")
+    );
+
+    let document = r#"["a",1,"猫",null]"#;
+    assert_ok(run(&cache, &["JSON.SET", "doc", "$", document]));
+    let reply = run(
+        &cache,
+        &["JSON.STRAPPEND", "doc", "$[2,1,2,0,3]", r#""é""#, "ignored"],
+    );
+    assert_eq!(reply.encode(), b"*5\r\n:5\r\n$-1\r\n:7\r\n:3\r\n$-1\r\n");
+    assert_eq!(reply.encode_proto(3), b"*5\r\n:5\r\n_\r\n:7\r\n:3\r\n_\r\n");
+    assert_eq!(
+        json_reply(read(&cache, &["JSON.GET", "doc"], 1_000)),
+        json!(["aé", 1, "猫éé", null])
+    );
+
+    assert_ok(run(&cache, &["JSON.SET", "doc", "$", document]));
+    assert_integer(run(&cache, &["JSON.STRAPPEND", "doc", "[*]", r#""!""#]), 4);
+    assert_eq!(
+        json_reply(read(&cache, &["JSON.GET", "doc"], 1_000)),
+        json!(["a!", 1, "猫!", null])
+    );
+
+    assert_ok(run(&cache, &["JSON.SET", "doc", "$", r#"["a","a","b"]"#]));
+    assert_eq!(
+        run(
+            &cache,
+            &["JSON.STRAPPEND", "doc", "$[?(@ == $[0])]", r#""x""#]
+        )
+        .encode(),
+        b"*2\r\n:2\r\n:2\r\n"
+    );
+    assert_eq!(
+        json_reply(read(&cache, &["JSON.GET", "doc"], 1_000)),
+        json!(["ax", "ax", "b"])
+    );
+}
+
+#[test]
+fn json_strappend_validates_the_suffix_only_for_matched_strings() {
+    let cache = MyCache::new(1).unwrap();
+    assert_ok(run(&cache, &["SET", "string", "plain Redis string"]));
+    assert_ok(run(&cache, &["JSON.SET", "doc", "$", r#"{"s":"a","n":1}"#]));
+    let append =
+        |key: &str, path: &str, suffix: &str| run(&cache, &["JSON.STRAPPEND", key, path, suffix]);
+    assert_eq!(append("doc", "$.missing", "[").encode(), b"*0\r\n");
+    assert_eq!(append("doc", "$.n", "[").encode(), b"*1\r\n$-1\r\n");
+    assert_eq!(
+        append("doc", ".n", "[").encode(),
+        b"-ERR Path does not exist or not a string\r\n"
+    );
+    assert_eq!(
+        append("doc", "$.s", "123").encode(),
+        b"-WRONGTYPE wrong type of path value - expected string\r\n"
+    );
+    assert_error(append("doc", "$.s", "["));
+    assert_error(append("doc", "$[", r#""!""#));
+    assert_eq!(
+        append("missing", "$[", "[").encode(),
+        b"-ERR could not perform this operation on a key that doesn't exist\r\n"
+    );
+    assert_eq!(
+        append("string", "$[", "[").encode(),
+        b"-Existing key has wrong Redis type\r\n"
+    );
+    assert_eq!(
+        json_reply(read(&cache, &["JSON.GET", "doc"], 1_000)),
+        json!({"s":"a","n":1})
+    );
+    assert!(matches!(
+        parse(&["JSON.STRAPPEND", "doc"]),
+        Err(ProtocolError::WrongArgCount("json.strappend"))
+    ));
+}
+
+#[test]
+fn json_strappend_runs_in_exec_and_lua() {
+    let cache = MyCache::new(1).unwrap();
+    assert_ok(run(&cache, &["JSON.SET", "doc", "$", r#"["a",1]"#]));
+    let invalid_utf8 = [b"JSON.STRAPPEND".as_slice(), b"missing", b"$", b"\xff"]
+        .map(|part| Value::BulkString(Some(Bytes::from_static(part))));
+    let invalid = RaftCommandFactory::init_lua()
+        .parse_request(&invalid_utf8)
+        .unwrap();
+    let eval = EvalParams::new(
+        r#"redis.setresp(3); return redis.call('JSON.STRAPPEND', KEYS[1], '"?"')"#.into(),
+        1,
+        vec!["root".into()],
+        Vec::new(),
+    );
+    let exec = Operation::Redis(RedisOperation::RedisExec(ExecParams {
+        operations: vec![
+            QueuedOperation::new(0, invalid),
+            QueuedOperation::new(0, command(&["JSON.STRAPPEND", "doc", "$[*]", r#""!""#])),
+            QueuedOperation::new(0, command(&["JSON.SET", "root", "$", r#""x""#])),
+            QueuedOperation::new(0, Operation::Redis(RedisOperation::RedisEval(eval))),
+        ],
+    }));
+    assert_eq!(
+        apply(&cache, exec, 0, 1_000, None).encode_proto(3),
+        b"*4\r\n-Couldn't parse as UTF-8 string\r\n*2\r\n:2\r\n_\r\n+OK\r\n:2\r\n"
+    );
+    assert_eq!(
+        json_reply(read(&cache, &["JSON.GET", "root"], 1_000)),
+        json!("x?")
+    );
+}
+
+#[test]
 fn json_set_conditions_create_only_the_final_object_field() {
     let cache = MyCache::new(1).unwrap();
     assert_null(run(&cache, &["JSON.SET", "doc", "$", "{}", "XX"]));
@@ -1415,6 +1534,40 @@ async fn json_numincrby_partial_writes_replay_once_and_keep_ttl() {
         assert_eq!(
             json_reply(read(&restored, &["JSON.GET", "doc"], 5_999)),
             json!([1e308, 1e308, 5])
+        );
+        assert_null(read(&restored, &["JSON.GET", "doc"], 6_000));
+    }
+}
+
+#[tokio::test]
+async fn json_strappend_snapshots_replay_repeated_matches_once_and_keep_ttl() {
+    let cache = MyCache::new(2).unwrap();
+    assert_ok(run(&cache, &["JSON.SET", "doc", "$", r#"["a",2,"猫"]"#]));
+    assert_integer(run(&cache, &["PEXPIRE", "doc", "5000"]), 1);
+    let mut cuts = vec![dump(&cache).await];
+    let mut queue = Vec::new();
+    let mut revision = 0;
+    for (path, suffix, wire) in [
+        ("$[0,1,0]", r#""!""#, "*3\r\n:2\r\n$-1\r\n:3\r\n"),
+        ("$[1]", "[", "*1\r\n$-1\r\n"),
+        ("[2]", r#""é""#, ":5\r\n"),
+    ] {
+        let response = apply(
+            &cache,
+            command(&["JSON.STRAPPEND", "doc", path, suffix]),
+            0,
+            2_000,
+            Some((&mut queue, &mut revision)),
+        );
+        assert_eq!(response.encode(), wire.as_bytes());
+        cuts.push(dump(&cache).await);
+    }
+    assert_eq!(queue.len(), 2);
+    for full in &cuts {
+        let restored = restore(full, &queue, 2_000).await;
+        assert_eq!(
+            json_reply(read(&restored, &["JSON.GET", "doc"], 5_999)),
+            json!(["a!!", 2, "猫é"])
         );
         assert_null(read(&restored, &["JSON.GET", "doc"], 6_000));
     }
