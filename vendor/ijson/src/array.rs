@@ -998,7 +998,11 @@ impl IArray {
         if current_capacity >= desired_capacity {
             return Ok(());
         }
-        self.resize_internal(cmp::max(current_capacity * 2, desired_capacity.max(4)))
+        let limit = Header::CAP_MASK as u32;
+        if desired_capacity > limit {
+            return Err(AllocError.into());
+        }
+        self.resize_internal(cmp::max((current_capacity * 2).min(limit), desired_capacity.max(4)))
     }
 
     /// Truncates the array by removing items until it is no longer than the specified

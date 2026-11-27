@@ -582,6 +582,87 @@ fn json_strappend_runs_in_exec_and_lua() {
 }
 
 #[test]
+fn json_arrappend_updates_arrays_in_match_order_and_preserves_nested_matches() {
+    let cache = MyCache::new(1).unwrap();
+    let document = r#"[[],1,[2]]"#;
+    assert_ok(run(&cache, &["JSON.SET", "doc", "$", document]));
+    let reply = run(
+        &cache,
+        &["jSoN.aRrApPeNd", "doc", "$[0,1,0,2]", "true", "null"],
+    );
+    assert_eq!(reply.encode(), b"*4\r\n:2\r\n$-1\r\n:4\r\n:3\r\n");
+    assert_eq!(reply.encode_proto(3), b"*4\r\n:2\r\n_\r\n:4\r\n:3\r\n");
+    assert_eq!(
+        json_reply(read(&cache, &["JSON.GET", "doc"], 1_000)),
+        json!([[true, null, true, null], 1, [2, true, null]])
+    );
+
+    assert_ok(run(&cache, &["JSON.SET", "doc", "$", document]));
+    assert_integer(run(&cache, &["JSON.ARRAPPEND", "doc", "[*]", "3"]), 2);
+    assert_eq!(
+        json_reply(read(&cache, &["JSON.GET", "doc"], 1_000)),
+        json!([[3], 1, [2, 3]])
+    );
+
+    assert_ok(run(
+        &cache,
+        &[
+            "JSON.SET",
+            "doc",
+            "$",
+            r#"{"a":[{"a":[]}],"b":{"a":[255]}}"#,
+        ],
+    ));
+    assert_eq!(
+        run(&cache, &["JSON.ARRAPPEND", "doc", "$..a", "256"]).encode(),
+        b"*3\r\n:2\r\n:1\r\n:2\r\n"
+    );
+    assert_eq!(
+        json_reply(read(&cache, &["JSON.GET", "doc"], 1_000)),
+        json!({"a":[{"a":[256]},256],"b":{"a":[255,256]}})
+    );
+}
+
+#[test]
+fn json_arrappend_validates_all_values_first_and_keeps_exec_error_slots() {
+    let cache = MyCache::new(1).unwrap();
+    assert_ok(run(&cache, &["SET", "string", "plain value"]));
+    assert_ok(run(&cache, &["JSON.SET", "doc", "$", r#"{"a":[],"n":1}"#]));
+    for (key, path) in [("missing", "$["), ("string", "$["), ("doc", "$.n")] {
+        assert_eq!(
+            run(&cache, &["JSON.ARRAPPEND", key, path, "1", "x"]).encode(),
+            b"-expected value at line 1 column 1\r\n"
+        );
+    }
+    assert_eq!(
+        run(&cache, &["JSON.ARRAPPEND", "doc", "$.missing", "1"]).encode(),
+        b"*0\r\n"
+    );
+    assert_eq!(
+        run(&cache, &["JSON.ARRAPPEND", "doc", ".n", "1"]).encode(),
+        b"-ERR Path does not exist or not an array\r\n"
+    );
+    assert!(matches!(
+        parse(&["JSON.ARRAPPEND", "doc"]),
+        Err(ProtocolError::WrongArgCount("json.arrappend"))
+    ));
+    let exec = Operation::Redis(RedisOperation::RedisExec(ExecParams {
+        operations: vec![
+            QueuedOperation::new(0, command(&["JSON.ARRAPPEND", "doc", "$.a"])),
+            QueuedOperation::new(0, command(&["JSON.ARRAPPEND", "doc", ".a", "7"])),
+        ],
+    }));
+    assert_eq!(
+        apply(&cache, exec, 0, 1_000, None).encode(),
+        b"*2\r\n-ERR wrong number of arguments for 'json.arrappend' command\r\n:1\r\n"
+    );
+    assert_eq!(
+        json_reply(read(&cache, &["JSON.GET", "doc"], 1_000)),
+        json!({"a":[7],"n":1})
+    );
+}
+
+#[test]
 fn json_set_conditions_create_only_the_final_object_field() {
     let cache = MyCache::new(1).unwrap();
     assert_null(run(&cache, &["JSON.SET", "doc", "$", "{}", "XX"]));
@@ -1568,6 +1649,38 @@ async fn json_strappend_snapshots_replay_repeated_matches_once_and_keep_ttl() {
         assert_eq!(
             json_reply(read(&restored, &["JSON.GET", "doc"], 5_999)),
             json!(["a!!", 2, "猫é"])
+        );
+        assert_null(read(&restored, &["JSON.GET", "doc"], 6_000));
+    }
+}
+
+#[tokio::test]
+async fn json_arrappend_replays_partial_depth_errors_once_and_keeps_ttl() {
+    let cache = MyCache::new(2).unwrap();
+    let document = format!(
+        "{{\"shallow\":{{\"a\":[]}},\"deep\":{}{{\"a\":[]}}{}}}",
+        "{\"n\":".repeat(124),
+        "}".repeat(124),
+    );
+    assert_ok(run(&cache, &["JSON.SET", "doc", "$", &document]));
+    assert_integer(run(&cache, &["PEXPIRE", "doc", "5000"]), 1);
+    let before = dump(&cache).await;
+    let mut queue = Vec::new();
+    let mut revision = 0;
+    let reply = apply(
+        &cache,
+        command(&["JSON.ARRAPPEND", "doc", "$..a", "[]"]),
+        0,
+        2_000,
+        Some((&mut queue, &mut revision)),
+    );
+    assert_eq!(reply.encode(), b"-ERR recursion limit exceeded\r\n");
+    assert_eq!(queue.len(), 1);
+    for full in [before, dump(&cache).await] {
+        let restored = restore(&full, &queue, 2_000).await;
+        assert_eq!(
+            json_reply(read(&restored, &["JSON.GET", "doc", "$..a"], 5_999)),
+            json!([[[]], []])
         );
         assert_null(read(&restored, &["JSON.GET", "doc"], 6_000));
     }

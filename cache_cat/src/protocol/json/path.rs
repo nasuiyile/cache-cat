@@ -133,6 +133,10 @@ pub(super) enum WriteTarget<'a> {
 }
 
 impl Location {
+    pub(super) fn depth(&self) -> usize {
+        self.0.len()
+    }
+
     pub(super) fn value_mut<'a>(&self, root: &'a mut IValue) -> Option<&'a mut IValue> {
         get_mut(root, &self.0)
     }

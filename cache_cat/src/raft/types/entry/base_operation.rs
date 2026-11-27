@@ -13,6 +13,7 @@ use crate::protocol::hash::hmset::HMSetReq;
 use crate::protocol::hash::hset::HSetReq;
 use crate::protocol::hash::hsetnx::HSetNxReq;
 use crate::protocol::key::del::DelReq;
+use crate::protocol::json::arrappend::JsonArrAppendReq;
 use crate::protocol::json::del::JsonDelReq;
 use crate::protocol::json::numincrby::JsonNumIncrByReq;
 use crate::protocol::json::set::JsonSetReq;
@@ -118,6 +119,7 @@ pub enum BaseOperation {
     GeoAdd(GeoAddReq),
     JsonNumIncrBy(JsonNumIncrByReq),
     JsonStrAppend(JsonStrAppendReq),
+    JsonArrAppend(JsonArrAppendReq),
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]

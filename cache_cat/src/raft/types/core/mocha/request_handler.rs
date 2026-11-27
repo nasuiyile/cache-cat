@@ -150,6 +150,7 @@ fn base_request_inner(
         BaseOperation::JsonSet(param) => my_cache.execute_compute(param, update),
         BaseOperation::JsonNumIncrBy(param) => my_cache.execute_compute(param, update),
         BaseOperation::JsonStrAppend(param) => my_cache.execute_compute(param, update),
+        BaseOperation::JsonArrAppend(param) => my_cache.execute_compute(param, update),
         BaseOperation::JsonDel(param) => my_cache.execute_compute(param, update),
         BaseOperation::XAdd(mut param) => {
             // Resolve automatic IDs before both initialization and mutation so

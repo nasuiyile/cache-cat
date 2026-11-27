@@ -1,5 +1,6 @@
 //! Redis JSON commands backed by the compact ijson representation.
 
+pub mod arrappend;
 pub mod del;
 pub mod get;
 pub mod numincrby;
